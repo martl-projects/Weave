@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FetcherInfo, KeyInfo, ServiceActionInfo, ServicePanelInfo, ServiceListInfo, ServiceInfo, ServiceOriginInfo, ServiceProfileInfo, ServiceRequestInfo, ServiceSettingsInfo, SpaceInfo } from '@weave/node/client';
-import type { ActionWho, ServiceContract } from '@weave/core';
+import { fieldName, type ActionWho, type ServiceContract, type TextPackage } from '@weave/core';
 import { bridge } from './bridge.ts';
 import { Icon } from './icons.tsx';
 import { AccountProofDialog } from './accounts.tsx';
 import { ago, api, bump, onItem, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 import { ServiceList } from './lists.tsx';
+import { t, T, useTexts } from './texts.tsx';
+import { useServiceTexts } from './servicetexts.ts';
 
 /*
  * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
@@ -16,21 +18,22 @@ import { ServiceList } from './lists.tsx';
 
 /** A contract in plain words. */
 export function contractText(c: ServiceContract): string {
-  const reads = c.reads === 'nothing' ? 'reads nothing and takes no requests' : c.reads === 'addressed' ? 'reads only what is asked of it' : c.reads === 'space' ? 'reads everything in its spaces' : `reads what is asked of it, and ${c.reads.kinds.join(', ')}`;
-  const answers = c.reads === 'nothing' ? '' : ' and its answers';
-  const writes = c.writes.length ? `writes ${c.writes.join(', ')}${answers}` : c.reads === 'nothing' ? 'writes nothing' : 'writes only its answers';
-  return `${reads}; ${writes}${c.website ? '; serves websites' : ''}${c.offers?.length ? `; offers ${c.offers.join(', ')}` : ''}${c.net?.length ? `; talks to ${c.net.join(', ')} over HTTPS` : ''}${c.uses ? `; uses your ${Object.keys(c.uses).join(', ')} access from your keyvault` : ''} (contract ${c.version})`;
+  const reads = c.reads === 'nothing' ? t('contract.reads.nothing') : c.reads === 'addressed' ? t('contract.reads.addressed') : c.reads === 'space' ? t('contract.reads.space') : t('contract.reads.kinds', { kinds: c.reads.kinds.join(', ') });
+  const answers = c.reads === 'nothing' ? '' : t('contract.and.answers');
+  const writes = c.writes.length ? t('contract.writes', { kinds: c.writes.join(', '), answers }) : c.reads === 'nothing' ? t('contract.writes.nothing') : t('contract.writes.answers');
+  return `${reads}; ${writes}${c.website ? t('contract.serves.websites') : ''}${c.offers?.length ? t('contract.offers', { what: c.offers.join(', ') }) : ''}${c.net?.length ? t('contract.talks.to', { hosts: c.net.join(', ') }) : ''}${c.uses ? t('contract.uses', { platforms: Object.keys(c.uses).join(', ') }) : ''} ${t('contract.version', { version: c.version })}`;
 }
 
 /** Where a service comes from, and whether this computer could check it. */
 export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
-  if (origin.kind === 'weave') return <div className="small muted">Part of Weave</div>;
+  const { t } = useTexts();
+  if (origin.kind === 'weave') return <div className="small muted">{t('origin.part.of.weave')}</div>;
   if (origin.kind === 'unreleased') return null;
-  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">✓ Made by Weave</div> : <div className="small muted">Made by Weave, an older or newer version: it updates when the Weave that runs it restarts</div>;
-  const where = origin.project.name ? `p/${origin.project.name}` : "a project you aren't in";
-  if (origin.checked === 'verified') return <div className="small muted">✓ From {where}, version {origin.tag}</div>;
-  if (origin.checked === 'unmatched') return <div className="small error-text">Claims to be from {where}, but isn't: don't trust it</div>;
-  return <div className="small muted">From {where}, version {origin.tag}</div>;
+  if (origin.kind === 'shipped') return origin.checked === 'verified' ? <div className="small muted">{t('origin.made.by.weave')}</div> : <div className="small muted">{t('origin.outdated.title')}</div>;
+  const where = origin.project.name ? `p/${origin.project.name}` : t('origin.project.unknown');
+  if (origin.checked === 'verified') return <div className="small muted">{t('origin.from.verified', { where, tag: origin.tag })}</div>;
+  if (origin.checked === 'unmatched') return <div className="small error-text">{t('origin.claims', { where })}</div>;
+  return <div className="small muted">{t('origin.from', { where, tag: origin.tag })}</div>;
 }
 
 /**
@@ -38,11 +41,36 @@ export function OriginText({ origin }: { origin: ServiceOriginInfo }) {
  * someone's own code. So nothing passes for Weave's own, or for another project's, by its name.
  */
 export function OriginBadge({ origin }: { origin: ServiceOriginInfo }) {
-  if (origin.kind === 'weave' || (origin.kind === 'shipped' && origin.checked === 'verified')) return <span className="tag origin-weave" title="Made by Weave: checked against what this Weave ships">Weave ✓</span>;
-  if (origin.kind === 'shipped') return <span className="tag" title="Made by Weave, an older or newer version: it updates when the Weave that runs it restarts">outdated</span>;
-  if (origin.kind === 'unreleased') return <span className="tag" title="Its person's own code, released nowhere">own code</span>;
-  if (origin.checked === 'unmatched') return <span className="tag origin-warn" title="It claims a release it isn't">⚠ not what it claims</span>;
-  return <span className="tag" title={`A release of ${origin.project.name ? `p/${origin.project.name}` : "a project you aren't in"}, version ${origin.tag}`}>{origin.project.name ? `p/${origin.project.name}` : 'another project'}</span>;
+  const { t } = useTexts();
+  if (origin.kind === 'weave' || (origin.kind === 'shipped' && origin.checked === 'verified'))
+    return (
+      <span className="tag origin-weave" title={t('origin.weave.title')}>
+        {t('origin.weave')}
+      </span>
+    );
+  if (origin.kind === 'shipped')
+    return (
+      <span className="tag" title={t('origin.outdated.title')}>
+        {t('origin.outdated')}
+      </span>
+    );
+  if (origin.kind === 'unreleased')
+    return (
+      <span className="tag" title={t('origin.own.code.title')}>
+        {t('origin.own.code')}
+      </span>
+    );
+  if (origin.checked === 'unmatched')
+    return (
+      <span className="tag origin-warn" title={t('origin.not.what.claims.title')}>
+        {t('origin.not.what.claims')}
+      </span>
+    );
+  return (
+    <span className="tag" title={t('origin.release.title', { project: origin.project.name ? `p/${origin.project.name}` : t('origin.project.unknown'), tag: origin.tag })}>
+      {origin.project.name ? `p/${origin.project.name}` : t('origin.other.project')}
+    </span>
+  );
 }
 
 /** Every kind name, comma or space separated. */
@@ -55,15 +83,16 @@ function useServiceSpaces(): SpaceInfo[] {
 }
 
 function SpacePicker({ value, onChange }: { value: string[]; onChange(ids: string[]): void }) {
+  const { t } = useTexts();
   const spaces = useServiceSpaces();
-  if (!spaces.length) return <p className="small muted">You're in no group, project or community yet.</p>;
+  if (!spaces.length) return <p className="small muted">{t('svc.no.spaces')}</p>;
   return (
     <div className="sunken service-spaces">
       {spaces.map((s) => (
         <div className="field-row" key={s.id}>
           <input type="checkbox" id={`svc-space-${s.id}`} checked={value.includes(s.id)} onChange={(e) => onChange(e.target.checked ? [...value, s.id] : value.filter((id) => id !== s.id))} />
           <label htmlFor={`svc-space-${s.id}`}>
-            {s.name} <span className="small muted">{s.kind}</span>
+            {s.name} <span className="small muted">{t(`word.${s.kind}`)}</span>
           </label>
         </div>
       ))}
@@ -75,6 +104,7 @@ function SpacePicker({ value, onChange }: { value: string[]; onChange(ids: strin
 const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
 
 function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): void }) {
+  const { t } = useTexts();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [reads, setReads] = useState<'nothing' | 'addressed' | 'kinds' | 'space'>('addressed');
@@ -88,80 +118,77 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
   const add = async () => {
     const done = await attempt(
       () => api('addService', { name: name.trim(), description, contract, spaces, ...(command.trim() ? { command: commandParts(command) } : {}), ...(where ? { node: where } : {}) }).then(() => (bump(), true)),
-      `${name} is set up${where ? `: its key went to ${where}` : ''}`,
+      t(where ? 'svc.set.up.on.node' : 'svc.set.up', { name, node: where }),
     );
     if (done !== undefined) onClose();
   };
   return (
-    <Modal title="Add a service" onClose={onClose} wide>
-      <p className="small">
-        A service is code you run under a key of its own. It signs as you · {name || 'its name'}, and only what its contract says: nothing else, never as you. It reads only in the
-        spaces you add it to.
-      </p>
+    <Modal title={t('svc.add.title')} onClose={onClose} wide>
+      <p className="small">{t('svc.add.intro', { name: name || t('svc.its.name') })}</p>
       <div className="field-row-stacked">
-        <label htmlFor="svc-name">Name</label>
-        <input id="svc-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="files" spellCheck={false} />
+        <label htmlFor="svc-name">{t('field.name')}</label>
+        <input id="svc-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder={t('svc.name.placeholder')} spellCheck={false} />
       </div>
       <div className="field-row-stacked">
-        <label htmlFor="svc-description">What it does</label>
-        <input id="svc-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Your NAS's folders, for the family" />
+        <label htmlFor="svc-description">{t('svc.what.it.does')}</label>
+        <input id="svc-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('svc.description.placeholder')} />
       </div>
       <fieldset>
-        <legend>What it reads</legend>
+        <legend>{t('svc.what.it.reads')}</legend>
         <div className="field-row">
           <input type="radio" id="svc-reads-nothing" checked={reads === 'nothing'} onChange={() => setReads('nothing')} />
-          <label htmlFor="svc-reads-nothing">Nothing: it takes no requests (a website, say)</label>
+          <label htmlFor="svc-reads-nothing">{t('svc.reads.nothing')}</label>
         </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-addressed" checked={reads === 'addressed'} onChange={() => setReads('addressed')} />
-          <label htmlFor="svc-reads-addressed">Only what members ask it (the safest)</label>
+          <label htmlFor="svc-reads-addressed">{t('svc.reads.addressed')}</label>
         </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-kinds" checked={reads === 'kinds'} onChange={() => setReads('kinds')} />
-          <label htmlFor="svc-reads-kinds">That, and some kinds:</label>
-          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder="weave.post, weave.account" spellCheck={false} />
+          <label htmlFor="svc-reads-kinds">{t('svc.reads.kinds')}</label>
+          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder={t('svc.kinds.placeholder')} spellCheck={false} />
         </div>
         <div className="field-row">
           <input type="radio" id="svc-reads-space" checked={reads === 'space'} onChange={() => setReads('space')} />
-          <label htmlFor="svc-reads-space">Everything in its spaces</label>
+          <label htmlFor="svc-reads-space">{t('svc.reads.space')}</label>
         </div>
       </fieldset>
       <div className="field-row-stacked">
-        <label htmlFor="svc-writes">What it may write, besides its answers</label>
-        <input id="svc-writes" value={writes} onChange={(e) => setWrites(e.target.value)} placeholder="nothing (or kinds like weave.msg)" spellCheck={false} />
+        <label htmlFor="svc-writes">{t('svc.what.it.writes')}</label>
+        <input id="svc-writes" value={writes} onChange={(e) => setWrites(e.target.value)} placeholder={t('svc.writes.placeholder')} spellCheck={false} />
       </div>
       <div className="field-row">
         <input type="checkbox" id="svc-website" checked={website} onChange={(e) => setWebsite(e.target.checked)} />
-        <label htmlFor="svc-website">It serves a website (a page members open)</label>
+        <label htmlFor="svc-website">{t('svc.serves.website')}</label>
       </div>
       <div className="field-row-stacked">
-        <label>In these spaces</label>
+        <label>{t('svc.in.spaces')}</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
       <div className="field-row-stacked">
-        <label htmlFor="svc-where">Where it runs</label>
+        <label htmlFor="svc-where">{t('svc.where.runs')}</label>
         <select id="svc-where" value={where} onChange={(e) => setWhere(e.target.value)}>
-          <option value="">On this computer</option>
+          <option value="">{t('svc.on.this.computer')}</option>
           {nodes.map((n) => (
             <option key={n.did} value={n.name!.slice(5)}>
-              On the always-on node {n.name!.slice(5)}
+              {t('svc.on.node', { node: n.name!.slice(5) })}
             </option>
           ))}
         </select>
-        {where && <span className="small muted">Its key is made here and sent to {where}, sealed so only that node opens it. It isn't kept on this computer.</span>}
+        {where && <span className="small muted">{t('svc.key.sent', { node: where })}</span>}
       </div>
       <div className="field-row-stacked">
-        <label htmlFor="svc-command">How to start it</label>
-        <input id="svc-command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="node files-service.js" spellCheck={false} />
-        <span className="small muted">It gets its service API and token (WEAVE_SERVICE_API, WEAVE_SERVICE_TOKEN), Weave’s app API for who is who (WEAVE_API, WEAVE_TOKEN), and its settings, as environment variables. Leave it empty if something else uses its token.</span>
+        <label htmlFor="svc-command">{t('svc.how.start')}</label>
+        <input id="svc-command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('svc.command.placeholder')} spellCheck={false} />
+        <span className="small muted">{t('svc.command.note')}</span>
       </div>
       <p className="small">
-        <b>Its contract:</b> {contractText(contract)}.
+        <b>{t('svc.its.contract')}</b> {contractText(contract)}.
       </p>
       <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton className="default" onClick={add}>
-          Add service
+          {t('svc.add.button')}
         </AsyncButton>
       </div>
     </Modal>
@@ -170,6 +197,7 @@ function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): voi
 
 /** A service's settings: its spaces, how it starts, and secret settings (written here, never shown again). */
 function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [spaces, setSpaces] = useState(service.spaces.map((s) => s.id));
   const [description, setDescription] = useState(service.description);
   const [command, setCommand] = useState(service.command?.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ') ?? '');
@@ -180,50 +208,48 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
   const save = async () => {
     const done = await attempt(
       () => api('setService', { name: service.name, spaces, description, command: command.trim() ? commandParts(command) : null, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
-      `${service.name} is set${service.node ? ` (${service.node.name} takes it over)` : ''}`,
+      t(service.node ? 'svc.is.set.node' : 'svc.is.set', { name: service.name, node: service.node?.name }),
     );
     if (done !== undefined) onClose();
   };
   return (
-    <Modal title={`${service.name}: settings`} onClose={onClose} wide>
+    <Modal title={t('svc.settings.title', { name: service.name })} onClose={onClose} wide>
       <div className="field-row-stacked">
-        <label htmlFor="svc-set-description">What it does</label>
+        <label htmlFor="svc-set-description">{t('svc.what.it.does')}</label>
         <input id="svc-set-description" value={description} onChange={(e) => setDescription(e.target.value)} />
       </div>
       <div className="field-row-stacked">
-        <label>In these spaces</label>
+        <label>{t('svc.in.spaces')}</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
       {!service.builtin && !service.artifact && (
         <div className="field-row-stacked">
-          <label htmlFor="svc-set-command">How to start it</label>
+          <label htmlFor="svc-set-command">{t('svc.how.start')}</label>
           <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
         </div>
       )}
       <fieldset>
-        <legend>Settings</legend>
-        <p className="small">
-          Passed to it as environment variables. Values stay on {service.node ? `${service.node.name}` : 'this computer'}, sealed; they're never shown again, only replaced or removed.
-        </p>
+        <legend>{t('svc.settings')}</legend>
+        <p className="small">{t('svc.settings.about', { where: service.node ? service.node.name : t('svc.this.computer') })}</p>
         {names.map((n) => (
           <div className="field-row" key={n}>
             <code className="grow">{n}</code>
-            <span className="small muted">{settings[n] !== undefined ? 'changed' : 'set'}</span>
-            <button onClick={() => setSettings({ ...settings, [n]: null })}>Remove</button>
+            <span className="small muted">{t(settings[n] !== undefined ? 'svc.changed' : 'svc.set')}</span>
+            <button onClick={() => setSettings({ ...settings, [n]: null })}>{t('button.remove')}</button>
           </div>
         ))}
         <div className="field-row">
-          <input value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="NAS_FOLDER" spellCheck={false} />
-          <input className="grow" type="password" value={value} onChange={(e) => setValue(e.target.value)} placeholder="value" />
+          <input value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder={t('svc.setting.name.placeholder')} spellCheck={false} />
+          <input className="grow" type="password" value={value} onChange={(e) => setValue(e.target.value)} placeholder={t('svc.value')} />
           <button disabled={!key || !value} onClick={() => (setSettings({ ...settings, [key]: value }), setKey(''), setValue(''))}>
-            Set
+            {t('svc.set.button')}
           </button>
         </div>
       </fieldset>
       <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton className="default" onClick={save}>
-          Save
+          {t('button.save')}
         </AsyncButton>
       </div>
     </Modal>
@@ -239,33 +265,29 @@ export const onlyAWebsite = (c: ServiceContract): boolean => c.reads === 'nothin
  * node. Yours, not a project's: each fetches only for the projects you allow, with your own settings.
  */
 export function FetchersBox() {
+  const { t } = useTexts();
   const { data: fetchers } = useApi(() => api<FetcherInfo[]>('fetchers'), []);
   const [editing, setEditing] = useState<FetcherInfo>();
   if (!fetchers?.length) return null;
   return (
     <fieldset>
-      <legend>Fetchers</legend>
-      <p className="small">
-        A project's provider can hand out its artifacts through a fetcher: it grants you access, and your fetcher gets the files with it, here. Each file is checked against
-        what the project released. A fetcher only works for the projects you allow.
-      </p>
+      <legend>{t('fetchers.legend')}</legend>
+      <p className="small">{t('fetchers.about')}</p>
       {fetchers.map((f) => (
         <div className="service-row" key={f.name}>
           <Icon name="download" />
           <div className="grow">
             <b>{f.title}</b>{' '}
-            <span className="small muted">
-              {!f.added ? 'not added' : f.projects === 'all' ? 'for all your projects' : f.projects.length ? `for ${f.projects.map((p) => `p/${p.name}`).join(', ')}` : 'for no project'}
-            </span>
+            <span className="small muted">{!f.added ? t('keyvault.not.added') : f.projects === 'all' ? t('fetcher.all.projects') : f.projects.length ? t('fetcher.for', { projects: f.projects.map((p) => `p/${p.name}`).join(', ') }) : t('fetcher.no.project')}</span>
             {f.about && <div className="small">{f.about}</div>}
-            {f.net.length > 0 && <div className="small muted">Reaches {f.net.join(', ')} only.</div>}
+            {f.net.length > 0 && <div className="small muted">{t('fetcher.reaches', { hosts: f.net.join(', ') })}</div>}
             {f.problem && <div className="small error-text">{f.problem}</div>}
           </div>
           <div className="service-actions">
-            <button onClick={() => setEditing(f)}>{f.added ? 'Settings…' : 'Add…'}</button>
+            <button onClick={() => setEditing(f)}>{t(f.added ? 'service.settings' : 'fetcher.add')}</button>
             {f.added && (
-              <AsyncButton onClick={async () => (await ask(`Remove ${f.title}? It fetches for no project any more, and your settings for it are gone.`, 'Remove')) && attempt(() => api('removeFetcher', f.name).then(bump), `${f.title} is removed`)}>
-                Remove
+              <AsyncButton onClick={async () => (await ask(t('fetcher.remove.ask', { name: f.title }), t('button.remove'))) && attempt(() => api('removeFetcher', f.name).then(bump), t('keyvault.removed', { name: f.title }))}>
+                {t('button.remove')}
               </AsyncButton>
             )}
           </div>
@@ -278,6 +300,7 @@ export function FetchersBox() {
 
 /** Which projects a fetcher fetches for, and your settings for it (a secret only as set, never shown). */
 function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): void }) {
+  const { t } = useTexts();
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const projects = (spaces ?? []).filter((s) => s.kind === 'project');
   const [all, setAll] = useState(fetcher.projects === 'all');
@@ -285,11 +308,11 @@ function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): 
   const [values, setValues] = useState<Record<string, string>>({});
   const settings = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
   return (
-    <Modal title={`${fetcher.title}: ${fetcher.added ? 'settings' : 'add it'}`} onClose={onClose}>
-      <p className="small">It fetches for these projects only. Their providers' grants never reach it anywhere else.</p>
+    <Modal title={t(fetcher.added ? 'fetcher.settings.title' : 'fetcher.add.title', { name: fetcher.title })} onClose={onClose}>
+      <p className="small">{t('fetcher.only.these')}</p>
       <div className="field-row">
         <input type="checkbox" id="fetcher-all" checked={all} onChange={(e) => setAll(e.target.checked)} />
-        <label htmlFor="fetcher-all">All my projects</label>
+        <label htmlFor="fetcher-all">{t('fetcher.all.mine')}</label>
       </div>
       {!all &&
         projects.map((p) => (
@@ -305,14 +328,14 @@ function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): 
             id={`fetcher-setting-${s.name}`}
             className="grow"
             type={s.secret ? 'password' : 'text'}
-            placeholder={fetcher.filled.includes(s.name) ? 'set (type to replace)' : s.optional ? 'optional' : ''}
+            placeholder={fetcher.filled.includes(s.name) ? t('fetcher.set.replace') : s.optional ? t('fetcher.optional') : ''}
             value={values[s.name] ?? ''}
             onChange={(e) => setValues({ ...values, [s.name]: e.target.value })}
           />
         </div>
       ))}
       {fetcher.settings.some((s) => s.hint) && <p className="small muted">{fetcher.settings.map((s) => s.hint).filter(Boolean).join(' · ')}</p>}
-      <p className="small muted">Your settings stay sealed on this computer: never in a project.</p>
+      <p className="small muted">{t('fetcher.sealed')}</p>
       <div className="buttons">
         <AsyncButton
           className="default"
@@ -320,18 +343,18 @@ function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): 
             attempt(async () => {
               const to = all ? 'all' : picked;
               if (!fetcher.added) {
-                if (!all && !picked.length) throw new Error('pick the projects it fetches for');
+                if (!all && !picked.length) throw new Error(t('fetcher.pick.projects'));
                 await api('addFetcher', { shipped: fetcher.name, projects: to });
               }
               await api('setFetcher', { name: fetcher.name, projects: to, ...(Object.keys(settings).length ? { settings } : {}) });
               bump();
               onClose();
-            }, fetcher.added ? `${fetcher.title} is set` : `${fetcher.title} is added`)
+            }, t(fetcher.added ? 'fetcher.is.set' : 'keyvault.added', { name: fetcher.title }))
           }
         >
-          {fetcher.added ? 'Save' : 'Add'}
+          {t(fetcher.added ? 'button.save' : 'button.add')}
         </AsyncButton>
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
       </div>
     </Modal>
   );
@@ -339,71 +362,73 @@ function FetcherDialog({ fetcher, onClose }: { fetcher: FetcherInfo; onClose(): 
 
 /** A service Weave ships whose new version asks for more: it keeps what you approved until your yes. */
 export function ShippedUpdate({ service: s }: { service: ServiceInfo }) {
+  const { t } = useTexts();
   return (
     <div className="small">
-      <span className="error-text">Update needs your yes:</span> this version of Weave ships it to {contractText(s.update!)}. Until then it keeps what you approved.{' '}
-      <AsyncButton
-        onClick={async () =>
-          (await ask(`Give ${s.name} what Weave ships it with now? It ${contractText(s.update!)}.`, 'Yes, update')) &&
-          attempt(() => api('setService', { name: s.name, approve: true }).then(bump), `${s.name} has its new rights`)
-        }
-      >
-        Update…
+      <span className="error-text">{t('svc.update.needs.yes')}</span> {t('svc.update.ships', { contract: contractText(s.update!) })}{' '}
+      <AsyncButton onClick={async () => (await ask(t('svc.update.ask', { name: s.name, contract: contractText(s.update!) }), t('svc.yes.update'))) && attempt(() => api('setService', { name: s.name, approve: true }).then(bump), t('svc.new.rights', { name: s.name }))}>
+        {t('service.update')}
       </AsyncButton>
     </div>
   );
 }
 
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
+  const { t } = useTexts();
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
   const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ServiceInfo>();
+  const state = (s: ServiceInfo) => {
+    if (s.builtin === 'website') return t('svc.website.service', { state: s.enabled ? t('svc.websites.open', { n: s.websites?.length ?? 0 }) : t('svc.stopped') });
+    if (s.node) return t('svc.on.node.short', { node: s.node.name });
+    if (!s.enabled) return t('svc.stopped');
+    return t(s.running ? 'svc.running.here' : s.command ? 'svc.starting' : 'svc.no.command');
+  };
   return (
     <fieldset>
-      <legend>Services</legend>
+      <legend>{t('nav.services')}</legend>
       {(services ?? []).map((s) => (
         <div className="service-row" key={s.name}>
           <Icon name="gear" />
           <div className="grow">
             <b>{s.name}</b>{' '}
             <span className="small muted">
-              {s.builtin === 'website' ? `Weave's website service · ${s.enabled ? `${s.websites?.length ?? 0} website${s.websites?.length === 1 ? '' : 's'} open here` : 'stopped'}` : s.node ? `on ${s.node.name}` : s.enabled ? (s.running ? 'running here' : s.command ? 'starting' : 'here, no command') : 'stopped'} · in{' '}
-              {s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : 'no spaces yet'}
+              {state(s)} · {t('svc.in', { spaces: s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : t('svc.no.spaces.yet') })}
             </span>
             {s.description && <div className="small">{s.description}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
             {s.artifact && (
               <div className="small">
-                Runs {s.artifact.name} {s.artifact.tag}, from p/{s.artifact.project.name ?? s.artifact.project.id}
-                {s.artifact.progress ? ' · fetching…' : ''}
-                {s.artifact.deliveredBy ? ` · delivered by ${s.artifact.deliveredBy}, checked` : ''}
+                {t('svc.runs.release', { name: s.artifact.name, tag: s.artifact.tag, project: s.artifact.project.name ?? s.artifact.project.id })}
+                {s.artifact.progress ? t('svc.fetching') : ''}
+                {s.artifact.deliveredBy ? t('svc.delivered.by', { by: s.artifact.deliveredBy }) : ''}
                 {s.artifact.error ? <span className="error-text"> · {s.artifact.error}</span> : null}
                 {s.artifact.replaced && !s.artifact.latest && (
                   <>
                     {' '}
-                    · <span className="error-text">{s.artifact.tag} was released again</span> (it runs the release it was added from){' '}
+                    · <span className="error-text">{t('svc.released.again', { tag: s.artifact.tag })}</span> {t('svc.runs.added.release')}{' '}
                     <AsyncButton
                       onClick={async () =>
-                        (await ask(`Run ${s.artifact!.name} ${s.artifact!.tag} as released now? It may be other code: only take it if you trust p/${s.artifact!.project.name ?? 'its project'}.`, 'Take it')) &&
-                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.tag }, approve: true }).then(bump), `${s.name} takes ${s.artifact!.tag} as released now`)
+                        (await ask(t('svc.take.again.ask', { name: s.artifact!.name, tag: s.artifact!.tag, project: s.artifact!.project.name ?? t('svc.its.project') }), t('svc.take.it'))) &&
+                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.tag }, approve: true }).then(bump), t('svc.takes.again', { name: s.name, tag: s.artifact!.tag }))
                       }
                     >
-                      Take it…
+                      {t('svc.take.it.button')}
                     </AsyncButton>
                   </>
                 )}
                 {s.artifact.latest && (
                   <>
                     {' '}
-                    · {s.artifact.latest} is out{' '}
+                    · {t('svc.is.out', { tag: s.artifact.latest })}{' '}
                     <AsyncButton
                       onClick={async () =>
-                        (await ask(`Run ${s.artifact!.name} ${s.artifact!.latest} as ${s.name}? It's other code: only take it if you trust p/${s.artifact!.project.name ?? 'its project'}.`, 'Take it')) &&
-                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.latest }, approve: true }).then(bump), `${s.name} takes ${s.artifact!.latest}`)
+                        (await ask(t('svc.take.latest.ask', { name: s.artifact!.name, tag: s.artifact!.latest, service: s.name, project: s.artifact!.project.name ?? t('svc.its.project') }), t('svc.take.it'))) &&
+                        attempt(() => api('setService', { name: s.name, artifact: { tag: s.artifact!.latest }, approve: true }).then(bump), t('svc.takes', { name: s.name, tag: s.artifact!.latest }))
                       }
                     >
-                      Update…
+                      {t('service.update')}
                     </AsyncButton>
                   </>
                 )}
@@ -412,25 +437,17 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
             {s.update && <ShippedUpdate service={s} />}
           </div>
           <div className="service-actions">
-            {!s.builtin && <button onClick={() => setEditing(s)}>Settings…</button>}
-            <AsyncButton onClick={() => attempt(() => api('setService', { name: s.name, enabled: !s.enabled }).then(bump), s.enabled ? `${s.name} stopped` : `${s.name} started`)}>{s.enabled ? 'Stop' : 'Start'}</AsyncButton>
-            <AsyncButton
-              onClick={async () =>
-                (await ask(`Remove ${s.name}? Its key is revoked: nothing it signs counts any more, and ${s.node ? s.node.name : 'this computer'} stops running it.`, 'Remove')) &&
-                attempt(() => api('removeService', s.name).then(bump), `${s.name} is removed`)
-              }
-            >
-              Remove
+            {!s.builtin && <button onClick={() => setEditing(s)}>{t('service.settings')}</button>}
+            <AsyncButton onClick={() => attempt(() => api('setService', { name: s.name, enabled: !s.enabled }).then(bump), t(s.enabled ? 'svc.stopped.done' : 'svc.started.done', { name: s.name }))}>{t(s.enabled ? 'svc.stop' : 'svc.start')}</AsyncButton>
+            <AsyncButton onClick={async () => (await ask(t('svc.remove.ask', { name: s.name, where: s.node ? s.node.name : t('svc.this.computer') }), t('button.remove'))) && attempt(() => api('removeService', s.name).then(bump), t('keyvault.removed', { name: s.name }))}>
+              {t('button.remove')}
             </AsyncButton>
           </div>
         </div>
       ))}
-      <p className="small">
-        Code you run under a key of its own: a file browser for your NAS, a bot that answers in a group, an integration. It signs as you · its name, only what its contract allows, and
-        reads only in the spaces you add it to. Run it here, or on an always-on node so it's there while your computers are off.
-      </p>
+      <p className="small">{t('svc.about')}</p>
       <div className="buttons">
-        <button onClick={() => setAdding(true)}>Add a service…</button>
+        <button onClick={() => setAdding(true)}>{t('svc.add.a.service')}</button>
       </div>
       {adding && <AddServiceDialog nodes={nodes} onClose={() => setAdding(false)} />}
       {editing && <ServiceSettingsDialog service={editing} onClose={() => setEditing(undefined)} />}
@@ -440,17 +457,17 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
 
 /** A service in a space: what it is, what it may do, asking it, and what it answered. */
 export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; service: ServiceProfileInfo; onClose(): void }) {
+  const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: requests, reload } = useApi(() => api<ServiceRequestInfo[]>('serviceRequests', { space: space.id, service: service.did }), [space.id, service.did]);
   const [text, setText] = useState('');
   const by = service.person.name ?? shortDid(service.person.did);
   return (
     <Modal title={`${by} · ${service.name}`} onClose={onClose} wide>
-      {service.description && <p>{service.description}</p>}
-      <p className="small muted">
-        A service {by} runs, under a key of its own: it {contractText(service.contract)}. What it writes shows as {by} · {service.name}.
-      </p>
+      {service.description && <p>{ts('about', service.description)}</p>}
+      <p className="small muted">{t('svc.card.about', { by, contract: contractText(service.contract), name: service.name })}</p>
       <div className="field-row">
-        <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder={`Ask ${service.name}…`} />
+        <input className="grow" value={text} onChange={(e) => setText(e.target.value)} placeholder={t('svc.ask.placeholder', { name: service.name })} />
         <AsyncButton
           className="default"
           onClick={async () => {
@@ -461,7 +478,7 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
             }
           }}
         >
-          Ask
+          {t('svc.ask')}
         </AsyncButton>
       </div>
       <div className="service-requests">
@@ -471,20 +488,20 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
           .map((r) => (
             <div className="service-request" key={r.id}>
               <div className="small">
-                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.private ? <span className="muted">asked something, for it alone</span> : r.text}
+                <b>{r.from.name ?? shortDid(r.from.did)}</b> <span className="muted">{ago(r.time)}</span>: {r.private ? <span className="muted">{t('svc.asked.private')}</span> : r.text}
               </div>
               {r.results.length ? (
                 r.results.map((x) => (
                   <div className={`small service-answer${x.error ? ' error-text' : ''}${x.private ? ' muted' : ''}`} key={x.id}>
-                    {x.private ? `answered, for ${r.from.name ?? 'them'} only` : x.error ? `couldn't: ${x.error}` : x.text || JSON.stringify(x.data)}
+                    {x.private ? t('svc.answered.private', { who: r.from.name ?? t('svc.them') }) : x.error ? t('svc.couldnt', { error: x.error }) : x.text || JSON.stringify(x.data)}
                   </div>
                 ))
               ) : (
-                <div className="small muted service-answer">no answer yet{service.contract.reads === 'addressed' ? '' : ''}</div>
+                <div className="small muted service-answer">{t('svc.no.answer')}</div>
               )}
             </div>
           ))}
-        {requests && !requests.length && <p className="small muted">Nobody asked it anything here yet.</p>}
+        {requests && !requests.length && <p className="small muted">{t('svc.nobody.asked')}</p>}
       </div>
     </Modal>
   );
@@ -492,14 +509,15 @@ export function ServiceCard({ space, service, onClose }: { space: SpaceInfo; ser
 
 /** In a space's member list: its services, under the people. */
 export function SpaceServices({ space }: { space: SpaceInfo }) {
+  const { t } = useTexts();
   const { data: services } = useApi(() => api<ServiceProfileInfo[]>('servicesIn', space.id).catch(() => []), [space.id]);
   const [open, setOpen] = useState<ServiceProfileInfo>();
   if (!services?.length) return null;
   return (
     <>
-      <h4>Services — {services.length}</h4>
+      <h4>{t('svc.services.n', { n: services.length })}</h4>
       {services.map((s) => (
-        <button className="member service-member" key={s.did} onClick={() => setOpen(s)} title={s.description || `${s.name}, a service ${s.person.name ?? 'someone'} runs`}>
+        <button className="member service-member" key={s.did} onClick={() => setOpen(s)} title={s.description || t('svc.a.service.runs', { name: s.name, who: s.person.name ?? t('word.someone.lc') })}>
           <Icon name="gear" />
           <span className="member-name">
             {s.name} <span className="small muted">· {s.person.name ?? shortDid(s.person.did)}</span>
@@ -529,11 +547,12 @@ export async function askAndWait(space: string, service: { did: string; name: st
     }
     await new Promise((resolve) => setTimeout(resolve, i < 10 ? 500 : 1500));
   }
-  throw new Error(`${service.name} didn't answer in time`);
+  throw new Error(t('svc.no.answer.in.time', { name: service.name }));
 }
 
 /** A setting picked from what the service lists (its action answers [{value, label?, note?}]): one, or several. */
 function ChooseSetting({ space, service, action, many, value, onSave }: { space: string; service: { did: string; name: string }; action: string; many: boolean; value: string; onSave(value: string): Promise<unknown> }) {
+  const { t } = useTexts();
   const [choices, setChoices] = useState<Array<{ value: string; label?: string; note?: string }>>();
   const [picked, setPicked] = useState<string[]>(value ? value.split('\n').filter(Boolean) : []);
   const [find, setFind] = useState('');
@@ -555,17 +574,17 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
     return (
       <div className="field-row">
         <button disabled={loading} onClick={load}>
-          {loading ? 'Asking it…' : value ? 'Change…' : 'Choose…'}
+          {t(loading ? 'choose.asking' : value ? 'split.change' : 'button.choose')}
         </button>
         {problem && <span className="small problem">{problem}</span>}
       </div>
     );
   type Choice = { value: string; label?: string; note?: string };
-  const shown = [...choices, ...picked.filter((p) => !choices.some((c) => c.value === p)).map((p): Choice => ({ value: p, note: "it doesn't list it now" }))].filter((c) => !find.trim() || `${c.value} ${c.label ?? ''}`.toLowerCase().includes(find.trim().toLowerCase()));
+  const shown = [...choices, ...picked.filter((p) => !choices.some((c) => c.value === p)).map((p): Choice => ({ value: p, note: t('choose.not.listed') }))].filter((c) => !find.trim() || `${c.value} ${c.label ?? ''}`.toLowerCase().includes(find.trim().toLowerCase()));
   const toggle = (v: string) => setPicked((p) => (many ? (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]) : [v]));
   return (
     <div className="choose-setting">
-      <input className="wide" value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find…" autoFocus />
+      <input className="wide" value={find} onChange={(e) => setFind(e.target.value)} placeholder={t('hand.find')} autoFocus />
       <div className="choose-list sunken">
         {shown.map((c) => (
           <div className="field-row" key={c.value}>
@@ -576,12 +595,12 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
             </label>
           </div>
         ))}
-        {!shown.length && <div className="small muted">{find ? 'Nothing is called that.' : 'It lists nothing.'}</div>}
+        {!shown.length && <div className="small muted">{t(find ? 'choose.nothing.called' : 'choose.lists.nothing')}</div>}
       </div>
       <div className="field-row">
-        <button onClick={() => setChoices(undefined)}>Cancel</button>
+        <button onClick={() => setChoices(undefined)}>{t('button.cancel')}</button>
         <AsyncButton className="default" disabled={!picked.length} onClick={() => onSave(picked.join('\n')).then(() => setChoices(undefined))}>
-          {many ? `Use these ${picked.length}` : 'Use it'}
+          {many ? t('choose.use.these', { n: picked.length }) : t('choose.use.it')}
         </AsyncButton>
       </div>
     </div>
@@ -592,31 +611,40 @@ function ChooseSetting({ space, service, action, many, value, onSave }: { space:
 export const SERVICE_CHANGED = 'weave-service-changed';
 const serviceChanged = (did: string) => dispatchEvent(new CustomEvent(SERVICE_CHANGED, { detail: did }));
 
-export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; onClose(): void }) {
+export function KeptSettingsDialog({ space, service, onClose }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; onClose(): void }) {
+  const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
+  const label = (a: { name: string; label: string } | undefined, name: string) => (a ? ts(`settings.${fieldName(a.name)}.label`, a.label) : name);
   const { data, reload } = useApi(() => api<ServiceSettingsInfo>('serviceSettings', { space: space.id, service: service.did }), [space.id, service.did]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState({ name: '', value: '', secret: true });
   const [signing, setSigning] = useState<{ code: string; url: string }>();
   if (!data) return null;
   const save = (name: string, value: string | null, secret?: boolean) =>
-    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump(), serviceChanged(service.did))), value === null ? `${name} removed` : `${name} set`);
+    attempt(() => api('setServiceSetting', { space: space.id, service: service.did, name, value, ...(secret ? { secret: true } : {}) }).then(() => (setValues((v) => ({ ...v, [name]: '' })), reload(), bump(), serviceChanged(service.did))), t(value === null ? 'kept.removed' : 'kept.set', { name }));
   const names = [...data.asks.map((a) => a.name), ...data.settings.map((x) => x.name).filter((n) => !data.asks.some((a) => a.name === n))];
   return (
-    <Modal title={`${service.name}: settings in ${space.name}`} onClose={onClose} wide>
+    <Modal title={t('kept.title', { service: service.name, space: space.name })} onClose={onClose} wide>
       <p className="small muted">
-        Kept here by the maintainers of {space.name}, wherever {service.name} runs. A secret is sealed for {service.name} alone: nobody reads it back, you included. Changing one starts it again.
-        {data.yours?.length ? (data.runsHere ? ' Those marked yours stay with it on this computer, for every project you run it in.' : ` Its sign-in is ${data.service.person.name ?? 'its runner'}'s, who runs it: kept on their computer, for every project they run it in.`) : ''}
+        {t('kept.about', { space: space.name, service: service.name })}
+        {data.yours?.length ? (data.runsHere ? t('kept.yours.here') : t('kept.yours.runner', { runner: data.service.person.name ?? t('kept.its.runner') })) : ''}
       </p>
       {signing && (
         <div className="notice">
-          Enter this code on{' '}
-          <a href={signing.url} target="_blank" rel="noopener noreferrer">
-            {new URL(signing.url).hostname}
-          </a>{' '}
-          (it's copied): <b className="user-code">{signing.code}</b>. Only ever enter a code Weave shows you, here.
+          <T
+            name="kept.enter.code"
+            values={{
+              site: (
+                <a href={signing.url} target="_blank" rel="noopener noreferrer">
+                  {new URL(signing.url).hostname}
+                </a>
+              ),
+              code: <b className="user-code">{signing.code}</b>,
+            }}
+          />
         </div>
       )}
-      {data.missing.length > 0 && <p className="note">It needs {data.missing.map((n) => data.asks.find((a) => a.name === n)?.label ?? n).join(', ')} to work.</p>}
+      {data.missing.length > 0 && <p className="note">{t('kept.needs', { what: data.missing.map((n) => label(data.asks.find((a) => a.name === n), n)).join(', ') })}</p>}
       {data.mayChange && <WhoCan space={space} service={service} />}
       {names.map((name) => {
         const asked = data.asks.find((a) => a.name === name);
@@ -625,35 +653,57 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
         const set = yours ? (yours.set ? { oauth: asked?.oauth ? (true as const) : undefined, secret: !asked?.choose, value: 'value' in yours ? yours.value : undefined } : undefined) : data.settings.find((x) => x.name === name);
         // An app of yours registered with the provider: what it is, and installing it.
         const app = yours && 'app' in yours ? yours.app : undefined;
-        const appName = app ? String(app.slug ?? app.id ?? 'your app') : undefined;
+        const appName = app ? String(app.slug ?? app.id ?? t('kept.your.app')) : undefined;
         const secret = asked?.secret ?? set?.secret ?? false;
         const mayChange = yours ? data.runsHere : data.mayChange;
         const runner = data.service.person.name ?? shortDid(data.service.person.did);
         return (
           <fieldset key={name} className="service-setting">
             <legend>
-              {asked?.label ?? name} <span className="muted small">{name}{asked?.optional ? ' · optional' : ''}</span>
+              {label(asked, name)}{' '}
+              <span className="muted small">
+                {name}
+                {asked?.optional ? t('kept.optional') : ''}
+              </span>
             </legend>
-            {asked?.hint && <p className="small muted">{asked.hint}</p>}
+            {asked?.hint && <p className="small muted">{ts(`settings.${fieldName(asked.name)}.hint`, asked.hint)}</p>}
             <p className="small">
-              {yours && !data.runsHere
-                ? `${runner}'s, who runs it: kept with it on their computer, for every project they run it in`
-                : app && typeof app.html_url === 'string'
-                  ? <>Made: <a href={app.html_url} target="_blank" rel="noopener noreferrer">{appName}</a></>
-                  : set
-                    ? set.oauth ? 'Signed in' : secret ? 'Set (secret)' : asked?.choose ? (set.value ?? '').split('\n').filter(Boolean).join(', ') : <code>{set.value}</code>
-                    : asked?.oauth ? 'Not signed in' : asked?.register ? 'Not made yet' : asked?.choose ? 'None chosen yet' : 'Not set'}
-              {yours && data.runsHere && <span className="muted"> · yours, for every project you run it in</span>}
-              {set && 'by' in set && <span className="muted"> · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}</span>}
+              {yours && !data.runsHere ? (
+                t('kept.runners', { runner })
+              ) : app && typeof app.html_url === 'string' ? (
+                <>
+                  {t('kept.made')}{' '}
+                  <a href={app.html_url} target="_blank" rel="noopener noreferrer">
+                    {appName}
+                  </a>
+                </>
+              ) : set ? (
+                set.oauth ? (
+                  t('kept.signed.in')
+                ) : secret ? (
+                  t('kept.set.secret')
+                ) : asked?.choose ? (
+                  (set.value ?? '').split('\n').filter(Boolean).join(', ')
+                ) : (
+                  <code>{set.value}</code>
+                )
+              ) : (
+                t(asked?.oauth ? 'kept.not.signed.in' : asked?.register ? 'kept.not.made' : asked?.choose ? 'kept.none.chosen' : 'kept.not.set')
+              )}
+              {yours && data.runsHere && <span className="muted"> {t('kept.yours.every.project')}</span>}
+              {set && 'by' in set && (
+                <span className="muted">
+                  {' '}
+                  · {set.by.name ?? shortDid(set.by.did)}, {ago(set.time)}
+                </span>
+              )}
             </p>
-            {mayChange && asked?.choose && (
-              <ChooseSetting space={space.id} service={service} action={asked.choose.action} many={!!asked.choose.many} value={set?.value ?? ''} onSave={(value) => save(name, value)} />
-            )}
+            {mayChange && asked?.choose && <ChooseSetting space={space.id} service={service} action={asked.choose.action} many={!!asked.choose.many} value={set?.value ?? ''} onSave={(value) => save(name, value)} />}
             {mayChange && !asked?.choose && (
               <div className="field-row">
                 {app && yours && 'next' in yours && yours.next && (
                   <button className="default" onClick={() => window.open(yours.next, '_blank', 'noopener')}>
-                    Install it on repositories…
+                    {t('kept.install.repos')}
                   </button>
                 )}
                 {asked?.oauth || asked?.register ? (
@@ -675,22 +725,24 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
                           reload();
                           serviceChanged(service.did);
                         }
-                      }, asked.register ? `${asked.label} is made` : `${service.name} is signed in`)
+                      }, asked.register ? t('kept.app.is.made', { app: label(asked, name) }) : t('kept.service.signed.in', { service: service.name }))
                     }
                   >
                     {asked.register
-                      ? `${set ? 'Make another' : `Make ${lowerFirst(asked.label)}`} on ${new URL(asked.register.page).hostname}…`
-                      : set ? 'Sign in again…' : `Sign in with ${new URL(asked.oauth!.authorize ?? asked.oauth!.device ?? asked.oauth!.token).hostname.replace(/^(www|api|accounts)\./, '')}…`}
+                      ? t(set ? 'kept.make.another.on' : 'kept.make.on', { app: lowerFirst(label(asked, name)), site: new URL(asked.register.page).hostname })
+                      : set
+                        ? t('kept.sign.in.again')
+                        : t('kept.sign.in.with', { site: new URL(asked.oauth!.authorize ?? asked.oauth!.device ?? asked.oauth!.token).hostname.replace(/^(www|api|accounts)\./, '') })}
                   </AsyncButton>
                 ) : (
                   <>
-                    <input className="grow" type={secret ? 'password' : 'text'} value={values[name] ?? (secret ? '' : (set?.value ?? ''))} placeholder={secret ? (set ? 'A new value…' : 'Its value…') : ''} onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))} />
+                    <input className="grow" type={secret ? 'password' : 'text'} value={values[name] ?? (secret ? '' : (set?.value ?? ''))} placeholder={secret ? t(set ? 'kept.new.value' : 'kept.its.value') : ''} onChange={(e) => setValues((v) => ({ ...v, [name]: e.target.value }))} />
                     <AsyncButton className="default" disabled={!(values[name] ?? '').trim()} onClick={() => save(name, values[name].trim(), secret)}>
-                      {set ? 'Change' : 'Set'}
+                      {t(set ? 'kept.change' : 'svc.set.button')}
                     </AsyncButton>
                   </>
                 )}
-                {set && <AsyncButton onClick={() => save(name, null)}>Remove</AsyncButton>}
+                {set && <AsyncButton onClick={() => save(name, null)}>{t('button.remove')}</AsyncButton>}
               </div>
             )}
           </fieldset>
@@ -698,21 +750,23 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
       })}
       {data.mayChange && !data.asks.length && (
         <fieldset className="service-setting">
-          <legend>Another setting</legend>
+          <legend>{t('kept.another.setting')}</legend>
           <div className="field-row">
-            <input placeholder="NAME" value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value.toUpperCase() })} />
-            <input className="grow" type={extra.secret ? 'password' : 'text'} placeholder="value" value={extra.value} onChange={(e) => setExtra({ ...extra, value: e.target.value })} />
+            <input placeholder={t('kept.name.placeholder')} value={extra.name} onChange={(e) => setExtra({ ...extra, name: e.target.value.toUpperCase() })} />
+            <input className="grow" type={extra.secret ? 'password' : 'text'} placeholder={t('svc.value')} value={extra.value} onChange={(e) => setExtra({ ...extra, value: e.target.value })} />
             <input id="extra-secret" type="checkbox" checked={extra.secret} onChange={(e) => setExtra({ ...extra, secret: e.target.checked })} />
-            <label htmlFor="extra-secret" className="small">secret</label>
+            <label htmlFor="extra-secret" className="small">
+              {t('kept.secret')}
+            </label>
             <AsyncButton disabled={!extra.name || !extra.value} onClick={() => save(extra.name, extra.value, extra.secret).then(() => setExtra({ name: '', value: '', secret: true }))}>
-              Set
+              {t('svc.set.button')}
             </AsyncButton>
           </div>
         </fieldset>
       )}
-      {!data.mayChange && <p className="small muted">Only the maintainers of {space.name} change them.</p>}
+      {!data.mayChange && <p className="small muted">{t('kept.only.maintainers', { space: space.name })}</p>}
       <div className="buttons">
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{t('button.close')}</button>
       </div>
     </Modal>
   );
@@ -720,7 +774,7 @@ export function KeptSettingsDialog({ space, service, onClose }: { space: { id: s
 
 /** A group of people, as a section's title. */
 export const whoLabel = (who: ActionWho, space: string, groups: Array<{ id: string; name: string }>): string =>
-  who === 'members' ? `Everyone in ${space}` : who === 'maintainers' ? 'Maintainers' : who === 'owner' ? 'The owner' : 'board' in who ? `Readers of ${who.board}` : `Members of ${groups.find((g) => g.id === who.group)?.name ?? 'a group'}`;
+  who === 'members' ? t('who.everyone.in', { space }) : who === 'maintainers' ? t('who.maintainers') : who === 'owner' ? t('who.owner') : 'board' in who ? t('who.readers.of', { board: who.board }) : t('who.members.of', { group: groups.find((g) => g.id === who.group)?.name ?? t('who.a.group') });
 
 export const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
@@ -753,7 +807,9 @@ export interface ScopedAction {
  * members, maintainers, the owner, and whoever runs it). Yours are buttons; the others say whose they are. Who may use
  * which is changed in its settings (maintainers).
  */
-export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
+export function ActionScopes({ space, service, groups, extras, covered }: { space: { id: string; name: string }; service: { did: string; name: string; contract: ServiceContract; texts?: TextPackage[] }; groups: Array<{ id: string; name: string }>; extras: ScopedAction[]; covered?: string[] }) {
+  const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: actions } = useApi(() => (service.contract.actions?.length ? api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }) : Promise.resolve([] as ServiceActionInfo[])).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: panels } = useApi(() => api<ServicePanelInfo[]>('servicePanels', { space: space.id, service: service.did }).catch(() => [] as ServicePanelInfo[]), [space.id, service.did]);
   const { data: lists } = useApi(() => api<ServiceListInfo[]>('serviceLists', { space: space.id, service: service.did }).catch(() => [] as ServiceListInfo[]), [space.id, service.did]);
@@ -766,11 +822,11 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
   const replaced = new Set([...extras.flatMap((e) => e.replaces ?? []), ...(panels ?? []).filter((p) => p.mine).flatMap((p) => p.covers ?? []), ...(covered ?? []), ...listed]);
   // Its own pages: in their section, only for who may see them.
   const shown = (panels ?? []).filter((p) => p.mine);
-  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${a.label}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
+  const all: ScopedAction[] = [...(actions ?? []).filter((a) => !replaced.has(a.name)).map((a): ScopedAction => ({ key: `action:${a.name}`, label: `${ts(`actions.${a.name}.label`, a.label)}…`, who: a.who, mine: a.mine, run: () => setUsing(a) })), ...extras.filter((e) => !(e.withoutPage && (shown.length || lists?.length)))];
   if (!all.length && !shown.length && !lists?.length) return null;
   const rank = (w: ActionWho | 'runner') => (w === 'runner' ? 4 : breadth(w));
   const sections = [...new Map([...all.map((a) => a.who), ...shown.map((p) => p.who)].map((w) => [JSON.stringify(w), w])).values()].sort((a, b) => rank(a) - rank(b));
-  const title = (w: ActionWho | 'runner') => (w === 'runner' ? 'Only you (you run it)' : whoLabel(w, space.name, groups));
+  const title = (w: ActionWho | 'runner') => (w === 'runner' ? t('who.only.you.run') : whoLabel(w, space.name, groups));
   const options = sections.filter((who) => all.some((a) => JSON.stringify(a.who) === JSON.stringify(who)));
   return (
     <div className="action-scopes">
@@ -780,8 +836,8 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
       ))}
       {shown.map((p) => (
         <div className="service-panel-box" key={p.name}>
-          {p.who !== 'members' && <div className="small muted">{title(p.who)} see this</div>}
-          <ServicePanel space={space} service={service} panel={p} actions={actions ?? []} />
+          {p.who !== 'members' && <div className="small muted">{t('who.see.this', { who: title(p.who) })}</div>}
+          <ServicePanel space={space} service={service} panel={{ ...p, title: ts(`panels.${p.name}.title`, p.title) }} actions={actions ?? []} />
         </div>
       ))}
       {options.map((who) => (
@@ -791,7 +847,7 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
             {all
               .filter((a) => JSON.stringify(a.who) === JSON.stringify(who))
               .map((a) => (
-                <button key={a.key} disabled={!a.mine} title={a.mine ? undefined : `Only ${lowerFirst(title(a.who))}`} onClick={a.run}>
+                <button key={a.key} disabled={!a.mine} title={a.mine ? undefined : t('who.only', { who: lowerFirst(title(a.who)) })} onClick={a.run}>
                   {a.label}
                 </button>
               ))}
@@ -804,7 +860,9 @@ export function ActionScopes({ space, service, groups, extras, covered }: { spac
 }
 
 /** Who may use each of a service's actions here (in its settings): maintainers make one narrower than its contract, never wider. */
-function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string } }) {
+function WhoCan({ space, service }: { space: { id: string; name: string }; service: { did: string; texts?: TextPackage[] } }) {
+  const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
   const { data: actions, reload } = useApi(() => api<ServiceActionInfo[]>('serviceActions', { space: space.id, service: service.did }).catch(() => [] as ServiceActionInfo[]), [space.id, service.did]);
   const { data: info } = useApi(() => api<{ groups: Array<{ id: string; name: string }> }>('project', space.id).catch(() => ({ groups: [] })), [space.id]);
   const { data: boards } = useApi(() => api<Array<{ name: string }>>('boards', space.id).catch(() => []), [space.id]);
@@ -813,14 +871,14 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
   const move = (a: ServiceActionInfo, to: string) => attempt(() => api('setServicePolicy', { space: space.id, service: service.did, action: a.name, who: to === JSON.stringify(a.declared) ? null : JSON.parse(to) }).then(reload));
   return (
     <fieldset className="service-setting">
-      <legend>Who can</legend>
+      <legend>{t('who.can')}</legend>
       {actions.map((a) => {
         const options = narrower(a.declared, (boards ?? []).map((b) => b.name), groups);
         return (
           <div className="field-row" key={a.name}>
             <span className="grow">
-              {a.label}
-              {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted"> · its contract: {lowerFirst(whoLabel(a.declared, space.name, groups))}</span>}
+              {ts(`actions.${a.name}.label`, a.label)}
+              {JSON.stringify(a.who) !== JSON.stringify(a.declared) && <span className="small muted"> {t('who.its.contract', { who: lowerFirst(whoLabel(a.declared, space.name, groups)) })}</span>}
             </span>
             {options.length > 1 ? (
               <select value={JSON.stringify(a.who)} onChange={(e) => void move(a, e.target.value)}>
@@ -836,12 +894,15 @@ function WhoCan({ space, service }: { space: { id: string; name: string }; servi
           </div>
         );
       })}
-      <p className="small muted">A project can make who may narrower than the service's contract, never wider.</p>
+      <p className="small muted">{t('who.narrower')}</p>
     </fieldset>
   );
 }
 
-export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string }; action: ServiceActionInfo; onClose(): void }) {
+export function ActionDialog({ space, service, action, onClose }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; action: ServiceActionInfo; onClose(): void }) {
+  const { t } = useTexts();
+  const { ts } = useServiceTexts(service.texts);
+  const label = ts(`actions.${action.name}.label`, action.label);
   const [values, setValues] = useState<Record<string, string>>({});
   const [asked, setAsked] = useState<string>();
   const { data: answer } = useApi(
@@ -850,14 +911,14 @@ export function ActionDialog({ space, service, action, onClose }: { space: { id:
   );
   const missing = (action.input ?? []).some((f) => !f.optional && !values[f.name]?.trim());
   return (
-    <Modal title={`${action.label} · ${service.name}`} onClose={onClose}>
+    <Modal title={`${label} · ${service.name}`} onClose={onClose}>
       {!asked ? (
         <>
           {(action.input ?? []).map((f) => (
             <div className="app-setting" key={f.name}>
               <label htmlFor={`action-${f.name}`}>
-                {f.label}
-                {f.optional ? <span className="muted"> (optional)</span> : null}
+                {ts(`actions.${action.name}.input.${fieldName(f.name)}.label`, f.label)}
+                {f.optional ? <span className="muted"> {t('setting.optional')}</span> : null}
               </label>
               <input id={`action-${f.name}`} className="wide" type={f.secret ? 'password' : 'text'} value={values[f.name] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))} />
             </div>
@@ -874,22 +935,21 @@ export function ActionDialog({ space, service, action, onClose }: { space: { id:
                 })
               }
             >
-              {action.label}
+              {label}
             </AsyncButton>
           </div>
         </>
       ) : answer ? (
-        <p className={answer.error ? 'error-text' : ''}>{answer.error ?? (answer.text || 'Done.')}</p>
+        <p className={answer.error ? 'error-text' : ''}>{answer.error ?? (answer.text || t('action.done'))}</p>
       ) : (
-        <p className="small muted">Asked {service.name}: its answer shows here once it comes.</p>
+        <p className="small muted">{t('action.asked', { name: service.name })}</p>
       )}
       <div className="buttons">
-        <button onClick={onClose}>Close</button>
+        <button onClick={onClose}>{t('button.close')}</button>
       </div>
     </Modal>
   );
 }
-
 
 /**
  * The app's look around a service's page, for the page to follow (dark or light, the skin's colours): its text, a

@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { MembershipRequestInfo, PermissionRequest } from '@weave/node/client';
+import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
@@ -16,8 +16,10 @@ import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
 import { SetupPackDialog } from './packs.tsx';
-import { AvatarEditor } from './avatar-editor.tsx';
+import { AvatarEditor, inPhotoOrder, SpacePhotoSettings } from './avatar-editor.tsx';
+import { GroupPhoto } from './avatar.tsx';
 import type { Pack } from '@weave/core';
+import { t, T, useTexts } from './texts.tsx';
 
 const textOf = (item: FeedItem): string => {
   const body = item.body as { text?: unknown; title?: unknown } | string | null;
@@ -48,64 +50,75 @@ function useForm<T extends Record<string, string>>(initial: T) {
   return { values, field, reset: () => setValues(initial) };
 }
 
+/** A space's kind as a word: group, project, community, or chat for a direct one. */
+const kindWord = (kind: SpaceInfo['kind']): string => t(`word.${kind === 'direct' ? 'chat' : kind}`);
+
 // ---------------------------------------------------------------- your hub (MySpace-style, in the person's theme)
 
+const FONTS: Array<Theme['font']> = ['sans', 'serif', 'mono', 'rounded'];
+const PATTERNS: Array<Theme['pattern']> = ['none', 'weave', 'dots', 'glow'];
+
 function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
+  const { t } = useTexts();
   const [theme, setTheme] = useState<Theme>(me.theme);
   const [name, setName] = useState(me.name ?? '');
-  const color = (key: 'accent' | 'background' | 'surface' | 'text', label: string) => (
+  const color = (key: 'accent' | 'background' | 'surface' | 'text') => (
     <label className="color">
-      <input type="color" value={theme[key]} onChange={(e) => setTheme({ ...theme, [key]: e.target.value })} /> {label}
+      <input type="color" value={theme[key]} onChange={(e) => setTheme({ ...theme, [key]: e.target.value })} /> {t(`hub.color.${key}`)}
     </label>
   );
   return (
-    <Modal title="Customize your hub" onClose={onClose}>
-      <p className="small">Your theme is public: friends see your hub the way you style it.</p>
+    <Modal title={t('hub.customize.title')} onClose={onClose}>
+      <p className="small">{t('hub.theme.public')}</p>
       <div className="field-row-stacked">
-        <label htmlFor="me-name">Name</label>
+        <label htmlFor="me-name">{t('field.name')}</label>
         <input id="me-name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
       </div>
       <fieldset>
-        <legend>Colors</legend>
+        <legend>{t('hub.colors')}</legend>
         <div className="colors">
-          {color('accent', 'Accent')}
-          {color('background', 'Background')}
-          {color('surface', 'Boxes')}
-          {color('text', 'Text')}
+          {color('accent')}
+          {color('background')}
+          {color('surface')}
+          {color('text')}
         </div>
       </fieldset>
       <div className="field-row">
-        <label htmlFor="me-font">Font</label>
+        <label htmlFor="me-font">{t('hub.font')}</label>
         <select id="me-font" value={theme.font} onChange={(e) => setTheme({ ...theme, font: e.target.value as Theme['font'] })}>
-          {['sans', 'serif', 'mono', 'rounded'].map((f) => (
-            <option key={f}>{f}</option>
+          {FONTS.map((f) => (
+            <option key={f} value={f}>
+              {t(`hub.font.${f}`)}
+            </option>
           ))}
         </select>
-        <label htmlFor="me-pattern">Wallpaper</label>
+        <label htmlFor="me-pattern">{t('hub.wallpaper')}</label>
         <select id="me-pattern" value={theme.pattern} onChange={(e) => setTheme({ ...theme, pattern: e.target.value as Theme['pattern'] })}>
-          {['none', 'weave', 'dots', 'glow'].map((p) => (
-            <option key={p}>{p}</option>
+          {PATTERNS.map((p) => (
+            <option key={p} value={p}>
+              {t(`hub.pattern.${p}`)}
+            </option>
           ))}
         </select>
       </div>
       <div className="space-preview" style={themeVars(theme) as React.CSSProperties} data-pattern={theme.pattern}>
         <div className="space-box">
-          <b style={{ color: 'var(--accent)' }}>{name || 'You'}</b>'s hub
+          <T name="hub.theirs" values={{ name: <b style={{ color: 'var(--accent)' }}>{name || t('word.you')}</b> }} />
         </div>
       </div>
       <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton
           className="default"
           onClick={async () => {
-            const saved = await attempt(() => api<Profile>('setProfile', { name, theme }), 'Your hub is updated');
+            const saved = await attempt(() => api<Profile>('setProfile', { name, theme }), t('hub.updated'));
             if (saved) {
               bump();
               onClose();
             }
           }}
         >
-          Save
+          {t('button.save')}
         </AsyncButton>
       </div>
     </Modal>
@@ -113,22 +126,23 @@ function ThemeEditor({ me, onClose }: { me: Profile; onClose(): void }) {
 }
 
 export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
+  const { t } = useTexts();
   const profile = useApi(() => api<Profile>('profile', who), [who]);
   const p = profile.data;
   const posts = useApi(() => (p ? api<FeedItem[]>('feed', { author: p.did, publicOnly: true, kinds: ['weave.post'], limit: 100 }) : Promise.resolve([])), [p?.did]);
   const [editing, setEditing] = useState(false);
   const [avatar, setAvatar] = useState(false);
   const [text, setText] = useState('');
-  if (!p) return <Page title="Hub">{null}</Page>;
+  if (!p) return <Page title={t('nav.hub.theirs')}>{null}</Page>;
   const name = p.name ?? shortDid(p.did);
   const edge = (kind: 'follow' | 'mute' | 'block', on: boolean, label: string) => (
     <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: kind, who: p.did, on }).then(bump))}>{label}</AsyncButton>
   );
   return (
-    <Page title={<>{p.me ? 'My hub' : `${name}'s hub`}</>} actions={
+    <Page title={<>{p.me ? t('nav.hub') : t('hub.theirs', { name })}</>} actions={
         p.me && (
           <>
-            <button onClick={() => setAvatar(true)}>Avatar…</button> <button onClick={() => setEditing(true)}>Customize…</button>
+            <button onClick={() => setAvatar(true)}>{t('hub.avatar')}</button> <button onClick={() => setEditing(true)}>{t('hub.customize')}</button>
           </>
         )
       }
@@ -138,24 +152,22 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           <Avatar did={p.did} size={96} />
           <div className="space-id">
             <h1>{name}</h1>
-            <button className="did" title="Copy identity" onClick={() => copy(p.did, 'Identity copied')}>
+            <button className="did" title={t('hub.copy.identity')} onClick={() => copy(p.did, t('hub.identity.copied'))}>
               {p.did}
             </button>
             <div className="badges">
-              {p.following && p.followsMe && <span className="tag friend">friend</span>}
-              {!p.me && p.followsMe && !p.following && <span className="tag">follows you</span>}
-              {p.blocked && <span className="tag rejected">blocked</span>}
-              {p.muted && <span className="tag">muted</span>}
-              <span className="small">
-                {p.posts} public post{p.posts === 1 ? '' : 's'}
-              </span>
+              {p.following && p.followsMe && <span className="tag friend">{t('people.friend')}</span>}
+              {!p.me && p.followsMe && !p.following && <span className="tag">{t('people.follows.you')}</span>}
+              {p.blocked && <span className="tag rejected">{t('people.blocked')}</span>}
+              {p.muted && <span className="tag">{t('people.muted')}</span>}
+              <span className="small">{t('hub.public.posts', { n: p.posts })}</span>
             </div>
             <HubAccounts profile={p} />
           </div>
           {p.me && (
             <div className="space-actions">
               <a className="button-link" href="#/keys">
-                <Icon name="lock" /> Keys &amp; devices
+                <Icon name="lock" /> {t('nav.keys')}
               </a>
             </div>
           )}
@@ -163,12 +175,12 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
             <div className="space-actions">
               {p.following && p.followsMe && (
                 <button className="default" onClick={() => startChat(p.did)}>
-                  <Icon name="message" /> Message
+                  <Icon name="message" /> {t('people.message')}
                 </button>
               )}
-              {edge('follow', !p.following, p.following ? 'Unfollow' : 'Follow')}
-              {edge('mute', !p.muted, p.muted ? 'Unmute' : 'Mute')}
-              {edge('block', !p.blocked, p.blocked ? 'Unblock' : 'Block')}
+              {edge('follow', !p.following, t(p.following ? 'people.unfollow' : 'people.follow'))}
+              {edge('mute', !p.muted, t(p.muted ? 'hub.unmute' : 'hub.mute'))}
+              {edge('block', !p.blocked, t(p.blocked ? 'hub.unblock' : 'hub.block'))}
             </div>
           )}
         </header>
@@ -177,13 +189,13 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
         {p.me && <MyProjects name={name} />}
         {!p.me && p.projects.length > 0 && (
           <section className="space-box">
-            <h3>{name}'s projects</h3>
+            <h3>{t('hub.projects.of', { name })}</h3>
             <div className="showcase">
               {p.projects.map((project) => (
                 <article className="showcase-item" key={project.id}>
                   <ProjectIcon id={project.id} icon={project.icon} size={48} />
                   <div>
-                    <b>{project.name}</b> <span className={`tag status-${project.status}`}>{project.status}</span>
+                    <b>{project.name}</b> <span className={`tag status-${project.status}`}>{t(`pstatus.${project.status}`)}</span>
                     {project.description && <Markdown text={project.description} />}
                   </div>
                 </article>
@@ -192,17 +204,17 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
           </section>
         )}
         <section className="space-box">
-          <h3>Posts</h3>
+          <h3>{t('hub.posts')}</h3>
           {p.me && (
             <form
               className="space-compose"
               onSubmit={async (e) => {
                 e.preventDefault();
-                if (text.trim() && (await attempt(() => api('publish', { kind: 'weave.post', body: { text } }), 'Posted publicly'))) setText('');
+                if (text.trim() && (await attempt(() => api('publish', { kind: 'weave.post', body: { text } }), t('hub.posted')))) setText('');
               }}
             >
-              <textarea rows={2} placeholder="A public note for everyone who follows you…" value={text} onChange={(e) => setText(e.target.value)} />
-              <button>Post</button>
+              <textarea rows={2} placeholder={t('hub.note.placeholder')} value={text} onChange={(e) => setText(e.target.value)} />
+              <button>{t('word.post')}</button>
             </form>
           )}
           {[...(posts.data ?? [])].reverse().map((item) => (
@@ -211,7 +223,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
               <Markdown text={textOf(item)} />
             </div>
           ))}
-          {posts.data?.length === 0 && <p className="small">{p.me ? 'Your public posts show up here.' : `${name} hasn't posted publicly yet.`}</p>}
+          {posts.data?.length === 0 && <p className="small">{p.me ? t('hub.posts.yours.here') : t('hub.posts.none', { name })}</p>}
         </section>
       </div>
       {editing && (
@@ -231,13 +243,14 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
 // ---------------------------------------------------------------- memberships
 
 export function MembershipsView({ meDid, meName }: { meDid: string; meName?: string }) {
+  const { t } = useTexts();
   return (
-    <Page title={<><Icon name="star" /> Memberships</>}>
-      <p className="small">Patreon-style: creators offer tiers, supporters ask to join. A tier is a group with its own chat, and creators can open projects to it. Memberships give access, never votes.</p>
+    <Page title={<><Icon name="star" /> {t('nav.memberships')}</>}>
+      <p className="small">{t('memberships.about')}</p>
       <div className="space app-boxes">
-        <SupportBox did={meDid} name={meName ?? 'you'} me />
+        <SupportBox did={meDid} name={meName ?? t('word.you.lc')} me />
         <section className="space-box">
-          <h3>Supporting</h3>
+          <h3>{t('memberships.supporting')}</h3>
           <MySupport />
         </section>
       </div>
@@ -249,41 +262,53 @@ export function MembershipsView({ meDid, meName }: { meDid: string; meName?: str
 
 /** Close, and copy a link to paste into any messenger. */
 function CopyButtons({ text, what, onClose }: { text?: string; what: string; onClose(): void }) {
+  const { t } = useTexts();
   return (
     <div className="buttons">
-      <button onClick={onClose}>Close</button>
-      <button className="default" disabled={!text} onClick={() => copy(text!, `${what} copied`)}>
-        <Icon name="copy" /> Copy
+      <button onClick={onClose}>{t('button.close')}</button>
+      <button className="default" disabled={!text} onClick={() => copy(text!, t('copy.what.copied', { what }))}>
+        <Icon name="copy" /> {t('button.copy')}
       </button>
     </div>
   );
 }
 
 export function ContactDialog({ onClose }: { onClose(): void }) {
-  const { data: link } = useApi(() => api<string>('contactLink'), []);
+  const { t } = useTexts();
+  // With a front door (an always-on node), its link is the one to give: it never leads to this computer. The personal
+  // one is still there, for close contacts.
+  const { data: reach } = useApi(() => api<ReachInfo>('reach'), []);
+  const [personal, setPersonal] = useState(false);
+  const door = !!reach?.door && !personal;
+  const { data: link } = useApi(() => (reach ? api<string>('contactLink', door ? { door: true } : {}) : Promise.resolve(undefined)), [!!reach, door]);
   const { data: me } = useApi(() => api<Profile>('profile'), []);
-  const message = link ? `Add me on Weave${me?.name ? ` (${me.name})` : ''}: ${link}` : '';
+  const message = link ? t(me?.name ? 'contact.message.named' : 'contact.message', { name: me?.name, link }) : '';
   return (
-    <Modal title="My contact link" onClose={onClose}>
-      <p className="small">
-        Your Weave address, like a phone number. Copy it and paste it into any chat: whoever adds it can find your node, follow you and see your public space. It holds no keys,
-        and nothing private is shared until you invite them somewhere.
-      </p>
-      <textarea className="wide invite" readOnly rows={4} value={message || 'Making your link…'} />
-      <CopyButtons text={link && message} what="Contact link" onClose={onClose} />
+    <Modal title={t('contact.title')} onClose={onClose}>
+      <p className="small">{t(door ? 'contact.about.door' : 'contact.about')}</p>
+      <textarea className="wide invite" readOnly rows={4} value={message || t('contact.making')} />
+      {reach?.door && (
+        <p className="small">
+          <button type="button" className="link" onClick={() => setPersonal((p) => !p)}>
+            {t(door ? 'contact.personal' : 'contact.door')}
+          </button>
+        </p>
+      )}
+      <CopyButtons text={link && message} what={t('contact.link')} onClose={onClose} />
     </Modal>
   );
 }
 
 export function AddContactDialog({ onClose }: { onClose(): void }) {
+  const { t } = useTexts();
   const [text, setText] = useState('');
   return (
-    <Modal title="Add someone" onClose={onClose}>
+    <Modal title={t('contact.add.title')} onClose={onClose}>
       <form
         className="form"
         onSubmit={async (e) => {
           e.preventDefault();
-          const p = await attempt(() => api<Profile>('addContact', text), 'Added');
+          const p = await attempt(() => api<Profile>('addContact', text), t('contact.added'));
           if (p) {
             bump();
             onClose();
@@ -291,13 +316,13 @@ export function AddContactDialog({ onClose }: { onClose(): void }) {
           }
         }}
       >
-        <p className="small">Paste the contact link someone sent you, or the whole message it came in.</p>
-        <textarea className="wide" required autoFocus rows={4} placeholder="Add me on Weave: weave:contact:…" value={text} onChange={(e) => setText(e.target.value)} />
+        <p className="small">{t('contact.paste')}</p>
+        <textarea className="wide" required autoFocus rows={4} placeholder={t('contact.placeholder')} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
-          <button className="default">Add</button>
+          <button className="default">{t('button.add')}</button>
         </div>
       </form>
     </Modal>
@@ -305,6 +330,7 @@ export function AddContactDialog({ onClose }: { onClose(): void }) {
 }
 
 export function PeopleView() {
+  const { t } = useTexts();
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState<'contact' | 'add'>();
   const social = useApi(() => api<Social>('social'), []);
@@ -312,38 +338,40 @@ export function PeopleView() {
   const s = social.data;
   return (
     <Page
-      title={<><Icon name="users" /> People</>}
+      title={<><Icon name="users" /> {t('nav.people')}</>}
       actions={
         <>
           <button onClick={() => setDialog('add')}>
-            <Icon name="userPlus" /> Add by link
+            <Icon name="userPlus" /> {t('people.add.by.link')}
           </button>
           <button onClick={() => setDialog('contact')}>
-            <Icon name="share" /> My contact link
+            <Icon name="share" /> {t('contact.title')}
           </button>
         </>
       }
     >
       <div className="field-row search-row">
         <Icon name="search" />
-        <input type="search" autoFocus placeholder="Search people by name…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search people" />
+        <input type="search" autoFocus placeholder={t('people.search.placeholder')} value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('people.search')} />
       </div>
       {s && (
         <div className="stats">
-          {[
-            [s.friends.length, 'friends'],
-            [s.following.length, 'following'],
-            [s.followers.length, 'followers'],
-            [s.blocked.length + s.muted.length, 'blocked or muted'],
-          ].map(([n, label]) => (
-            <div className="stat sunken" key={label}>
+          {(
+            [
+              [s.friends.length, 'friends'],
+              [s.following.length, 'following'],
+              [s.followers.length, 'followers'],
+              [s.blocked.length + s.muted.length, 'blocked'],
+            ] as Array<[number, string]>
+          ).map(([n, key]) => (
+            <div className="stat sunken" key={key}>
               <b>{n}</b>
-              <span>{label}</span>
+              <span>{t(`people.stat.${key}`)}</span>
             </div>
           ))}
         </div>
       )}
-      <p className="small">Everyone whose profile reached you. A friend is someone you follow who follows you back.</p>
+      <p className="small">{t('people.about')}</p>
       <div className="people">
         {(everyone.data ?? []).map((p) => (
           <div className="person" key={p.did}>
@@ -353,27 +381,37 @@ export function PeopleView() {
                 <b>{p.name ?? shortDid(p.did)}</b>
               </a>
               <div>
-                {p.following && p.followsMe ? <span className="tag friend">friend</span> : p.followsMe ? <span className="tag">follows you</span> : p.following ? <span className="tag">following</span> : null}
-                {p.blocked && <span className="tag rejected">blocked</span>}
-                {p.muted && <span className="tag">muted</span>}
-                {p.contact && <span className="tag">in your contacts</span>}
+                {p.following && p.followsMe ? <span className="tag friend">{t('people.friend')}</span> : p.followsMe ? <span className="tag">{t('people.follows.you')}</span> : p.following ? <span className="tag">{t('people.following')}</span> : null}
+                {p.blocked && <span className="tag rejected">{t('people.blocked')}</span>}
+                {p.muted && <span className="tag">{t('people.muted')}</span>}
+                {p.contact && <span className="tag">{t('people.in.contacts')}</span>}
               </div>
             </div>
             {p.following && p.followsMe && (
               <button onClick={() => startChat(p.did)}>
-                <Icon name="message" /> Message
+                <Icon name="message" /> {t('people.message')}
               </button>
             )}
-            <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>{p.following ? 'Unfollow' : 'Follow'}</AsyncButton>
+            <AsyncButton onClick={() => attempt(() => api('setEdge', { edge: 'follow', who: p.did, on: !p.following }).then(bump))}>{t(p.following ? 'people.unfollow' : 'people.follow')}</AsyncButton>
           </div>
         ))}
         {everyone.data?.length === 0 &&
           (query ? (
             <p className="empty">
-              Nobody called “{query}” has reached you yet. Ask them for their contact link and <button className="link" onClick={() => setDialog('add')}>add it</button>.
+              <T
+                name="people.nobody.called"
+                values={{
+                  query,
+                  add: (
+                    <button className="link" onClick={() => setDialog('add')}>
+                      {t('people.add.it')}
+                    </button>
+                  ),
+                }}
+              />
             </p>
           ) : (
-            <p className="empty">Nobody yet. Send your contact link to friends, or join a community or project to meet people.</p>
+            <p className="empty">{t('people.nobody.yet')}</p>
           ))}
       </div>
       {dialog === 'contact' && <ContactDialog onClose={() => setDialog(undefined)} />}
@@ -383,13 +421,14 @@ export function PeopleView() {
 }
 
 export function InboxView({ admissions, knocks }: { admissions: Admission[]; knocks: KnockInfo[] }) {
+  const { t } = useTexts();
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
   const { data: coauthors } = useApi(() => api<CoauthorRequest[]>('coauthorRequests'), []);
   const { data: asks } = useApi(() => api<PermissionRequest[]>('permissionRequests').catch(() => []), []);
   const { data: fading } = useApi(() => api<PostInfo[]>('fading').catch(() => []), []);
   return (
-    <Page title={<><Icon name="inbox" /> Inbox</>}>
-      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && fading?.length === 0 && <p className="empty">Nothing waiting for you.</p>}
+    <Page title={<><Icon name="inbox" /> {t('nav.inbox')}</>}>
+      {admissions.length === 0 && knocks.length === 0 && requests?.length === 0 && coauthors?.length === 0 && asks?.length === 0 && fading?.length === 0 && <p className="empty">{t('inbox.empty')}</p>}
       {(fading ?? []).map((p) => (
         <FadingCard key={p.id} post={p} />
       ))}
@@ -414,20 +453,21 @@ export function InboxView({ admissions, knocks }: { admissions: Admission[]; kno
 
 /** A post of yours that others will forget soon, by the rule of its board. */
 export function FadingCard({ post }: { post: PostInfo }) {
+  const { t } = useTexts();
   return (
     <div className="admission window">
       <div className="window-body">
         <Icon name="clock" />
         <div className="grow">
           <a href={`#/post/${post.id}`}>“{post.title}”</a>
-          {post.space && <span className="small muted"> in {post.space.name}</span>}
-          <div className="small muted">{post.lifetime ? lifetimeText(post.lifetime) : ''} Keep it, and its time starts again; maintainers and moderators can also pin it to keep it for good.</div>
+          {post.space && <span className="small muted"> {t('inbox.in', { space: post.space.name })}</span>}
+          <div className="small muted">{post.lifetime ? lifetimeText(post.lifetime) : ''} {t('fading.keep.note')}</div>
         </div>
         <a className="button" href={`#/post/${post.id}`}>
-          Open
+          {t('fading.open')}
         </a>
-        <AsyncButton className="default" onClick={() => attempt(() => api('keepPost', post.id).then(bump), `Kept “${post.title}”`)}>
-          Keep
+        <AsyncButton className="default" onClick={() => attempt(() => api('keepPost', post.id).then(bump), t('fading.kept', { title: post.title }))}>
+          {t('fading.keep')}
         </AsyncButton>
       </div>
     </div>
@@ -436,22 +476,33 @@ export function FadingCard({ post }: { post: PostInfo }) {
 
 /** A post that names you (or your agent) as co-author. */
 export function CoauthorCard({ request: r }: { request: CoauthorRequest }) {
-  const who = r.agent ? `your agent ${r.agent}` : 'you';
-  const answer = (on: boolean) => attempt(() => api('confirmCoauthor', { post: r.post.id, on, as: r.agent }).then(bump), on ? 'Confirmed: you show as co-author' : 'Declined');
+  const { t } = useTexts();
+  const who = r.agent ? t('cocard.your.agent', { agent: r.agent }) : t('word.you.lc');
+  const answer = (on: boolean) => attempt(() => api('confirmCoauthor', { post: r.post.id, on, as: r.agent }).then(bump), t(on ? 'cocard.confirmed' : 'cocard.declined'));
   return (
     <div className="admission window">
       <div className="window-body">
         <Avatar did={r.by.did} size={32} />
         <div className="grow">
-          <b>{r.by.name ?? shortDid(r.by.did)}</b>
-          {r.by.agent && <span className="agent-tag">{r.by.agent} · agent</span>} names {who} as co-author of{' '}
-          <a href={`#/post/${r.post.id}`}>“{r.post.title}”</a>
-          {r.post.space && <span className="small muted"> in {r.post.space.name}</span>}.
-          <div className="small muted">Confirming signs it with {r.agent ? `${r.agent}'s key` : 'your key'}: everyone can check it was really {who}.</div>
+          <T
+            name="cocard.names"
+            values={{
+              by: (
+                <>
+                  <b>{r.by.name ?? shortDid(r.by.did)}</b>
+                  {r.by.agent && <span className="agent-tag">{t('cocard.agent.tag', { agent: r.by.agent })}</span>}
+                </>
+              ),
+              who,
+              post: <a href={`#/post/${r.post.id}`}>“{r.post.title}”</a>,
+            }}
+          />
+          {r.post.space && <span className="small muted"> {t('inbox.in', { space: r.post.space.name })}</span>}.
+          <div className="small muted">{t('cocard.confirming', { key: r.agent ? t('cocard.agents.key', { agent: r.agent }) : t('cocard.your.key'), who })}</div>
         </div>
-        <AsyncButton onClick={() => answer(false)}>Decline</AsyncButton>
+        <AsyncButton onClick={() => answer(false)}>{t('cocard.decline')}</AsyncButton>
         <AsyncButton className="default" onClick={() => answer(true)}>
-          Confirm
+          {t('cocard.confirm')}
         </AsyncButton>
       </div>
     </div>
@@ -460,21 +511,22 @@ export function CoauthorCard({ request: r }: { request: CoauthorRequest }) {
 
 /** Someone asking to join with a link that needs your OK. */
 export function KnockCard({ knock: k }: { knock: KnockInfo }) {
+  const { t } = useTexts();
   const name = k.name ?? shortDid(k.did);
-  const answer = (accept: boolean) => attempt(() => api('answerKnock', { knock: k.id, accept }).then(bump), accept ? `${name} is in` : `Turned ${name} away`);
+  const answer = (accept: boolean) => attempt(() => api('answerKnock', { knock: k.id, accept }).then(bump), t(accept ? 'knock.is.in' : 'knock.turned.away', { name }));
   return (
     <div className="admission window">
       <div className="window-body">
         <Avatar did={k.did} size={32} />
         <div className="grow">
-          <b>{name}</b> asks to join <b>{spaceLabel(k.space)}</b> with your link.
+          <T name="knock.asks" values={{ name: <b>{name}</b>, space: <b>{spaceLabel(k.space)}</b> }} />
           {k.note && <blockquote className="knock-note">{k.note}</blockquote>}
-          {k.access.length > 0 && <div className="small">The link gives: {k.access.map((r) => `${r.write ? 'write' : 'read'} ${r.board}`).join(', ')}</div>}
+          {k.access.length > 0 && <div className="small">{t('knock.gives', { access: k.access.map((r) => t(r.write ? 'knock.write' : 'knock.read', { board: r.board })) })}</div>}
           <div className="small muted">{ago(k.time)}</div>
         </div>
-        <AsyncButton onClick={() => answer(false)}>Turn away</AsyncButton>
+        <AsyncButton onClick={() => answer(false)}>{t('knock.turn.away')}</AsyncButton>
         <AsyncButton className="default" onClick={() => answer(true)}>
-          Let in
+          {t('knock.let.in')}
         </AsyncButton>
       </div>
     </div>
@@ -483,6 +535,7 @@ export function KnockCard({ knock: k }: { knock: KnockInfo }) {
 
 /** Asking a project's maintainers about group newcomers (and those who left). */
 export function AdmissionCard({ admission }: { admission: Admission }) {
+  const { t } = useTexts();
   const [always, setAlways] = useState(false);
   const a = admission;
   const name = a.name ?? shortDid(a.did);
@@ -493,9 +546,9 @@ export function AdmissionCard({ admission }: { admission: Admission }) {
         <div className="window-body">
           <Avatar did={a.did} size={32} />
           <div className="grow">
-            <b>{name}</b> left group <b>{a.group.name}</b>. Remove them from <b>{a.project.name}</b>? The project key rotates.
+            <T name="admission.left" values={{ name: <b>{name}</b>, group: <b>{a.group.name}</b>, project: <b>{a.project.name}</b> }} />
           </div>
-          <AsyncButton onClick={() => attempt(() => api('removeMember', a.project.id, a.did).then(bump), `Removed ${name}`)}>Remove</AsyncButton>
+          <AsyncButton onClick={() => attempt(() => api('removeMember', a.project.id, a.did).then(bump), t('admission.removed', { name }))}>{t('button.remove')}</AsyncButton>
         </div>
       </div>
     );
@@ -505,15 +558,15 @@ export function AdmissionCard({ admission }: { admission: Admission }) {
       <div className="window-body">
         <Avatar did={a.did} size={32} />
         <div className="grow">
-          Do you allow <b>{name}</b> from group <b>{a.group.name}</b> to join <b>{a.project.name}</b>?
+          <T name="admission.allow.ask" values={{ name: <b>{name}</b>, group: <b>{a.group.name}</b>, project: <b>{a.project.name}</b> }} />
           <div>
             <input id={id} type="checkbox" checked={always} onChange={(e) => setAlways(e.target.checked)} />
-            <label htmlFor={id}>Allow for all projects with group “{a.group.name}”</label>
+            <label htmlFor={id}>{t('admission.always', { group: a.group.name })}</label>
           </div>
         </div>
-        <AsyncButton onClick={() => attempt(() => api('decline', { project: a.project.id, who: a.did, group: a.group.id }).then(bump))}>Decline</AsyncButton>
-        <AsyncButton className="default" onClick={() => attempt(() => api('admit', { project: a.project.id, who: a.did, group: a.group.id, always }).then(bump), `${name} is in`)}>
-          Allow
+        <AsyncButton onClick={() => attempt(() => api('decline', { project: a.project.id, who: a.did, group: a.group.id }).then(bump))}>{t('cocard.decline')}</AsyncButton>
+        <AsyncButton className="default" onClick={() => attempt(() => api('admit', { project: a.project.id, who: a.did, group: a.group.id, always }).then(bump), t('knock.is.in', { name }))}>
+          {t('admission.allow')}
         </AsyncButton>
       </div>
     </div>
@@ -527,6 +580,7 @@ export function AdmissionCard({ admission }: { admission: Admission }) {
  * over its boards and general chat. The card expands into the project's page.
  */
 export function ProjectHome({ project, members, meDid, meName, spaces, onInvite }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void }) {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
   const [sharing, setSharing] = useState(false);
@@ -539,37 +593,40 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
         <b>p/{project.name}</b>
         <span className="pane-tools">
           <button onClick={() => setSubmitting(true)}>
-            <Icon name="pencil" /> Post
+            <Icon name="pencil" /> {t('word.post')}
           </button>
           <button onClick={onInvite}>
-            <Icon name="userPlus" /> Invite
+            <Icon name="userPlus" /> {t('space.invite')}
           </button>
         </span>
       </header>
       <div className="project-split">
-        <div className={`hero${page?.banner ? ' has-banner' : ''}`}>
-          {page?.banner && <BlobImage src={page.banner} className="hero-bg" />}
+        {/* Its page's banner, or else the background of its group photo. */}
+        <div className={`hero${page?.banner || project.background ? ' has-banner' : ''}${project.membersOnBanner && members.length ? ' has-members' : ''}`}>
+          {(page?.banner || project.background) && <BlobImage src={(page?.banner || project.background)!} className="hero-bg" />}
           <div className="hero-art">{page?.icon ? <BlobImage src={page.icon} alt="" /> : <Sprite seed={project.id} size={88} />}</div>
           <div className="hero-text">
             <h1>{page?.title || project.name}</h1>
             <div className="hero-meta">
-              {page && <span className={`tag status-${page.status}`}>{page.status}</span>} <span className="small">{members.length} participants · by {info?.founderName ?? '…'}</span>
+              {page && <span className={`tag status-${page.status}`}>{t(`pstatus.${page.status}`)}</span>} <span className="small">{t('phome.participants.by', { n: members.length, by: info?.founderName ?? '…' })}</span>
             </div>
-            {page?.subtitle ? <p className="hero-subtitle">{page.subtitle}</p> : !page?.body && info && <p className="hero-subtitle muted">No page yet{info.maintainer ? ': write one in Settings.' : '.'}</p>}
+            {page?.subtitle ? <p className="hero-subtitle">{page.subtitle}</p> : !page?.body && info && <p className="hero-subtitle muted">{t(info.maintainer ? 'phome.no.page.write' : 'phome.no.page')}</p>}
             {(page?.body || info?.maintainer) && (
               <button className="hero-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-                {expanded ? '▲ Back to the chat' : '▼ Project page'}
+                {t(expanded ? 'phome.back.to.chat' : 'phome.project.page')}
               </button>
             )}
           </div>
+          {/* Its members on the banner, standing together, if those who run it want them there. */}
+          {project.membersOnBanner && members.length > 0 && <GroupPhoto className="hero-group" dids={inPhotoOrder(project, members.map((m) => m.did))} poses={project.photoPoses} peek />}
           {info?.post && (
             <div className="banner-side">
               <VoteBox post={info.post} />
               <button onClick={() => setSharing(true)}>
-                <Icon name="share" /> Share
+                <Icon name="share" /> {t('button.share')}
               </button>
-              <button onClick={() => attempt(() => api('save', { target: info.post!.id, mode: info.post!.saved === 'pinned' ? null : 'pinned' }).then(bump), info.post!.saved === 'pinned' ? 'Unpinned' : 'Pinned to your home')}>
-                <Icon name="mapPin" /> {info.post.saved === 'pinned' ? 'Unpin' : 'Pin'}
+              <button onClick={() => attempt(() => api('save', { target: info.post!.id, mode: info.post!.saved === 'pinned' ? null : 'pinned' }).then(bump), t(info.post!.saved === 'pinned' ? 'phome.unpinned' : 'phome.pinned'))}>
+                <Icon name="mapPin" /> {t(info.post.saved === 'pinned' ? 'phome.unpin' : 'phome.pin')}
               </button>
               <FollowSpace space={project} />
             </div>
@@ -577,10 +634,10 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
         </div>
         {expanded ? (
           <div className="project-page pane-scroll sunken page">
-            {page?.body ? <Markdown text={page.body} rich /> : <p className="small">Nothing on the page yet.</p>}
+            {page?.body ? <Markdown text={page.body} rich /> : <p className="small">{t('phome.nothing.on.page')}</p>}
             {info?.maintainer && (
               <p className="small">
-                <a href={`#/p/${project.id}/settings`}>Edit the page in Settings</a>
+                <a href={`#/p/${project.id}/settings`}>{t('phome.edit.in.settings')}</a>
               </p>
             )}
           </div>
@@ -589,7 +646,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
             {boards && (
               <nav className="board-strip">
                 {boards.map((b) => (
-                  <a key={b.name} className="board-chip" href={`#/p/${project.id}/b/${b.name}`} title={b.access?.read || b.access?.write ? `Limited: ${accessSummary(b)}` : undefined}>
+                  <a key={b.name} className="board-chip" href={`#/p/${project.id}/b/${b.name}`} title={b.access?.read || b.access?.write ? t('phome.limited', { who: accessSummary(b) }) : undefined}>
                     <Icon name={boardIcon(b)} /> {b.title} {(b.access?.read || b.access?.write) && <Icon name="lock" />} <span className="count">{b.count}</span>
                   </a>
                 ))}
@@ -609,41 +666,44 @@ type PageDraft = Pick<ProjectInfo['page'], 'title' | 'subtitle' | 'body'> & { ic
 
 /** Maintainers write the project page: title, subtitle, icon, banner and the page itself. */
 function PageEditor({ info }: { info: ProjectInfo }) {
+  const { t } = useTexts();
   const saved: PageDraft = { title: info.page.title, subtitle: info.page.subtitle, body: info.page.body, icon: info.page.icon ?? '', banner: info.page.banner ?? '' };
   const [draft, setDraft] = useState<PageDraft>(saved);
   const set = (patch: Partial<PageDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const changed = (Object.keys(saved) as Array<keyof PageDraft>).some((k) => draft[k] !== saved[k]);
-  const save = (patch: Partial<ProjectInfo['page']>) => attempt(() => api('setProjectPage', { project: info.id, ...patch }).then(bump), 'Page updated');
+  const save = (patch: Partial<ProjectInfo['page']>) => attempt(() => api('setProjectPage', { project: info.id, ...patch }).then(bump), t('pageed.updated'));
   return (
     <>
       <div className="page-fields">
-        <ImagePicker label="Icon" value={draft.icon} onChange={(icon) => set({ icon })} />
+        <ImagePicker label={t('pageed.icon')} value={draft.icon} onChange={(icon) => set({ icon })} />
         <div className="grow">
-          <label htmlFor="page-title">Title</label>
+          <label htmlFor="page-title">{t('field.title')}</label>
           <input id="page-title" className="wide" maxLength={100} placeholder={info.name} value={draft.title} onChange={(e) => set({ title: e.target.value })} />
-          <label htmlFor="page-subtitle">Subtitle</label>
-          <input id="page-subtitle" className="wide" maxLength={300} placeholder="One line on what this is" value={draft.subtitle} onChange={(e) => set({ subtitle: e.target.value })} />
+          <label htmlFor="page-subtitle">{t('pageed.subtitle')}</label>
+          <input id="page-subtitle" className="wide" maxLength={300} placeholder={t('pageed.subtitle.placeholder')} value={draft.subtitle} onChange={(e) => set({ subtitle: e.target.value })} />
         </div>
       </div>
-      <label>Banner</label>
-      <ImagePicker label="Banner" wide value={draft.banner} onChange={(banner) => set({ banner })} />
-      <label>Page</label>
-      <RichEditor value={draft.body} onChange={(body) => set({ body })} placeholder="What is this project? What will it become? Images welcome." minHeight={220} max={TEXT_LIMITS.page} />
+      <label>{t('pageed.banner')}</label>
+      <ImagePicker label={t('pageed.banner')} wide value={draft.banner} onChange={(banner) => set({ banner })} />
+      <label>{t('pageed.page')}</label>
+      <RichEditor value={draft.body} onChange={(body) => set({ body })} placeholder={t('pageed.page.placeholder')} minHeight={220} max={TEXT_LIMITS.page} />
       <div className="field-row">
-        <label htmlFor="status">Status</label>
+        <label htmlFor="status">{t('pageed.status')}</label>
         <select id="status" value={info.page.status} onChange={(e) => save({ status: e.target.value as ProjectStatus })}>
           {STATUSES.map((s) => (
-            <option key={s}>{s}</option>
+            <option key={s} value={s}>
+              {t(`pstatus.${s}`)}
+            </option>
           ))}
         </select>
         <input id="public" type="checkbox" checked={info.page.public} onChange={(e) => save({ public: e.target.checked })} />
-        <label htmlFor="public">Show the page publicly on my hub</label>
+        <label htmlFor="public">{t('pageed.public')}</label>
         <span className="grow" />
         <button disabled={!changed} onClick={() => setDraft(saved)}>
-          Discard
+          {t('pageed.discard')}
         </button>
         <button className="default" disabled={!changed} onClick={() => save(draft)}>
-          Save page
+          {t('pageed.save')}
         </button>
       </div>
     </>
@@ -652,15 +712,16 @@ function PageEditor({ info }: { info: ProjectInfo }) {
 
 /** Above the proposals board: whose vote counts for yours when you don't vote. */
 export function DelegationBar({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { t } = useTexts();
   const { data: delegate } = useApi(() => api<Actor | null>('votingDelegate', project.id), [project.id]);
   return (
     <div className="board-intro">
-      <Icon name="flag" /> One vote per participant. When you don't vote, your vote can follow:{' '}
+      <Icon name="flag" /> {t('delegate.intro')}{' '}
       <select
         value={delegate?.did ?? ''}
-        onChange={(e) => attempt(() => api('delegateVote', { project: project.id, who: e.target.value || undefined }).then(bump), e.target.value ? 'Delegation saved' : 'You vote only for yourself now')}
+        onChange={(e) => attempt(() => api('delegateVote', { project: project.id, who: e.target.value || undefined }).then(bump), t(e.target.value ? 'delegate.saved' : 'delegate.only.me'))}
       >
-        <option value="">nobody (only I vote for me)</option>
+        <option value="">{t('delegate.nobody')}</option>
         {members
           .filter((m) => m.did !== meDid)
           .map((m) => (
@@ -679,39 +740,40 @@ const STATUSES: ProjectStatus[] = ['idea', 'active', 'paused', 'shipped', 'archi
 
 /** "everyone", or who may read / write, in a few words. */
 function accessSummary(b: BoardInfo): string {
-  const names = (list?: GranteeInfo[]) => (list?.length ? list.map((g) => g.name ?? 'someone').join(', ') : 'maintainers');
-  if (!b.access?.read && !b.access?.write) return 'everyone';
-  if (!b.access?.read) return `${names(b.access?.write)} write`;
-  return `${names(b.access?.read)} read${b.access?.write ? `, ${names(b.access?.write)} write` : ''}`;
+  const names = (list?: GranteeInfo[]) => (list?.length ? list.map((g) => g.name ?? t('word.someone.lc')).join(', ') : t('access.maintainers'));
+  if (!b.access?.read && !b.access?.write) return t('access.everyone');
+  if (!b.access?.read) return t('access.write', { names: names(b.access?.write) });
+  return b.access?.write ? t('access.read.write', { readers: names(b.access.read), writers: names(b.access.write) }) : t('access.read', { names: names(b.access.read) });
 }
 
 const granteeKey = (g: GranteeInfo) => (g.group ? `group:${g.group}` : g.person!);
 
 /** One side (read or write) of a board's access: everyone, or a chosen list. */
-function GranteePicker({ label, value, onChange, members, groups }: { label: string; value: GranteeInfo[] | null; onChange(v: GranteeInfo[] | null): void; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
+function GranteePicker({ side, value, onChange, members, groups }: { side: 'read' | 'write'; value: GranteeInfo[] | null; onChange(v: GranteeInfo[] | null): void; members: MemberInfo[]; groups: ProjectInfo['groups'] }) {
+  const { t } = useTexts();
   const [adding, setAdding] = useState('');
-  const id = label.toLowerCase();
+  const label = t(`access.side.${side}`);
   const options = [
-    ...groups.map((g) => ({ key: `group:${g.id}`, info: { group: g.id, name: g.name }, label: `Group: ${g.name}` })),
+    ...groups.map((g) => ({ key: `group:${g.id}`, info: { group: g.id, name: g.name }, label: t('access.group', { name: g.name }) })),
     ...members.filter((m) => !m.maintainer).map((m) => ({ key: m.did, info: { person: m.did, name: m.name }, label: m.name ?? shortDid(m.did) })),
   ].filter((o) => !value?.some((g) => granteeKey(g) === o.key));
   return (
     <fieldset>
       <legend>{label}</legend>
       <div className="field-row">
-        <input type="radio" id={`${id}-all`} checked={value === null} onChange={() => onChange(null)} />
-        <label htmlFor={`${id}-all`}>Everyone in the project</label>
+        <input type="radio" id={`${side}-all`} checked={value === null} onChange={() => onChange(null)} />
+        <label htmlFor={`${side}-all`}>{t('access.everyone.in.project')}</label>
       </div>
       <div className="field-row">
-        <input type="radio" id={`${id}-some`} checked={value !== null} onChange={() => onChange(value ?? [])} />
-        <label htmlFor={`${id}-some`}>Only the maintainers and:</label>
+        <input type="radio" id={`${side}-some`} checked={value !== null} onChange={() => onChange(value ?? [])} />
+        <label htmlFor={`${side}-some`}>{t('access.only.maintainers.and')}</label>
       </div>
       {value !== null && (
         <div className="grantees">
           {value.map((g) => (
             <span key={granteeKey(g)} className="chip">
-              {g.group ? <Icon name="users" /> : <Avatar did={g.person!} size={14} />} {g.name ?? 'someone'}
-              <button className="small-btn" title="Remove" onClick={() => onChange(value.filter((x) => granteeKey(x) !== granteeKey(g)))}>
+              {g.group ? <Icon name="users" /> : <Avatar did={g.person!} size={14} />} {g.name ?? t('word.someone.lc')}
+              <button className="small-btn" title={t('button.remove')} onClick={() => onChange(value.filter((x) => granteeKey(x) !== granteeKey(g)))}>
                 ✕
               </button>
             </span>
@@ -719,14 +781,14 @@ function GranteePicker({ label, value, onChange, members, groups }: { label: str
           {options.length > 0 && (
             <select
               value={adding}
-              aria-label={`Add to ${label}`}
+              aria-label={t('access.add.to', { side: label })}
               onChange={(e) => {
                 const option = options.find((o) => o.key === e.target.value);
                 if (option) onChange([...value, option.info]);
                 setAdding('');
               }}
             >
-              <option value="">Add a person or group…</option>
+              <option value="">{t('access.add.person.or.group')}</option>
               {options.map((o) => (
                 <option key={o.key} value={o.key}>
                   {o.label}
@@ -734,7 +796,7 @@ function GranteePicker({ label, value, onChange, members, groups }: { label: str
               ))}
             </select>
           )}
-          {value.length === 0 && <span className="small muted">nobody else yet</span>}
+          {value.length === 0 && <span className="small muted">{t('access.nobody.else')}</span>}
         </div>
       )}
     </fieldset>
@@ -742,28 +804,29 @@ function GranteePicker({ label, value, onChange, members, groups }: { label: str
 }
 
 function BoardAccessDialog({ project, board, onClose }: { project: SpaceInfo; board: BoardInfo; onClose(): void }) {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: members } = useApi(() => api<MemberInfo[]>('members', project.id), [project.id]);
   const [read, setRead] = useState<GranteeInfo[] | null>(board.access?.read ?? null);
   const [write, setWrite] = useState<GranteeInfo[] | null>(board.access?.write ?? null);
   const save = async () => {
     const list = (v: GranteeInfo[] | null) => (v === null ? null : v.map(granteeKey));
-    if (await attempt(() => api('setBoardAccess', { project: project.id, board: board.name, read: list(read), write: list(write) }).then(bump), 'Access saved')) onClose();
+    if (await attempt(() => api('setBoardAccess', { project: project.id, board: board.name, read: list(read), write: list(write) }).then(bump), t('access.saved'))) onClose();
   };
   return (
-    <Modal title={`Who may use “${board.title}”`} onClose={onClose} wide>
-      <p className="small">Maintainers always read and write. A board only some may read gets its own key, and people who lose access can't read what comes after.</p>
+    <Modal title={t('access.title', { board: board.title })} onClose={onClose} wide>
+      <p className="small">{t('access.about')}</p>
       {info && members && (
         <div className="access-sides">
-          <GranteePicker label="Read" value={read} onChange={setRead} members={members} groups={info.groups} />
-          <GranteePicker label="Write" value={write} onChange={setWrite} members={members} groups={info.groups} />
+          <GranteePicker side="read" value={read} onChange={setRead} members={members} groups={info.groups} />
+          <GranteePicker side="write" value={write} onChange={setWrite} members={members} groups={info.groups} />
         </div>
       )}
-      <p className="small">Write means posting, voting and chatting here{board.type === 'proposals' ? ': only writers vote on proposals' : ''}.</p>
+      <p className="small">{t(board.type === 'proposals' ? 'access.write.means.proposals' : 'access.write.means')}</p>
       <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton className="default" onClick={save}>
-          Save
+          {t('button.save')}
         </AsyncButton>
       </div>
     </Modal>
@@ -772,32 +835,30 @@ function BoardAccessDialog({ project, board, onClose }: { project: SpaceInfo; bo
 
 /** How long a board's posts stay: days after their last activity, and a size limit; empty for no limit. */
 export function BoardRuleDialog({ space, board, onClose }: { space: SpaceInfo; board: BoardInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [days, setDays] = useState(board.rule?.keepDays ? String(board.rule.keepDays) : '');
   const [mb, setMb] = useState(board.rule?.maxMB ? String(board.rule.maxMB) : '');
   const save = async () => {
     const value = (v: string) => (v.trim() ? Number(v) : null);
-    if (await attempt(() => api('setBoardRule', { space: space.id, board: board.name, keepDays: value(days), maxMB: value(mb) }).then(bump), 'Rule saved')) onClose();
+    if (await attempt(() => api('setBoardRule', { space: space.id, board: board.name, keepDays: value(days), maxMB: value(mb) }).then(bump), t('boardrule.saved'))) onClose();
   };
   return (
-    <Modal title={`How long posts stay in “${board.title}”`} onClose={onClose}>
+    <Modal title={t('boardrule.title', { board: board.title })} onClose={onClose}>
       <div className="field-row">
         <label>
-          Days after their last activity <input type="number" min={1} value={days} placeholder="for good" onChange={(e) => setDays(e.target.value)} />
+          {t('boardrule.days')} <input type="number" min={1} value={days} placeholder={t('boardrule.for.good')} onChange={(e) => setDays(e.target.value)} />
         </label>
       </div>
       <div className="field-row">
         <label>
-          At most, in all (MB) <input type="number" min={1} value={mb} placeholder="no limit" onChange={(e) => setMb(e.target.value)} />
+          {t('boardrule.at.most')} <input type="number" min={1} value={mb} placeholder={t('boardrule.no.limit')} onChange={(e) => setMb(e.target.value)} />
         </label>
       </div>
-      <p className="small">
-        Each upvote stretches a post's time. Pinned posts, issues, proposals and releases always stay, and so does everything on the devices of whoever wrote it. A new rule
-        forgets nothing for its first 14 days, and authors are told two weeks ahead.
-      </p>
+      <p className="small">{t('boardrule.about')}</p>
       <div className="buttons">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t('button.cancel')}</button>
         <AsyncButton className="default" onClick={save}>
-          Save
+          {t('button.save')}
         </AsyncButton>
       </div>
     </Modal>
@@ -806,17 +867,18 @@ export function BoardRuleDialog({ space, board, onClose }: { space: SpaceInfo; b
 
 /** A community's one board: how long its posts stay. */
 function CommunityRule({ community, canSet }: { community: SpaceInfo; canSet: boolean }) {
+  const { t } = useTexts();
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', community.id), [community.id]);
   const [open, setOpen] = useState(false);
   const board = boards?.[0];
   if (!board) return null;
   return (
     <fieldset>
-      <legend>How long posts stay</legend>
-      <p className="small">{board.rule ? ruleText(board.rule) : 'Posts stay for good: there is no rule for forgetting.'}</p>
+      <legend>{t('boardrule.legend')}</legend>
+      <p className="small">{board.rule ? ruleText(board.rule) : t('boardrule.none')}</p>
       {canSet && (
         <div className="buttons">
-          <button onClick={() => setOpen(true)}>Change…</button>
+          <button onClick={() => setOpen(true)}>{t('boardrule.change')}</button>
         </div>
       )}
       {open && <BoardRuleDialog space={community} board={board} onClose={() => setOpen(false)} />}
@@ -824,7 +886,10 @@ function CommunityRule({ community, canSet }: { community: SpaceInfo; canSet: bo
   );
 }
 
+const BOARD_TYPES = ['posts', 'issues', 'proposals'] as const;
+
 function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
+  const { t } = useTexts();
   const add = useForm({ name: '', type: 'posts' });
   const [editing, setEditing] = useState<BoardInfo>();
   const [ruling, setRuling] = useState<BoardInfo>();
@@ -836,52 +901,54 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
   };
   return (
     <fieldset>
-      <legend>Boards</legend>
+      <legend>{t('boards.legend')}</legend>
       <table className="boards-table">
         <thead>
           <tr className="small muted">
             <th />
-            <th>Name</th>
-            <th>Who</th>
-            <th>Posts stay</th>
-            <th>Sort</th>
+            <th>{t('field.name')}</th>
+            <th>{t('boards.who')}</th>
+            <th>{t('boards.posts.stay')}</th>
+            <th>{t('boards.sort')}</th>
             <th />
           </tr>
         </thead>
         <tbody>
           {boards.map((b, i) => (
             <tr key={b.name}>
-              <td title={b.type}>
+              <td title={t(`boards.type.${b.type}`)}>
                 <Icon name={boardIcon(b)} />
               </td>
               <td>
-                <input defaultValue={b.title} aria-label={`Title of ${b.name}`} onBlur={(e) => e.target.value !== b.title && set(b.name, { title: e.target.value })} />
+                <input defaultValue={b.title} aria-label={t('boards.title.of', { board: b.name })} onBlur={(e) => e.target.value !== b.title && set(b.name, { title: e.target.value })} />
               </td>
               <td>
-                <button className="small-btn access-btn" title="Who may read and write" onClick={() => setEditing(b)}>
+                <button className="small-btn access-btn" title={t('boards.who.may')} onClick={() => setEditing(b)}>
                   {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
                 </button>
               </td>
               <td>
-                <button className="small-btn" title={b.rule ? ruleText(b.rule) : 'Posts stay for good'} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
-                  <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? 'for good' : b.rule?.keepDays ? `${b.rule.keepDays} days` : b.rule?.maxMB ? `${b.rule.maxMB} MB` : 'for good'}
+                <button className="small-btn" title={b.rule ? ruleText(b.rule) : t('boardrule.none.short')} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
+                  <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? t('boardrule.for.good') : b.rule?.keepDays ? t('boards.days', { n: b.rule.keepDays }) : b.rule?.maxMB ? t('boards.mb', { n: b.rule.maxMB }) : t('boardrule.for.good')}
                 </button>
               </td>
               <td>
-                <select value={b.sort} aria-label="Default sort" onChange={(e) => set(b.name, { sort: e.target.value })}>
-                  <option value="hot">hot</option>
-                  <option value="new">new</option>
-                  <option value="top">top</option>
+                <select value={b.sort} aria-label={t('boards.default.sort')} onChange={(e) => set(b.name, { sort: e.target.value })}>
+                  {(['hot', 'new', 'top'] as const).map((s) => (
+                    <option key={s} value={s}>
+                      {t(`sort.${s}`)}
+                    </option>
+                  ))}
                 </select>
               </td>
               <td className="board-actions">
-                <button className="small-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
+                <button className="small-btn" disabled={i === 0} onClick={() => move(i, -1)} title={t('post.move.up')}>
                   ▲
                 </button>
-                <button className="small-btn" disabled={i === boards.length - 1} onClick={() => move(i, 1)} title="Move down">
+                <button className="small-btn" disabled={i === boards.length - 1} onClick={() => move(i, 1)} title={t('post.move.down')}>
                   ▼
                 </button>
-                <button className="small-btn" title="Remove board (its posts stay in the logs)" onClick={async () => (await ask(`Remove the board “${b.title}”? Its posts stay in the logs.`, 'Remove')) && set(b.name, { on: false })}>
+                <button className="small-btn" title={t('boards.remove.title')} onClick={async () => (await ask(t('boards.remove.ask', { board: b.title }), t('button.remove'))) && set(b.name, { on: false })}>
                   ✕
                 </button>
               </td>
@@ -896,13 +963,15 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
           if (await attempt(() => api('setBoard', { project: project.id, name: add.values.name, title: add.values.name, type: add.values.type, position: (boards.at(-1)?.position ?? 0) + 1 }).then(bump))) add.reset();
         }}
       >
-        <input placeholder="New board, e.g. Showcase" required maxLength={32} {...add.field('name')} />
-        <select {...add.field('type')} aria-label="Board type">
-          <option value="posts">posts</option>
-          <option value="issues">issues</option>
-          <option value="proposals">proposals</option>
+        <input placeholder={t('boards.new.placeholder')} required maxLength={32} {...add.field('name')} />
+        <select {...add.field('type')} aria-label={t('boards.type')}>
+          {BOARD_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {t(`boards.type.${type}`)}
+            </option>
+          ))}
         </select>
-        <button>Add board</button>
+        <button>{t('boards.add')}</button>
       </form>
       {editing && <BoardAccessDialog project={project} board={editing} onClose={() => setEditing(undefined)} />}
       {ruling && <BoardRuleDialog space={project} board={ruling} onClose={() => setRuling(undefined)} />}
@@ -910,31 +979,26 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
   );
 }
 
-const SETTINGS_TABS = [
-  ['page', 'Page'],
-  ['boards', 'Boards'],
-  ['people', 'People'],
-  ['payments', 'Payments'],
-  ['ownership', 'Ownership'],
-] as const;
-type SettingsTab = (typeof SETTINGS_TABS)[number][0];
+const SETTINGS_TABS = ['page', 'boards', 'people', 'payments', 'ownership'] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 /** A project's settings, one tab at a time (#/p/<id>/settings/<tab>): its page, boards, people (and what newcomers read), payments, ownership. */
 export function ProjectSettings({ project, spaces, members, meDid, tab: asked }: { project: SpaceInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string; tab?: string }) {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: admissions } = useApi(() => api<Admission[]>('admissions', project.id), [project.id]);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
-  if (!info) return <Page title="Settings">{null}</Page>;
+  if (!info) return <Page title={t('nav.settings')}>{null}</Page>;
   const waiting = info.maintainer ? (admissions?.length ?? 0) : 0;
-  const tabs = SETTINGS_TABS.filter(([key]) => key !== 'boards' || info.maintainer);
-  const tab: SettingsTab = tabs.find(([key]) => key === asked)?.[0] ?? (waiting ? 'people' : 'page');
+  const tabs = SETTINGS_TABS.filter((key) => key !== 'boards' || info.maintainer);
+  const tab: SettingsTab = tabs.find((key) => key === asked) ?? (waiting ? 'people' : 'page');
   return (
-    <Page title={<><Icon name="gear" /> Settings · p/{info.name}</>}>
+    <Page title={<><Icon name="gear" /> {t('nav.settings')} · p/{info.name}</>}>
       <menu role="tablist">
-        {tabs.map(([key, label]) => (
+        {tabs.map((key) => (
           <li key={key} role="tab" aria-selected={tab === key}>
             <a href={`#/p/${project.id}/settings/${key}`}>
-              {label}
+              {t(`psettings.tab.${key}`)}
               {key === 'people' && waiting > 0 && <span className="count"> {waiting}</span>}
             </a>
           </li>
@@ -942,21 +1006,22 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
       </menu>
       {tab === 'page' && (
         <fieldset>
-          <legend>Page</legend>
+          <legend>{t('psettings.tab.page')}</legend>
           {info.maintainer ? (
             <PageEditor key={JSON.stringify(info.page)} info={info} />
           ) : info.page.body ? (
             <Markdown text={info.page.body} rich />
           ) : (
-            <p className="small">No page yet.</p>
+            <p className="small">{t('phome.no.page')}</p>
           )}
-          <p className="small muted">Chat, boards and votes always stay among participants{info.page.public ? '; the title, subtitle and icon are public' : ''}.</p>
+          <p className="small muted">{t(info.page.public ? 'psettings.private.public.head' : 'psettings.private')}</p>
         </fieldset>
       )}
       {tab === 'boards' && boards && <BoardSettings project={project} boards={boards} />}
       {tab === 'people' && (
         <>
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
+          <SpacePhotoSettings space={project} members={members} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
@@ -969,20 +1034,21 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
 
 /** Who takes part: requests waiting, maintainers, and groups invited in. */
 function PeopleSettings({ project, info, spaces, members, meDid, admissions }: { project: SpaceInfo; info: ProjectInfo; spaces: SpaceInfo[]; members: MemberInfo[]; meDid: string; admissions: Admission[] }) {
+  const { t } = useTexts();
   const [inviting, setInviting] = useState('');
   const myGroups = spaces.filter((s) => s.kind === 'group' && !info.groups.some((g) => g.id === s.id));
   return (
     <>
       {admissions.length > 0 && (
         <fieldset>
-          <legend>Waiting for you</legend>
+          <legend>{t('ppeople.waiting')}</legend>
           {admissions.map((a) => (
             <AdmissionCard key={`${a.did}-${a.group.id}-${a.change}`} admission={a} />
           ))}
         </fieldset>
       )}
       <fieldset>
-        <legend>Participants</legend>
+        <legend>{t('ppeople.participants')}</legend>
         <table className="people-table">
           <tbody>
             {members.map((m) => (
@@ -992,14 +1058,19 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
                 </td>
                 <td className="grow">
                   {m.name ?? shortDid(m.did)}
-                  {m.did === meDid && <span className="muted"> (you)</span>}
-                  {m.via && <span className="small muted"> · via {m.via.name}</span>}
+                  {m.did === meDid && <span className="muted"> {t('ppeople.you')}</span>}
+                  {m.via && <span className="small muted"> · {t('ppeople.via', { group: m.via.name })}</span>}
                 </td>
-                <td>{m.did === info.founder ? <span className="tag">owner</span> : m.maintainer && <span className="tag">maintainer</span>}</td>
+                <td>{m.did === info.founder ? <span className="tag">{t('ppeople.owner')}</span> : m.maintainer && <span className="tag">{t('role.maintainer')}</span>}</td>
                 <td>
                   {info.maintainer && m.did !== info.founder && (
-                    <AsyncButton className="small-btn" onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump))}>
-                      {m.maintainer ? 'Drop maintainer' : 'Make maintainer'}
+                    <AsyncButton className="icon-button people-tool" title={t(m.maintainer ? 'ppeople.drop.maintainer' : 'ppeople.make.maintainer')} onClick={() => attempt(() => api('setMaintainer', { project: project.id, who: m.did, on: !m.maintainer }).then(bump), t(m.maintainer ? 'ppeople.dropped.maintainer' : 'ppeople.made.maintainer', { name: m.name ?? shortDid(m.did) }))}>
+                      <Icon name={m.maintainer ? 'star' : 'users'} />
+                    </AsyncButton>
+                  )}{' '}
+                  {info.maintainer && m.did !== info.founder && m.did !== meDid && (
+                    <AsyncButton className="icon-button people-tool" title={t('button.remove')} onClick={async () => (await ask(t('ppeople.remove.ask', { name: m.name ?? shortDid(m.did), project: project.name }), t('button.remove'))) && attempt(() => api('removeMember', project.id, m.did).then(bump), t('ppeople.removed', { name: m.name ?? shortDid(m.did) }))}>
+                      <Icon name="trash" />
                     </AsyncButton>
                   )}
                 </td>
@@ -1007,10 +1078,10 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
             ))}
           </tbody>
         </table>
-        <p className="small muted">Maintainers decide who takes part, keep the boards and pin posts.</p>
+        <p className="small muted">{t('ppeople.maintainers.do')} {info.maintainer ? t('ppeople.remove.note') : ''}</p>
       </fieldset>
       <fieldset>
-        <legend>Groups</legend>
+        <legend>{t('tree.groups')}</legend>
         {info.groups.map((g) => {
           const id = `auto-${g.id}`;
           return (
@@ -1019,19 +1090,38 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
               {info.maintainer ? (
                 <>
                   <input id={id} type="checkbox" checked={g.auto} onChange={(e) => attempt(() => api('setRule', { project: project.id, group: g.id, auto: e.target.checked }).then(bump))} />
-                  <label htmlFor={id}>admit its newcomers automatically</label>
+                  <label htmlFor={id}>{t('ppeople.admit.auto')}</label>
+                  <AsyncButton className="small-btn" onClick={async () => (await ask(t('ppeople.uninvite.ask', { group: g.name, project: project.name }), t('ppeople.uninvite'))) && attempt(() => api('uninviteGroup', { project: project.id, group: g.id }).then(bump), t('ppeople.uninvited', { group: g.name }))}>
+                    {t('ppeople.uninvite')}
+                  </AsyncButton>
+                  {members.some((m) => m.via?.id === g.id && m.did !== info.founder && m.did !== meDid) && (
+                    <AsyncButton
+                      className="small-btn"
+                      onClick={async () => {
+                        const came = members.filter((m) => m.via?.id === g.id && m.did !== info.founder && m.did !== meDid);
+                        if (!(await ask(t('ppeople.uninvite.remove.ask', { group: g.name, project: project.name, n: came.length }), t('ppeople.uninvite.remove')))) return;
+                        await attempt(async () => {
+                          await api('uninviteGroup', { project: project.id, group: g.id });
+                          for (const m of came) await api('removeMember', project.id, m.did);
+                          bump();
+                        }, t('ppeople.uninvited.removed', { group: g.name, n: came.length }));
+                      }}
+                    >
+                      {t('ppeople.uninvite.remove')}
+                    </AsyncButton>
+                  )}
                 </>
               ) : (
-                <span className="small">{g.auto ? 'newcomers admitted automatically' : 'newcomers are asked about'}</span>
+                <span className="small">{t(g.auto ? 'ppeople.admitted.auto' : 'ppeople.asked.about')}</span>
               )}
             </div>
           );
         })}
-        {info.groups.length === 0 && <p className="small muted">No groups invited. Invite one and all its members take part.</p>}
+        {info.groups.length === 0 && <p className="small muted">{t('ppeople.no.groups')}</p>}
         {info.maintainer && myGroups.length > 0 && (
           <div className="field-row">
-            <select value={inviting} onChange={(e) => setInviting(e.target.value)} aria-label="Group to invite">
-              <option value="">Invite one of your groups…</option>
+            <select value={inviting} onChange={(e) => setInviting(e.target.value)} aria-label={t('ppeople.group.to.invite')}>
+              <option value="">{t('ppeople.invite.group')}</option>
               {myGroups.map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.name}
@@ -1041,11 +1131,11 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
             <AsyncButton
               onClick={async () => {
                 if (!inviting) return;
-                await attempt(() => api('inviteGroup', { project: project.id, group: inviting }).then(bump), 'Group invited: its members take part now');
+                await attempt(() => api('inviteGroup', { project: project.id, group: inviting }).then(bump), t('ppeople.group.invited'));
                 setInviting('');
               }}
             >
-              Invite
+              {t('space.invite')}
             </AsyncButton>
           </div>
         )}
@@ -1056,35 +1146,30 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
 
 // ---------------------------------------------------------------- what newcomers read
 
-const HISTORY_CHOICES: Array<{ value: SpaceInfo['history']; label: string; detail: string }> = [
-  { value: 'all', label: 'Everything', detail: 'Newcomers read all of its history, as everyone before them.' },
-  { value: '30d', label: 'The last 30 days', detail: 'Newcomers read about the last month. Its key changes every month for that.' },
-  { value: 'joining', label: 'From their invite on', detail: 'Each invite comes with a new key: newcomers read only what is written after it.' },
-];
+const HISTORY_CHOICES: Array<NonNullable<SpaceInfo['history']>> = ['all', '30d', 'joining'];
 
 /** What newcomers get to read; whoever manages the space decides, everyone sees it. */
 export function NewcomerHistory({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
-  const word = KIND_WORD[space.kind];
-  const set = (history: SpaceInfo['history']) =>
-    attempt(() => api('setHistory', { space: space.id, history }).then(bump), `Newcomers to ${space.name} read ${HISTORY_CHOICES.find((c) => c.value === history)!.label.toLowerCase()}`);
+  const { t } = useTexts();
+  const set = (history: SpaceInfo['history']) => attempt(() => api('setHistory', { space: space.id, history }).then(bump), t(`history.set.${history}`, { space: space.name }));
   return (
     <fieldset>
-      <legend>What newcomers read</legend>
-      {HISTORY_CHOICES.map((c) => (
-        <div key={c.value} className="field-row">
-          <input id={`history-${space.id}-${c.value}`} type="radio" name={`history-${space.id}`} checked={space.history === c.value} disabled={!canSet} onChange={() => void set(c.value)} />
-          <label htmlFor={`history-${space.id}-${c.value}`}>
+      <legend>{t('history.legend')}</legend>
+      {HISTORY_CHOICES.map((value) => (
+        <div key={value} className="field-row">
+          <input id={`history-${space.id}-${value}`} type="radio" name={`history-${space.id}`} checked={space.history === value} disabled={!canSet} onChange={() => void set(value)} />
+          <label htmlFor={`history-${space.id}-${value}`}>
             <span>
-              <b>{c.label}</b>
-              <span className="small"> · {c.detail}</span>
+              <b>{t(`history.${value}`)}</b>
+              <span className="small"> · {t(`history.${value}.detail`)}</span>
             </span>
           </label>
         </div>
       ))}
       <p className="small">
         {canSet
-          ? `Either way they see who is in this ${word}, its roles${space.kind === 'project' ? ', boards and page' : ''}. Members who are in already keep everything.`
-          : `Set by the ${space.kind === 'project' ? 'maintainers' : space.kind === 'community' ? 'moderators' : 'owner'}.`}
+          ? t(space.kind === 'project' ? 'history.either.way.project' : 'history.either.way', { kind: kindWord(space.kind) })
+          : t(space.kind === 'project' ? 'history.set.by.maintainers' : space.kind === 'community' ? 'history.set.by.moderators' : 'history.set.by.owner')}
       </p>
     </fieldset>
   );
@@ -1092,17 +1177,16 @@ export function NewcomerHistory({ space, canSet }: { space: SpaceInfo; canSet: b
 
 // ---------------------------------------------------------------- leaving, handing over, closing
 
-const KIND_WORD = { group: 'group', project: 'project', community: 'community', direct: 'chat' } as const;
-
 /** Leave a space, hand it over (owner), or close and reopen it (owner, maintainers). */
 export function SpaceOwnership({ space, members, meDid, canClose }: { space: SpaceInfo; members: MemberInfo[]; meDid: string; canClose: boolean }) {
+  const { t } = useTexts();
   const [to, setTo] = useState('');
   const owner = space.founder === meDid;
   const others = members.filter((m) => m.did !== meDid);
-  const word = KIND_WORD[space.kind];
+  const word = kindWord(space.kind);
   const leave = async () => {
-    if (!(await ask(`Leave ${space.name}? You stop receiving it, and its key rotates without you. You can come back with a new invite.`, 'Leave'))) return;
-    if (await attempt(() => api('leave', space.id), `You left ${space.name}`)) {
+    if (!(await ask(t('own.leave.ask', { space: space.name }), t('own.leave')))) return;
+    if (await attempt(() => api('leave', space.id), t('own.left', { space: space.name }))) {
       bump();
       navigate('#/');
     }
@@ -1111,31 +1195,31 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
     const person = others.find((m) => m.did === to);
     if (!person) return;
     const name = person.name ?? shortDid(person.did);
-    if (await ask(`Make ${name} the owner of ${space.name}? You stay in it${space.kind === 'group' ? '' : ` as a ${space.kind === 'community' ? 'moderator' : 'maintainer'}`}; only ${name} can hand it on again.`, 'Hand over')) {
-      await attempt(() => api('handOver', { space: space.id, to: person.did }).then(bump), `${name} owns ${space.name} now`);
+    if (await ask(t(space.kind === 'group' ? 'own.hand.over.ask' : 'own.hand.over.ask.stay', { name, space: space.name, role: t(space.kind === 'community' ? 'role.moderator' : 'role.maintainer') }), t('own.hand.over'))) {
+      await attempt(() => api('handOver', { space: space.id, to: person.did }).then(bump), t('own.owns.now', { name, space: space.name }));
       setTo('');
     }
   };
   const close = async (closed: boolean) => {
-    if (closed && !(await ask(`Close ${space.name}? Everything in it is kept and stays readable, but nobody can write or invite until it's opened again.`, 'Close'))) return;
-    await attempt(() => api('closeSpace', { space: space.id, closed }).then(bump), closed ? `${space.name} is closed` : `${space.name} is open again`);
+    if (closed && !(await ask(t('own.close.ask', { space: space.name }), t('own.close')))) return;
+    await attempt(() => api('closeSpace', { space: space.id, closed }).then(bump), t(closed ? 'own.is.closed' : 'own.is.open', { space: space.name }));
   };
   return (
     <fieldset>
-      <legend>Leave, hand over or close</legend>
+      <legend>{t('own.legend')}</legend>
       {space.closed && (
         <p className="notice">
-          <Icon name="lock" /> This {word} is closed: kept as it is, read-only.
+          <Icon name="lock" /> {t('own.closed.notice', { kind: word })}
         </p>
       )}
       <p className="small">
-        Owner: <b>{owner ? 'you' : (members.find((m) => m.did === space.founder)?.name ?? shortDid(space.founder))}</b>
+        <T name="own.owner" values={{ name: <b>{owner ? t('word.you.lc') : (members.find((m) => m.did === space.founder)?.name ?? shortDid(space.founder))}</b> }} />
       </p>
       {owner ? (
         <>
           <div className="field-row">
-            <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="New owner" disabled={!others.length}>
-              <option value="">{others.length ? 'Hand over to…' : `Nobody else is in this ${word}`}</option>
+            <select value={to} onChange={(e) => setTo(e.target.value)} aria-label={t('own.new.owner')} disabled={!others.length}>
+              <option value="">{others.length ? t('own.hand.over.to') : t('own.nobody.else', { kind: word })}</option>
               {others.map((m) => (
                 <option key={m.did} value={m.did}>
                   {m.name ?? shortDid(m.did)}
@@ -1143,20 +1227,20 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
               ))}
             </select>
             <button onClick={() => void handOver()} disabled={!to}>
-              Hand over
+              {t('own.hand.over')}
             </button>
           </div>
-          <p className="small">To leave, hand it over first{others.length ? '' : ', or close it'}.</p>
+          <p className="small">{t(others.length ? 'own.to.leave' : 'own.to.leave.or.close')}</p>
         </>
       ) : (
         <div className="field-row">
-          <AsyncButton onClick={leave}>Leave {space.name}…</AsyncButton>
+          <AsyncButton onClick={leave}>{t('own.leave.space', { space: space.name })}</AsyncButton>
         </div>
       )}
       {canClose && (
         <div className="field-row">
-          {space.closed ? <AsyncButton onClick={() => close(false)}>Open it again</AsyncButton> : <AsyncButton onClick={() => close(true)}>Close {space.name}…</AsyncButton>}
-          <span className="small">Closing keeps everything; nothing new can be written.</span>
+          {space.closed ? <AsyncButton onClick={() => close(false)}>{t('own.open.again')}</AsyncButton> : <AsyncButton onClick={() => close(true)}>{t('own.close.space', { space: space.name })}</AsyncButton>}
+          <span className="small">{t('own.closing.keeps')}</span>
         </div>
       )}
     </fieldset>
@@ -1165,8 +1249,10 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
 
 /** A group's settings: who owns it, leaving and closing. */
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { t } = useTexts();
   return (
-    <Page title={<><Icon name="gear" /> Settings · g/{group.name}</>}>
+    <Page title={<><Icon name="gear" /> {t('nav.settings')} · g/{group.name}</>}>
+      <SpacePhotoSettings space={group} members={members} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
@@ -1178,37 +1264,37 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
 
 /** The top-level switch for a project or community: followed ones are on Home and tell you about new posts. */
 function FollowSpace({ space }: { space: SpaceInfo }) {
+  const { t } = useTexts();
   const on = !space.hiddenFromHome;
-  const what = space.kind === 'project' ? 'the boards you follow here' : 'its posts';
+  const what = t(space.kind === 'project' ? 'follow.what.boards' : 'follow.what.posts');
   return (
     <button
       className={on ? 'chosen' : ''}
-      title={on ? `On your Home with ${what}, and new ones notify you. Click to unfollow.` : `Follow to bring ${what} to your Home and get notified`}
-      onClick={() => attempt(() => api('setHomeVisibility', { space: space.id, visible: !on }).then(bump), on ? `Unfollowed ${space.name}` : `Following ${space.name}`)}
+      title={t(on ? 'follow.on.title' : 'follow.off.title', { what })}
+      onClick={() => attempt(() => api('setHomeVisibility', { space: space.id, visible: !on }).then(bump), t(on ? 'follow.unfollowed' : 'follow.following.now', { space: space.name }))}
     >
-      {on ? '✓ Following' : 'Follow'}
+      {t(on ? 'board.following' : 'board.follow')}
     </button>
   );
 }
 
 export function CommunityBanner({ community, onInvite, onSubmit }: { community: SpaceInfo; onInvite(): void; onSubmit(): void }) {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
   return (
     <div className="banner community">
       <Sprite seed={community.id} size={64} className="banner-art" />
       <div className="banner-text">
         <h1>r/{community.name}</h1>
-        <span className="small">
-          {community.members} member{community.members === 1 ? '' : 's'} · moderated by {info?.moderators.map((m) => m.name ?? shortDid(m.did)).join(', ') ?? '…'}
-        </span>
+        <span className="small">{t('community.members.moderated', { n: community.members, by: info?.moderators.map((m) => m.name ?? shortDid(m.did)).join(', ') ?? '…' })}</span>
         {info?.description && <Markdown text={info.description} />}
       </div>
       <div className="banner-side">
         <button className="default" onClick={onSubmit}>
-          <Icon name="pencil" /> Submit post
+          <Icon name="pencil" /> {t('community.submit.post')}
         </button>
         <button onClick={onInvite}>
-          <Icon name="userPlus" /> Invite
+          <Icon name="userPlus" /> {t('space.invite')}
         </button>
         <FollowSpace space={community} />
       </div>
@@ -1217,31 +1303,32 @@ export function CommunityBanner({ community, onInvite, onSubmit }: { community: 
 }
 
 export function CommunityAbout({ community, members, meDid }: { community: SpaceInfo; members: MemberInfo[]; meDid: string }) {
+  const { t } = useTexts();
   const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
   const [description, setDescription] = useState<string>();
-  if (!info) return <Page title="About">{null}</Page>;
+  if (!info) return <Page title={t('nav.about')}>{null}</Page>;
   return (
-    <Page title={<><Icon name="gear" /> About r/{info.name}</>}>
+    <Page title={<><Icon name="gear" /> {t('community.about.title', { community: info.name })}</>}>
       <fieldset>
-        <legend>Description</legend>
+        <legend>{t('community.description')}</legend>
         {info.moderator ? (
           <>
-            <textarea className="wide" rows={4} value={description ?? info.description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this community about?" />
+            <textarea className="wide" rows={4} value={description ?? info.description} onChange={(e) => setDescription(e.target.value)} placeholder={t('community.description.placeholder')} />
             <div className="buttons">
-              <AsyncButton className="default" onClick={() => attempt(() => api('setCommunity', { community: community.id, description: description ?? info.description }).then(bump), 'Saved')}>
-                Save
+              <AsyncButton className="default" onClick={() => attempt(() => api('setCommunity', { community: community.id, description: description ?? info.description }).then(bump), t('community.saved'))}>
+                {t('button.save')}
               </AsyncButton>
             </div>
           </>
         ) : info.description ? (
           <Markdown text={info.description} />
         ) : (
-          <p className="small">No description yet.</p>
+          <p className="small">{t('community.no.description')}</p>
         )}
-        <p className="small">Communities are private for now: invite-only and end-to-end encrypted. Any member can invite; moderators pin posts and remove people.</p>
+        <p className="small">{t('community.private.note')}</p>
       </fieldset>
       <fieldset>
-        <legend>Moderators</legend>
+        <legend>{t('community.moderators')}</legend>
         {members.map((m) => {
           const isMod = info.moderators.some((x) => x.did === m.did);
           return (
@@ -1249,16 +1336,17 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
               <Avatar did={m.did} size={16} />
               <span className="grow">
                 {m.name ?? shortDid(m.did)}
-                {m.did === meDid ? ' (you)' : ''} {isMod && <span className="tag">moderator</span>}
+                {m.did === meDid ? ` ${t('ppeople.you')}` : ''} {isMod && <span className="tag">{t('role.moderator')}</span>}
               </span>
               {info.moderator && m.did !== info.founder && (
-                <AsyncButton onClick={() => attempt(() => api('setModerator', { community: community.id, who: m.did, on: !isMod }).then(bump))}>{isMod ? 'Drop moderator' : 'Make moderator'}</AsyncButton>
+                <AsyncButton onClick={() => attempt(() => api('setModerator', { community: community.id, who: m.did, on: !isMod }).then(bump))}>{t(isMod ? 'community.drop.moderator' : 'community.make.moderator')}</AsyncButton>
               )}
             </div>
           );
         })}
       </fieldset>
       <CommunityRule community={community} canSet={info.moderator} />
+      <SpacePhotoSettings space={community} members={members} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
       <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
@@ -1268,8 +1356,11 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
 
 // ---------------------------------------------------------------- dialogs and entry screens
 
+const NEW_TABS = ['project', 'community', 'group', 'join'] as const;
+
 export function NewDialog({ onClose }: { onClose(): void }) {
-  const [tab, setTab] = useState<'project' | 'community' | 'group' | 'join'>('project');
+  const { t } = useTexts();
+  const [tab, setTab] = useState<(typeof NEW_TABS)[number]>('project');
   const form = useForm({ name: '', description: '', invite: '', note: '' });
   // A new project can be set up at once with a pack (GitHub for it, say): walked through right after it's made.
   const { data: packs } = useApi(() => api<Pack[]>('setupPacks').catch(() => [] as Pack[]), []);
@@ -1285,7 +1376,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
     e.preventDefault();
     const { name, description, invite } = form.values;
     if (tab === 'project') {
-      const made = await attempt(() => api<ProjectInfo>('createProject', { name, description }), `Created p/${name}`);
+      const made = await attempt(() => api<ProjectInfo>('createProject', { name, description }), t('new.created', { name: `p/${name}` }));
       const pack = packs?.find((p) => p.name === withPack);
       if (made && pack) {
         bump();
@@ -1294,36 +1385,24 @@ export function NewDialog({ onClose }: { onClose(): void }) {
       }
       go(made);
     }
-    if (tab === 'community') go(await attempt(() => api<CommunityInfo>('createCommunity', { name, description }), `Created r/${name}`));
-    if (tab === 'group') go(await attempt(() => api<SpaceInfo>('createGroup', name), `Created g/${name}`));
+    if (tab === 'community') go(await attempt(() => api<CommunityInfo>('createCommunity', { name, description }), t('new.created', { name: `r/${name}` })));
+    if (tab === 'group') go(await attempt(() => api<SpaceInfo>('createGroup', name), t('new.created', { name: `g/${name}` })));
     if (tab === 'join') {
       const space = await attempt(() => api<SpaceInfo>('joinSpace', invite.trim(), form.values.note || undefined));
       if (space?.waiting) {
-        toast(`Asked to join ${spaceLabel(space)}: you're in once they let you in`);
+        toast(t('new.asked.to.join', { space: spaceLabel(space) }));
         onClose();
         return;
       }
-      if (space) toast(`Joined ${spaceLabel(space)}`);
+      if (space) toast(t('new.joined', { space: spaceLabel(space) }));
       go(space);
     }
   };
-  const tabs = [
-    ['project', 'Project'],
-    ['community', 'Community'],
-    ['group', 'Group'],
-    ['join', 'Join with link'],
-  ] as const;
-  const blurb = {
-    project: 'Something you build together. It shows up as a post with its own chat, and boards for releases, ideas, issues and proposals.',
-    community: 'A board of posts that people join, like a subreddit. Every post gets its own chat. Private and invite-only for now.',
-    group: 'A circle of people with its own chat. You can invite a whole group into a project.',
-    join: 'Paste an invite link someone sent you. Some links ask the person who sent them to let you in first.',
-  }[tab];
   if (packFor) return <SetupPackDialog project={packFor.project} pack={packFor.pack} onClose={onClose} />;
   return (
-    <Modal title="New" onClose={onClose}>
+    <Modal title={t('new.title')} onClose={onClose}>
       <menu role="tablist">
-        {tabs.map(([key, label]) => (
+        {NEW_TABS.map((key) => (
           <li key={key} role="tab" aria-selected={tab === key}>
             <a
               href="#"
@@ -1332,33 +1411,33 @@ export function NewDialog({ onClose }: { onClose(): void }) {
                 setTab(key);
               }}
             >
-              {label}
+              {t(`new.tab.${key}`)}
             </a>
           </li>
         ))}
       </menu>
       <form className="window tab-body form" role="tabpanel" onSubmit={create}>
         <div className="window-body">
-          <p className="small">{blurb}</p>
+          <p className="small">{t(`new.blurb.${tab}`)}</p>
           {tab === 'join' ? (
             <>
-              <textarea required rows={4} className="wide" placeholder="weave:invite:… or weave:knock:…" {...form.field('invite')} />
+              <textarea required rows={4} className="wide" placeholder={t('new.invite.placeholder')} {...form.field('invite')} />
               {form.values.invite.trim().startsWith('weave:knock:') && (
                 <div className="field-row-stacked">
-                  <label htmlFor="join-note">This link asks the inviter first. A note for them (optional)</label>
-                  <input id="join-note" maxLength={500} placeholder="Hi, it's me from…" {...form.field('note')} />
+                  <label htmlFor="join-note">{t('new.knock.note')}</label>
+                  <input id="join-note" maxLength={500} placeholder={t('new.knock.note.placeholder')} {...form.field('note')} />
                 </div>
               )}
             </>
           ) : (
             <>
               <div className="field-row-stacked">
-                <label htmlFor="new-name">Name</label>
-                <input id="new-name" required autoFocus maxLength={40} placeholder={{ project: 'Modular synth case', community: 'Synths', group: 'Synth friends' }[tab]} {...form.field('name')} />
+                <label htmlFor="new-name">{t('field.name')}</label>
+                <input id="new-name" required autoFocus maxLength={40} placeholder={t(`new.placeholder.${tab}`)} {...form.field('name')} />
               </div>
               {tab !== 'group' && (
                 <div className="field-row-stacked">
-                  <label htmlFor="new-description">Description (optional)</label>
+                  <label htmlFor="new-description">{t('new.description')}</label>
                   <textarea id="new-description" rows={3} {...form.field('description')} />
                 </div>
               )}
@@ -1367,20 +1446,20 @@ export function NewDialog({ onClose }: { onClose(): void }) {
                   <div className="field-row" key={p.name}>
                     <input type="checkbox" id={`new-pack-${p.name}`} checked={withPack === p.name} onChange={(e) => setWithPack(e.target.checked ? p.name : undefined)} />
                     <label htmlFor={`new-pack-${p.name}`}>
-                      {p.title} <span className="small muted">(set up right after: {p.steps.length} steps)</span>
+                      {p.title} <span className="small muted">{t('new.pack.steps', { n: p.steps.length })}</span>
                     </label>
                   </div>
                 ))}
             </>
           )}
           <p className="small">
-            <Icon name="lock" /> End-to-end encrypted: only the people inside can read it.
+            <Icon name="lock" /> {t('new.encrypted')}
           </p>
           <div className="buttons">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('button.cancel')}
             </button>
-            <button className="default">{tab === 'join' ? 'Join' : 'Create'}</button>
+            <button className="default">{t(tab === 'join' ? 'new.join' : 'new.create')}</button>
           </div>
         </div>
       </form>
@@ -1389,6 +1468,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
 }
 
 export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [accept, setAccept] = useState(false);
   const [days, setDays] = useState(7);
   const [rights, setRights] = useState<Record<string, 'none' | 'read' | 'write'>>({});
@@ -1402,57 +1482,56 @@ export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): 
     setLink(await attempt(() => api<string>('invite', space.id, days * 24, { accept, access })));
   };
   return (
-    <Modal title={`Invite someone to ${spaceLabel(space)}`} onClose={onClose}>
+    <Modal title={t('invite.title', { space: spaceLabel(space) })} onClose={onClose}>
       {link ? (
         <>
           <p className="small">
-            {accept
-              ? 'Whoever has this link can ask to join. You decide in your Inbox, and only then do they get the keys.'
-              : `Send this link privately. Whoever has it can join and read ${space.name}, so treat it like a key.`}{' '}
-            It expires in {days} day{days === 1 ? '' : 's'}.
+            {t(accept ? 'invite.made.accept' : 'invite.made.open', { space: space.name })} {t('invite.expires.in', { n: days })}
           </p>
           <textarea className="wide invite" readOnly rows={5} value={link} />
-          <CopyButtons text={link} what="Invite link" onClose={onClose} />
+          <CopyButtons text={link} what={t('invite.link')} onClose={onClose} />
         </>
       ) : (
         <div className="form">
           <div className="field-row">
             <input type="radio" id="invite-open" checked={!accept} onChange={() => setAccept(false)} />
-            <label htmlFor="invite-open">Whoever has the link joins right away</label>
+            <label htmlFor="invite-open">{t('invite.open')}</label>
           </div>
           <div className="field-row">
             <input type="radio" id="invite-accept" checked={accept} onChange={() => setAccept(true)} />
-            <label htmlFor="invite-accept">People ask, I let them in (the link carries no keys)</label>
+            <label htmlFor="invite-accept">{t('invite.accept')}</label>
           </div>
           {limited.length > 0 && (
             <fieldset>
-              <legend>Limited boards</legend>
+              <legend>{t('invite.limited.boards')}</legend>
               {limited.map((b) => (
                 <div className="field-row" key={b.name}>
                   <span className="grow">
                     <Icon name={boardIcon(b)} /> {b.title}
                   </span>
-                  <select value={rights[b.name] ?? 'none'} aria-label={`Access to ${b.title}`} onChange={(e) => setRights((r) => ({ ...r, [b.name]: e.target.value as 'none' | 'read' | 'write' }))}>
-                    <option value="none">{b.access?.read ? 'no access' : 'read only, like everyone'}</option>
-                    {b.access?.read && <option value="read">may read</option>}
-                    <option value="write">{b.access?.read ? 'may read and write' : 'may write'}</option>
+                  <select value={rights[b.name] ?? 'none'} aria-label={t('invite.access.to', { board: b.title })} onChange={(e) => setRights((r) => ({ ...r, [b.name]: e.target.value as 'none' | 'read' | 'write' }))}>
+                    <option value="none">{t(b.access?.read ? 'invite.no.access' : 'invite.read.like.everyone')}</option>
+                    {b.access?.read && <option value="read">{t('invite.may.read')}</option>}
+                    <option value="write">{t(b.access?.read ? 'invite.may.read.write' : 'invite.may.write')}</option>
                   </select>
                 </div>
               ))}
             </fieldset>
           )}
           <div className="field-row">
-            <label htmlFor="invite-days">Expires after</label>
+            <label htmlFor="invite-days">{t('invite.expires.after')}</label>
             <select id="invite-days" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-              <option value={1}>1 day</option>
-              <option value={7}>7 days</option>
-              <option value={30}>30 days</option>
+              {[1, 7, 30].map((n) => (
+                <option key={n} value={n}>
+                  {t('invite.days', { n })}
+                </option>
+              ))}
             </select>
           </div>
           <div className="buttons">
-            <button onClick={onClose}>Cancel</button>
+            <button onClick={onClose}>{t('button.cancel')}</button>
             <AsyncButton className="default" onClick={create}>
-              Create link
+              {t('invite.create')}
             </AsyncButton>
           </div>
         </div>
@@ -1471,6 +1550,7 @@ export function LonePost({ post, meDid, spaces }: { post: PostInfo; meDid: strin
 }
 
 export function NotConnected({ home, error, onRetry }: { home: string; error?: string; onRetry(): void }) {
+  const { t } = useTexts();
   const [busy, setBusy] = useState<'retry' | 'restart'>();
   const again = async (restart: boolean) => {
     setBusy(restart ? 'restart' : 'retry');
@@ -1488,15 +1568,15 @@ export function NotConnected({ home, error, onRetry }: { home: string; error?: s
           <div className="title-bar-text">Weave</div>
         </div>
         <div className="window-body">
-          <p>⚠ Can't reach your node. The Weave daemon for {home} isn't running and couldn't be started.</p>
+          <p>{t('notconn.cant.reach', { home })}</p>
           {error && <p className="note">{error}</p>}
           <div className="buttons">
             <button className="default" disabled={!!busy} onClick={() => void again(false)}>
-              {busy === 'retry' ? 'Trying…' : 'Try again'}
+              {t(busy === 'retry' ? 'notconn.trying' : 'button.try.again')}
             </button>
             {bridge.reconnect && (
-              <button disabled={!!busy} title="Stops the Weave daemon holding this home, even one that doesn't answer, and starts it again" onClick={() => void again(true)}>
-                {busy === 'restart' ? 'Restarting…' : 'Restart the daemon'}
+              <button disabled={!!busy} title={t('notconn.restart.title')} onClick={() => void again(true)}>
+                {t(busy === 'restart' ? 'notconn.restarting' : 'notconn.restart')}
               </button>
             )}
           </div>
@@ -1505,4 +1585,3 @@ export function NotConnected({ home, error, onRetry }: { home: string; error?: s
     </div>
   );
 }
-

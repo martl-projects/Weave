@@ -32,6 +32,17 @@ jobs:
         run: |
           echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/weave-server" >> "$GITHUB_ENV"
           echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/registry-auth.json" >> "$GITHUB_ENV"
+      - name: Podman's state from before a restart
+        # The runner has no XDG_RUNTIME_DIR, so rootless Podman keeps its pause process id in /tmp, which outlives a WSL
+        # restart: a pause process that's gone makes every build fail ("cannot re-exec process to join the existing user
+        # namespace"). Only a dead one's folder goes; a running one is left alone.
+        run: |
+          dir="${XDG_RUNTIME_DIR:-/tmp/podman-run-$(id -u)}"
+          pid=$(cat "$dir/libpod/tmp/pause.pid" 2>/dev/null || true)
+          if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            echo "pause process $pid is gone: clearing $dir"
+            rm -rf "$dir"
+          fi
       - name: Build
         # Docker's format, so the image keeps its HEALTHCHECK (OCI images have none).
         run: podman build --format docker --pull=newer -f apps/server/Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .

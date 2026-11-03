@@ -1,6 +1,9 @@
+import { isLanguage, type Language } from '@weave/core';
 import { readJson, writeJson, type Home } from './home.ts';
 
 export interface Config {
+  /** The UI's language on this computer (docs/localization.md): a shipped language, or absent for the system's. */
+  language?: Language;
   /** Topics this node joins on the DHT. */
   topics: string[];
   /** DHT bootstrap nodes; empty means Hyperswarm's public defaults. */
@@ -32,11 +35,18 @@ export interface Config {
   spaceFolders?: Record<string, string[]>;
   /** Your desk: its project, and the folder here where your daily driver works. */
   desk?: { space: string; folder?: string; driver?: { provider: string; id: string; host?: string; folder?: string } };
+  /** false: peers that share nothing with this node and hold none of its links get in all the same (as before 0.27). */
+  firewall?: false;
+  /**
+   * This node is its person's front door: it's found at the public meeting point (the one `weave contact --door` links
+   * give out) and lets in whoever comes through it. Unset: an always-on node is one, a person's computer isn't.
+   */
+  frontDoor?: boolean;
 }
 
 /** What this build reads of the config; anything else in the file is kept as it is (see loadConfig). */
 const KNOWN: ReadonlySet<string> = new Set<keyof Config>([
-  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk',
+  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language', 'firewall', 'frontDoor',
 ]);
 
 export function loadConfig(home: Home): Config {
@@ -73,6 +83,9 @@ export function loadConfig(home: Home): Config {
     ...(stored.followClaudeCode ? { followClaudeCode: true } : {}),
     ...(stored.spaceFolders ? { spaceFolders: stored.spaceFolders } : {}),
     ...(stored.desk ? { desk: stored.desk } : {}),
+    ...(isLanguage(stored.language) ? { language: stored.language } : {}),
+    ...(stored.firewall === false ? { firewall: false as const } : {}),
+    ...(typeof stored.frontDoor === 'boolean' ? { frontDoor: stored.frontDoor } : {}),
   };
 }
 

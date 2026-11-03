@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { t } from './texts.ts';
 // Pixel icons, as in the Weave app: pixelarticons (MIT).
 import analytics from 'pixelarticons/svg/analytics.svg';
 import briefcases from 'pixelarticons/svg/briefcases.svg';
@@ -206,7 +207,7 @@ export function Faces({ people, max = 7 }: { people: Array<{ did: string; name?:
   return (
     <div className="faces">
       {people.slice(0, max).map((p) => (
-        <Avatar key={p.did} name={p.name} id={p.did} ring={p.maintainer} title={`${p.name ?? p.did.slice(8, 16)}${p.maintainer ? ' (maintainer)' : ''}`} />
+        <Avatar key={p.did} name={p.name} id={p.did} ring={p.maintainer} title={p.maintainer ? t('con.face.maintainer', { name: p.name ?? p.did.slice(8, 16) }) : (p.name ?? p.did.slice(8, 16))} />
       ))}
       {people.length > max && <span className="avatar more">+{people.length - max}</span>}
       <span className="count">{people.length}</span>
@@ -235,7 +236,7 @@ export function Problem({ error }: { error?: string }) {
 /** Opens it in the Weave app (weave:project:…, weave:group:…). */
 export function Open({ kind, id, children }: { kind?: string; id: string; children: ReactNode }) {
   return kind ? (
-    <a className="open" href={`weave:${kind}:${id}`} title="Open in Weave">
+    <a className="open" href={`weave:${kind}:${id}`} title={t('con.open.in.weave')}>
       {children}
       <Icon name="externalLink" size={12} />
     </a>
@@ -260,7 +261,7 @@ export function CopyText({ text }: { text: string }) {
         }}
       >
         <Icon name={copied ? 'check' : 'copy'} />
-        <span>{copied ? 'Copied' : 'Copy'}</span>
+        <span>{t(copied ? 'con.copied' : 'button.copy')}</span>
       </button>
     </div>
   );

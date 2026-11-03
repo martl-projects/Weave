@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { GumroadInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
+import type { GumroadInfo, MemberInfo, MembershipRequestInfo, TierInfo, WalletInfo } from '@weave/node/client';
 import { formatUnits, isHexAddress, isTxHash, parseUnits, TEST_USDC, TREASURY_CHAIN } from '@weave/core/chain';
 import { PayFromWallet } from './pay.tsx';
 import { Icon } from './icons.tsx';
 import { ago, api, bump, shortDid, useApi } from './lib.ts';
-import { ask, attempt, AsyncButton, Avatar, Modal, Sprite, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, Modal, toast } from './ui.tsx';
 import { WalletNeeded } from './wallet.tsx';
+import { t, T, useTexts } from './texts.tsx';
 
 /*
  * Memberships, Patreon-style: creators offer tiers on their hub, supporters
@@ -15,36 +16,52 @@ import { WalletNeeded } from './wallet.tsx';
  * A tier is a group, so members get its chat and the projects it's invited into.
  */
 
-export const money = (cents: number, currency: string) =>
-  cents === 0 ? 'Free' : `${new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / 100)} / month`;
+export const money = (cents: number, currency: string) => (cents === 0 ? t('tier.free') : t('tier.per.month', { price: { amount: cents / 100, currency } }));
 
-const until = (iso: string) => new Date(iso).toLocaleDateString();
+/** Your tier's members, as their faces (a few, then how many more). */
+function TierFaces({ tier }: { tier: string }) {
+  const { data: members } = useApi(() => api<MemberInfo[]>('members', tier).catch(() => [] as MemberInfo[]), [tier]);
+  const shown = (members ?? []).slice(0, 8);
+  if (!shown.length) return null;
+  return (
+    <span className="tier-faces">
+      {shown.map((m) => (
+        <span key={m.did} title={m.name ?? shortDid(m.did)}>
+          <Avatar did={m.did} size={22} />
+        </span>
+      ))}
+      {(members?.length ?? 0) > shown.length && <span className="small muted">+{members!.length - shown.length}</span>}
+    </span>
+  );
+}
 
 function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; onEdit?(): void }) {
+  const { t } = useTexts();
   let status;
   if (tier.mine)
     status = (
       <>
         <span className="small">
-          {tier.members} member{tier.members === 1 ? '' : 's'}
-          {tier.open ? '' : ' · closed'}
+          {t('tier.members', { n: tier.members })}
+          {tier.open ? '' : t('tier.closed')}
         </span>
-        {onEdit && <button onClick={onEdit}>Edit…</button>}
+        {!!tier.members && <TierFaces tier={tier.id} />}
+        {onEdit && <button onClick={onEdit}>{t('tier.edit')}</button>}
       </>
     );
-  else if (tier.membership?.active) status = <span className="tag friend">member until {until(tier.membership.until)}</span>;
-  else if (tier.requested) status = <span className="tag">asked to join</span>;
-  else if (tier.open) status = <button className="default" onClick={onJoin}>{tier.membership ? 'Renew…' : 'Join…'}</button>;
-  else status = <span className="small">not taking new members</span>;
+  else if (tier.membership?.active) status = <span className="tag friend">{t('tier.member.until', { until: tier.membership.until })}</span>;
+  else if (tier.requested) status = <span className="tag">{t('tier.asked')}</span>;
+  else if (tier.open) status = <button className="default" onClick={onJoin}>{t(tier.membership ? 'tier.renew' : 'tier.join')}</button>;
+  else status = <span className="small">{t('tier.not.taking')}</span>;
   return (
     <article className="tier sunken">
-      <Sprite seed={tier.id} size={40} />
+      <Avatar did={tier.creator.did} size={40} />
       <div className="grow">
         <b>{tier.name}</b> <span className="price">{money(tier.price, tier.currency)}</span>
-        {tier.gumroad && <span className="tag">via Gumroad</span>}
+        {tier.gumroad && <span className="tag">{t('tier.via.gumroad')}</span>}
         {tier.onchain && (
-          <span className="tag" title={`To ${tier.onchain.to} on ${TREASURY_CHAIN.name}, a test network`}>
-            {formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} on chain
+          <span className="tag" title={t('tier.onchain.title', { to: tier.onchain.to, chain: TREASURY_CHAIN.name })}>
+            {t('tier.onchain', { amount: `${formatUnits(tier.onchain.amount, tier.onchain.decimals)} ${tier.onchain.symbol}` })}
           </span>
         )}
         {tier.description && <p className="small">{tier.description}</p>}
@@ -63,6 +80,7 @@ function TierCard({ tier, onJoin, onEdit }: { tier: TierInfo; onJoin?(): void; o
 
 /** Joining a tier sold through Gumroad: buy there, then paste the license key from the receipt. */
 function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
+  const { t } = useTexts();
   const [license, setLicense] = useState('');
   const [note, setNote] = useState('');
   return (
@@ -70,33 +88,38 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
       className="form"
       onSubmit={async (e: FormEvent) => {
         e.preventDefault();
-        const sent = await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note, license }).then(bump), `Sent: you're in as soon as ${creator}'s Weave has checked your key with Gumroad`);
+        const sent = await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note, license }).then(bump), t('join.gumroad.sent', { creator }));
         if (sent !== undefined) onClose();
       }}
     >
       <ol className="steps">
         <li>
-          Buy <b>{tier.name}</b> ({money(tier.price, tier.currency)}) on Gumroad:{' '}
-          <a href={tier.gumroad!.url} target="_blank" rel="noopener noreferrer">
-            open {tier.gumroad!.variant ? `“${tier.gumroad!.variant}” ` : ''}on Gumroad
-          </a>
-          . Gumroad handles the payment; Weave never sees it.
+          <T
+            name="join.gumroad.buy"
+            values={{
+              tier: <b>{tier.name}</b>,
+              price: money(tier.price, tier.currency),
+              link: (
+                <a href={tier.gumroad!.url} target="_blank" rel="noopener noreferrer">
+                  {tier.gumroad!.variant ? t('join.gumroad.open.variant', { variant: tier.gumroad!.variant }) : t('join.gumroad.open')}
+                </a>
+              ),
+            }}
+          />
         </li>
         <li>
-          <label htmlFor="join-license">Paste the license key from your Gumroad receipt:</label>
-          <input id="join-license" className="wide" required autoFocus spellCheck={false} placeholder="XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX" value={license} onChange={(e) => setLicense(e.target.value.trim())} />
+          <label htmlFor="join-license">{t('join.gumroad.paste')}</label>
+          <input id="join-license" className="wide" required autoFocus spellCheck={false} placeholder={t('join.license.placeholder')} value={license} onChange={(e) => setLicense(e.target.value.trim())} />
         </li>
       </ol>
-      <input className="wide" placeholder="A note for them (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-      <p className="small">
-        Only {creator} can read the key and your note. Their Weave checks the key with Gumroad and lets you in, and renews each month while you pay. It works for one person only.
-      </p>
+      <input className="wide" placeholder={t('join.note')} value={note} onChange={(e) => setNote(e.target.value)} />
+      <p className="small">{t('join.gumroad.only', { creator })}</p>
       <div className="buttons">
         <button type="button" onClick={onClose}>
-          Cancel
+          {t('button.cancel')}
         </button>
         <button className="default" disabled={!license}>
-          Send key
+          {t('join.send.key')}
         </button>
       </div>
     </form>
@@ -105,59 +128,52 @@ function GumroadJoin({ tier, creator, onClose }: { tier: TierInfo; creator: stri
 
 /** Joining a tier paid on chain: send the token from your linked wallet, then paste the transaction's hash. */
 function OnchainJoin({ tier, creator, onClose }: { tier: TierInfo; creator: string; onClose(): void }) {
+  const { t } = useTexts();
   // null: no wallet linked; undefined: still asking.
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet').then((w) => w ?? null), []);
   if (wallet === undefined) return null;
-  if (!wallet) return <WalletNeeded why={`Paying in ${tier.onchain!.symbol} goes from your own wallet, so ${creator} knows the payment is yours.`} />;
+  if (!wallet) return <WalletNeeded why={t('join.onchain.wallet', { symbol: tier.onchain!.symbol, creator })} />;
   return <PayFromWallet tier={tier.id} creator={tier.creator.did} payee={creator} onDone={onClose} />;
 }
 
 function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [note, setNote] = useState('');
   const [way, setWay] = useState<'gumroad' | 'onchain'>(tier.gumroad ? 'gumroad' : 'onchain');
   const creator = tier.creator.name ?? shortDid(tier.creator.did);
   if (tier.onchain || tier.gumroad)
     return (
-      <Modal title={`Join ${tier.name}`} onClose={onClose}>
+      <Modal title={t('join.title', { tier: tier.name })} onClose={onClose}>
         {tier.onchain && tier.gumroad && (
-          <div className="field-row" role="radiogroup" aria-label="How to pay">
-            <span className="small">Pay with</span>
+          <div className="field-row" role="radiogroup" aria-label={t('join.how')}>
+            <span className="small">{t('join.pay.with')}</span>
             <input id="way-gumroad" type="radio" checked={way === 'gumroad'} onChange={() => setWay('gumroad')} />
-            <label htmlFor="way-gumroad">Gumroad ({money(tier.price, tier.currency)})</label>
+            <label htmlFor="way-gumroad">{t('join.gumroad.option', { price: money(tier.price, tier.currency) })}</label>
             <input id="way-onchain" type="radio" checked={way === 'onchain'} onChange={() => setWay('onchain')} />
-            <label htmlFor="way-onchain">
-              USDC ({formatUnits(tier.onchain.amount, tier.onchain.decimals)} {tier.onchain.symbol} / month)
-            </label>
+            <label htmlFor="way-onchain">{t('join.usdc.option', { amount: `${formatUnits(tier.onchain.amount, tier.onchain.decimals)} ${tier.onchain.symbol}` })}</label>
           </div>
         )}
         {tier.onchain && (way === 'onchain' || !tier.gumroad) ? <OnchainJoin tier={tier} creator={creator} onClose={onClose} /> : <GumroadJoin tier={tier} creator={creator} onClose={onClose} />}
       </Modal>
     );
   return (
-    <Modal title={`Join ${tier.name}`} onClose={onClose}>
+    <Modal title={t('join.title', { tier: tier.name })} onClose={onClose}>
       <form
         className="form"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          if (await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note }).then(bump), `Asked ${creator}`)) onClose();
+          if (await attempt(() => api('requestMembership', { tier: tier.id, creator: tier.creator.did, note }).then(bump), t('join.asked', { creator }))) onClose();
         }}
       >
         <p className="small">
-          {tier.price > 0 ? (
-            <>
-              {tier.name} costs <b>{money(tier.price, tier.currency)}</b>. Weave doesn't handle money yet: pay {creator} the way you agree on, and tell them here.
-            </>
-          ) : (
-            <>{tier.name} is free; {creator} decides who joins.</>
-          )}{' '}
-          Only {creator} can read your note.
+          {tier.price > 0 ? <T name="join.costs" values={{ tier: tier.name, price: <b>{money(tier.price, tier.currency)}</b>, creator }} /> : t('join.free', { tier: tier.name, creator })} {t('join.only.note', { creator })}
         </p>
-        <textarea className="wide" rows={3} autoFocus placeholder={tier.price > 0 ? 'e.g. Sent €5 via PayPal' : 'Say hi (optional)'} value={note} onChange={(e) => setNote(e.target.value)} />
+        <textarea className="wide" rows={3} autoFocus placeholder={t(tier.price > 0 ? 'join.placeholder.paid' : 'join.placeholder.free')} value={note} onChange={(e) => setNote(e.target.value)} />
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
-          <button className="default">Ask to join</button>
+          <button className="default">{t('join.ask')}</button>
         </div>
       </form>
     </Modal>
@@ -165,6 +181,7 @@ function JoinDialog({ tier, onClose }: { tier: TierInfo; onClose(): void }) {
 }
 
 function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [name, setName] = useState(tier?.name ?? '');
   const [price, setPrice] = useState(tier ? String(tier.price / 100) : '5');
   const [currency, setCurrency] = useState(tier?.currency ?? 'EUR');
@@ -215,14 +232,14 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
   const input = () => ({ name, price: cents, currency, description, benefits: benefits.split('\n'), open, auto: onGumroad || onChain ? false : auto, gumroad, onchain });
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    if (making && !(cents > 0)) return toast('A tier sold on Gumroad needs a price', 'error');
-    if (onChain && (!usdcAmount || !isHexAddress(to))) return toast(usdcAmount ? 'Where do payments go? Link your wallet, or give an address' : 'Give the price in USDC, like 5 or 2.50', 'error');
+    if (making && !(cents > 0)) return toast(t('tier.gumroad.needs.price'), 'error');
+    if (onChain && (!usdcAmount || !isHexAddress(to))) return toast(t(usdcAmount ? 'tier.onchain.where' : 'tier.onchain.price'), 'error');
     setBusy(true);
-    const saved = await attempt(() => (tier ? api<TierInfo>('setTier', { tier: tier.id, ...input() }) : api<TierInfo>('createTier', input())), making ? undefined : tier ? 'Tier saved' : `${name} is on your hub`);
+    const saved = await attempt(() => (tier ? api<TierInfo>('setTier', { tier: tier.id, ...input() }) : api<TierInfo>('createTier', input())), making ? undefined : tier ? t('tier.saved') : t('tier.on.hub', { name }));
     if (saved && making) {
       const sold = await attempt(() => api<{ published: boolean; warning?: string }>('sellTierOnGumroad', { tier: saved.id, ...(viaToken ? { token } : {}) }));
-      if (!sold) toast(`${name} is saved, but not on Gumroad yet: Edit it to try again`, 'error');
-      else toast(sold.published ? `${name} is on sale on Gumroad` : `${name} is on Gumroad, not published yet: ${sold.warning}`, sold.published ? 'ok' : 'error');
+      if (!sold) toast(t('tier.gumroad.not.yet', { name }), 'error');
+      else toast(sold.published ? t('tier.gumroad.on.sale', { name }) : t('tier.gumroad.unpublished', { name, warning: sold.warning }), sold.published ? 'ok' : 'error');
     }
     setBusy(false);
     if (saved) {
@@ -231,53 +248,56 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
     }
   };
   return (
-    <Modal title={tier ? `Edit ${tier.name}` : 'New tier'} onClose={onClose}>
+    <Modal title={tier ? t('tier.edit.title', { name: tier.name }) : t('tier.new.title')} onClose={onClose}>
       <form className="form" onSubmit={save}>
         <div className="field-row-stacked">
-          <label htmlFor="tier-name">Name</label>
-          <input id="tier-name" required maxLength={40} placeholder="Supporters" value={name} onChange={(e) => setName(e.target.value)} />
+          <label htmlFor="tier-name">{t('field.name')}</label>
+          <input id="tier-name" required maxLength={40} placeholder={t('tier.name.placeholder')} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="field-row">
-          <label htmlFor="tier-price">Price per month</label>
+          <label htmlFor="tier-price">{t('tier.price')}</label>
           <input id="tier-price" inputMode="decimal" size={6} value={price} onChange={(e) => setPrice(e.target.value)} />
-          <select aria-label="Currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+          <select aria-label={t('tier.currency')} value={currency} onChange={(e) => setCurrency(e.target.value)}>
             {['EUR', 'USD', 'GBP', 'CHF'].map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
-          <span className="small">0 = free</span>
+          <span className="small">{t('tier.zero.free')}</span>
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="tier-text">What is it?</label>
+          <label htmlFor="tier-text">{t('tier.what')}</label>
           <textarea id="tier-text" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="tier-benefits">Benefits, one per line</label>
-          <textarea id="tier-benefits" rows={3} placeholder={'Supporter lounge\nEarly builds of my projects'} value={benefits} onChange={(e) => setBenefits(e.target.value)} />
+          <label htmlFor="tier-benefits">{t('tier.benefits')}</label>
+          <textarea id="tier-benefits" rows={3} placeholder={t('tier.benefits.placeholder')} value={benefits} onChange={(e) => setBenefits(e.target.value)} />
         </div>
         <div className="field-row">
           <input id="tier-open" type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />
-          <label htmlFor="tier-open">Taking new members</label>
+          <label htmlFor="tier-open">{t('tier.taking')}</label>
         </div>
         <div className="field-row">
           <input id="tier-auto" type="checkbox" checked={auto && !onGumroad} disabled={onGumroad} onChange={(e) => setAuto(e.target.checked)} />
-          <label htmlFor="tier-auto">Let people in automatically (for free tiers)</label>
+          <label htmlFor="tier-auto">{t('tier.auto')}</label>
         </div>
         <fieldset>
-          <legend>Ways to pay</legend>
-          <p className="small">Offer one or more; supporters pick theirs when they join. Nothing ticked: they pay you the way you agree on, and you let them in.</p>
+          <legend>{t('tier.ways')}</legend>
+          <p className="small">{t('tier.ways.about')}</p>
           <div className="field-row">
-            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} /> <label htmlFor="tier-gumroad"><b>Gumroad</b>: card, PayPal; Gumroad is the seller</label>
+            <input id="tier-gumroad" type="checkbox" checked={onGumroad} onChange={(e) => setOnGumroad(e.target.checked)} />{' '}
+            <label htmlFor="tier-gumroad">
+              <T name="tier.gumroad.option" />
+            </label>
           </div>
           {onGumroad && (
             <>
               <div className="field-row">
                 <input id="gumroad-make" type="radio" checked={makeIt} onChange={() => setMakeIt(true)} />
-                <label htmlFor="gumroad-make">{tier?.gumroad ? 'Make a new product on Gumroad' : 'Make the product on Gumroad for me'}</label>
+                <label htmlFor="gumroad-make">{t(tier?.gumroad ? 'gumroad.make.new' : 'gumroad.make')}</label>
               </div>
               <div className="field-row">
                 <input id="gumroad-link" type="radio" checked={!makeIt} onChange={() => setMakeIt(false)} />
-                <label htmlFor="gumroad-link">{tier?.gumroad ? 'Keep the product it is linked to, or link another' : 'Link a product I made'}</label>
+                <label htmlFor="gumroad-link">{t(tier?.gumroad ? 'gumroad.keep.linked' : 'gumroad.link.mine')}</label>
               </div>
             </>
           )}
@@ -286,16 +306,16 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
               {viaToken ? (
                 <>
                   <div className="field-row-stacked">
-                    <label htmlFor="gumroad-token">Gumroad access token</label>
+                    <label htmlFor="gumroad-token">{t('gumroad.token')}</label>
                     <input id="gumroad-token" required type="password" autoComplete="off" spellCheck={false} value={token} onChange={(e) => setToken(e.target.value.trim())} />
                   </div>
                   <p className="small">
-                    In Gumroad: <b>Settings → Advanced → Applications</b>, create an application (any name and redirect URI), then <b>Generate access token</b>. Weave uses it once and doesn't keep it.
+                    <T name="gumroad.token.howto" />
                     {connection?.available && (
                       <>
                         {' '}
                         <button type="button" className="link" onClick={() => setUseToken(false)}>
-                          Connect Gumroad instead
+                          {t('gumroad.connect.instead')}
                         </button>
                       </>
                     )}
@@ -303,84 +323,83 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
                 </>
               ) : connection?.account ? (
                 <p className="small">
-                  Connected to Gumroad as <b>{connection.account}</b>.{' '}
+                  <T name="gumroad.connected" values={{ account: <b>{connection.account}</b> }} />{' '}
                   <button type="button" className="link" onClick={() => setUseToken(true)}>
-                    Use an access token instead
+                    {t('gumroad.token.instead')}
                   </button>
                 </p>
               ) : (
                 <div className="field-row">
                   <button type="button" onClick={() => void connect()}>
-                    {waiting ? 'Waiting for Gumroad…' : 'Connect Gumroad…'}
+                    {t(waiting ? 'gumroad.waiting' : 'gumroad.connect')}
                   </button>
-                  <span className="small grow">{waiting ? 'Allow Weave in your browser, then come back.' : connection?.error}</span>
+                  <span className="small grow">{waiting ? t('gumroad.allow') : connection?.error}</span>
                   <button type="button" className="link" onClick={() => setUseToken(true)}>
-                    Use an access token
+                    {t('gumroad.use.token')}
                   </button>
                 </div>
               )}
-              <p className="small">
-                Weave makes a monthly membership at this price on Gumroad, with license keys, and publishes it. Supporters buy there and send you the key from their receipt; your Weave lets them in and renews each month while they pay. Keep Weave running so it can.
-              </p>
+              <p className="small">{t('gumroad.makes')}</p>
             </>
           ) : onGumroad ? (
             <>
               <div className="field-row-stacked">
-                <label htmlFor="gumroad-url">Product page</label>
+                <label htmlFor="gumroad-url">{t('gumroad.product.page')}</label>
                 <input id="gumroad-url" required type="url" placeholder="https://you.gumroad.com/l/supporters" value={url} onChange={(e) => setUrl(e.target.value)} />
               </div>
               <div className="field-row-stacked">
-                <label htmlFor="gumroad-product">Product ID (Gumroad: the product's settings, or its page's “License key” section)</label>
-                <input id="gumroad-product" required spellCheck={false} placeholder="sDonL7aMmKz8…" value={product} onChange={(e) => setProduct(e.target.value.trim())} />
+                <label htmlFor="gumroad-product">{t('gumroad.product.id')}</label>
+                <input id="gumroad-product" required spellCheck={false} placeholder={t('gumroad.product.placeholder')} value={product} onChange={(e) => setProduct(e.target.value.trim())} />
               </div>
               <div className="field-row-stacked">
-                <label htmlFor="gumroad-variant">Gumroad tier that gives this one (if the membership has several)</label>
-                <input id="gumroad-variant" placeholder="e.g. Editors" value={variant} onChange={(e) => setVariant(e.target.value)} />
+                <label htmlFor="gumroad-variant">{t('gumroad.variant')}</label>
+                <input id="gumroad-variant" placeholder={t('gumroad.variant.placeholder')} value={variant} onChange={(e) => setVariant(e.target.value)} />
               </div>
               <p className="small">
-                In Gumroad, make it a membership and turn on <b>Generate a unique license key per sale</b>. Supporters buy there and send you the key from their receipt; your Weave checks it with Gumroad, lets them in and renews each month while they pay. Keep Weave running so it can.
+                <T name="gumroad.linked.howto" />
               </p>
             </>
           ) : null}
           <div className="field-row">
-            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} /> <label htmlFor="tier-onchain"><b>USDC</b>: from a wallet, straight to you (test network)</label>
+            <input id="tier-onchain" type="checkbox" checked={onChain} onChange={(e) => setOnChain(e.target.checked)} />{' '}
+            <label htmlFor="tier-onchain">
+              <T name="tier.usdc.option" />
+            </label>
           </div>
           {onChain ? (
             <>
               <div className="field-row">
-                <label htmlFor="tier-usdc">USDC per month</label>
+                <label htmlFor="tier-usdc">{t('tier.usdc.per.month')}</label>
                 <input id="tier-usdc" inputMode="decimal" size={6} value={usdc} onChange={(e) => setUsdc(e.target.value)} />
               </div>
               <div className="field-row-stacked">
-                <label htmlFor="tier-payto">Paid to</label>
-                <input id="tier-payto" spellCheck={false} placeholder={wallet ? `your wallet ${wallet.address}` : '0x… (link your wallet, or give an address)'} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
+                <label htmlFor="tier-payto">{t('tier.paid.to')}</label>
+                <input id="tier-payto" spellCheck={false} placeholder={wallet ? t('tier.your.wallet', { address: wallet.address }) : t('tier.payto.placeholder')} value={payTo} onChange={(e) => setPayTo(e.target.value.trim())} />
               </div>
               <p className="small">
-                Empty: your linked wallet. Supporters pay from their linked wallet; your Weave reads the payment on {TREASURY_CHAIN.name} and lets them in. Keep Weave running so it can. (To divide payments among a project's makers, give its split contract here: <code>weave treasury split</code>, once the project's payments are on.)
+                <T name="tier.onchain.about" values={{ chain: TREASURY_CHAIN.name }} />
               </p>
             </>
           ) : null}
         </fieldset>
-        <p className="small">
-          A tier is a group: members get its chat and every project you invite it into (in the project's Settings). Memberships give access, never votes.
-        </p>
+        <p className="small">{t('tier.is.group')}</p>
         <div className="buttons">
           {tier && (
             <AsyncButton
               onClick={async () => {
-                if (!(await ask(`Take ${tier.name} off your hub? Members keep it until their grants run out.`, 'Take it off'))) return;
-                if (await attempt(() => api('setTier', { tier: tier.id, hidden: true }).then(bump), 'Tier removed')) onClose();
+                if (!(await ask(t('tier.remove.ask', { name: tier.name }), t('tier.take.off')))) return;
+                if (await attempt(() => api('setTier', { tier: tier.id, hidden: true }).then(bump), t('tier.removed'))) onClose();
               }}
             >
-              Remove
+              {t('button.remove')}
             </AsyncButton>
           )}
           <span className="grow" />
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default" disabled={busy || !ready}>
-            {busy && making ? 'Making it on Gumroad…' : tier ? 'Save' : 'Offer tier'}
+            {t(busy && making ? 'tier.making' : tier ? 'button.save' : 'tier.offer')}
           </button>
         </div>
       </form>
@@ -390,21 +409,22 @@ function TierDialog({ tier, onClose }: { tier?: TierInfo; onClose(): void }) {
 
 /** "Support X" on someone's hub; on your own, your tiers to manage. */
 export function SupportBox({ did, name, me }: { did: string; name: string; me: boolean }) {
+  const { t } = useTexts();
   const { data: tiers } = useApi(() => api<TierInfo[]>('tiers', did), [did]);
   const [joining, setJoining] = useState<TierInfo>();
   const [editing, setEditing] = useState<TierInfo | 'new'>();
   if (!tiers || (!me && tiers.length === 0)) return null;
   return (
     <section className="space-box">
-      <h3>{me ? 'My tiers' : `Support ${name}`}</h3>
-      {tiers.map((t) => (
-        <TierCard key={t.id} tier={t} onJoin={() => setJoining(t)} onEdit={() => setEditing(t)} />
+      <h3>{me ? t('tiers.mine') : t('tiers.support', { name })}</h3>
+      {tiers.map((tier) => (
+        <TierCard key={tier.id} tier={tier} onJoin={() => setJoining(tier)} onEdit={() => setEditing(tier)} />
       ))}
       {me && (
         <div className="buttons">
-          {tiers.length === 0 && <span className="small grow">Offer memberships, Patreon-style: supporters get a lounge and the projects you open to them.</span>}
+          {tiers.length === 0 && <span className="small grow">{t('tiers.offer.about')}</span>}
           <button onClick={() => setEditing('new')}>
-            <Icon name="plus" /> New tier…
+            <Icon name="plus" /> {t('tiers.new')}
           </button>
         </div>
       )}
@@ -416,6 +436,7 @@ export function SupportBox({ did, name, me }: { did: string; name: string; me: b
 
 /** In the Inbox: someone asking to join one of your tiers. */
 export function MembershipRequestCard({ request }: { request: MembershipRequestInfo }) {
+  const { t } = useTexts();
   const [months, setMonths] = useState('1');
   const name = request.name ?? shortDid(request.did);
   return (
@@ -423,30 +444,32 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
       <div className="window-body">
         <Avatar did={request.did} size={32} />
         <div className="grow">
-          <b>{name}</b> wants to join <b>{request.tier.name}</b> <span className="small muted">· {ago(request.time)}</span>
+          <T name="request.wants.join" values={{ name: <b>{name}</b>, tier: <b>{request.tier.name}</b> }} /> <span className="small muted">· {ago(request.time)}</span>
           {request.note && <div className="note">“{request.note}”</div>}
           {request.license && (
             <div className="small">
-              Gumroad license <code>{request.license.key.slice(0, 8)}…</code>:{' '}
-              {request.license.ok === undefined ? 'checking with Gumroad…' : request.license.ok ? 'valid' : `not let in automatically: ${request.license.reason}`}
-              {request.license.email && ` (bought as ${request.license.email})`}
+              {t('request.gumroad.license')} <code>{request.license.key.slice(0, 8)}…</code>:{' '}
+              {request.license.ok === undefined ? t('request.checking.gumroad') : request.license.ok ? t('request.valid') : t('request.not.auto', { reason: request.license.reason })}
+              {request.license.email && t('request.bought.as', { email: request.license.email })}
             </div>
           )}
           {request.payment && (
             <div className="small">
-              Paid on chain <code>{request.payment.tx.slice(0, 10)}…</code>:{' '}
-              {request.payment.ok === undefined ? 'reading it on chain…' : request.payment.ok ? `valid, ${request.payment.months} month${request.payment.months === 1 ? '' : 's'}` : `not let in automatically: ${request.payment.reason}`}
+              {t('request.paid.onchain')} <code>{request.payment.tx.slice(0, 10)}…</code>:{' '}
+              {request.payment.ok === undefined ? t('request.reading.chain') : request.payment.ok ? t('request.valid.months', { n: request.payment.months }) : t('request.not.auto', { reason: request.payment.reason })}
             </div>
           )}
         </div>
-        <AsyncButton onClick={() => attempt(() => api('declineMembership', { tier: request.tier.id, who: request.did }).then(bump))}>Decline</AsyncButton>
-        <select aria-label="How long" value={months} onChange={(e) => setMonths(e.target.value)}>
-          <option value="1">1 month</option>
-          <option value="3">3 months</option>
-          <option value="12">12 months</option>
+        <AsyncButton onClick={() => attempt(() => api('declineMembership', { tier: request.tier.id, who: request.did }).then(bump))}>{t('request.decline')}</AsyncButton>
+        <select aria-label={t('request.how.long')} value={months} onChange={(e) => setMonths(e.target.value)}>
+          {['1', '3', '12'].map((m) => (
+            <option key={m} value={m}>
+              {t('request.months', { n: Number(m) })}
+            </option>
+          ))}
         </select>
-        <AsyncButton className="default" onClick={() => attempt(() => api('grantMembership', { tier: request.tier.id, who: request.did, months: Number(months) }).then(bump), `${name} is in ${request.tier.name}`)}>
-          Let in
+        <AsyncButton className="default" onClick={() => attempt(() => api('grantMembership', { tier: request.tier.id, who: request.did, months: Number(months) }).then(bump), t('request.let.in.done', { name, tier: request.tier.name }))}>
+          {t('request.let.in')}
         </AsyncButton>
       </div>
     </div>
@@ -455,12 +478,13 @@ export function MembershipRequestCard({ request }: { request: MembershipRequestI
 
 /** Tiers you support, for the Memberships page. */
 export function MySupport() {
+  const { t } = useTexts();
   const { data } = useApi(() => api<TierInfo[]>('memberships'), []);
-  if (!data?.length) return <p className="small">You don't support anyone yet. Creators offer tiers on their hub.</p>;
+  if (!data?.length) return <p className="small">{t('tiers.support.none')}</p>;
   return (
     <>
-      {data.map((t) => (
-        <TierCard key={t.id} tier={t} />
+      {data.map((tier) => (
+        <TierCard key={tier.id} tier={tier} />
       ))}
     </>
   );

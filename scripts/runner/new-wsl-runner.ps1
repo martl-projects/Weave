@@ -11,7 +11,7 @@
 param(
   [string] $Distro = 'weave-runner',
   [string] $Location = "C:\WSL\weave-runner",
-  [string] $Repo = 'martldennl/Weave'
+  [string] $Repo = 'martl-projects/Weave'
 )
 
 $ErrorActionPreference = 'Stop'

@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { ClaudeCodeFollow, SessionInfo, SpaceInfo } from '@weave/node/client';
+import { SessionAvatar } from './avatar.tsx';
+import { SessionAvatarEditor } from './avatar-editor.tsx';
+import type { ClaudeCodeFollow, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { Page } from './views.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
 import { attempt, BlobImage, Modal } from './ui.tsx';
+import { t, useTexts } from './texts.tsx';
 
 export const folderName = (folder?: string) => folder?.split(/[\\/]/).filter(Boolean).pop();
 
@@ -12,20 +15,22 @@ export const running = (s: SessionInfo) => !!s.active && Date.now() - Date.parse
 
 const ref = (s: SessionInfo) => ({ provider: s.provider, id: s.id });
 
+const postTitle = (p: SessionInfo['stack'][number]['post']) => ('missing' in p ? t('session.post.hidden') : p.title);
+
 /** What a session is on now, and what it finished last. */
 function Doing({ session }: { session: SessionInfo }) {
+  const { t } = useTexts();
   const [top, ...waiting] = session.stack;
-  const title = (p: SessionInfo['stack'][number]['post']) => ('missing' in p ? 'a post you can’t see' : p.title);
   return (
     <span className="session-doing">
-      {top ? `on: ${title(top.post)}` : 'free'}
-      {waiting.length ? ` · ${waiting.length} waiting` : ''}
-      {session.last ? ` · last finished: ${title(session.last.post)} (${ago(session.last.time)})` : ''}
+      {top ? t('session.on', { title: postTitle(top.post) }) : t('session.free')}
+      {waiting.length ? t('session.waiting', { n: waiting.length }) : ''}
+      {session.last ? t('session.last.finished', { title: postTitle(session.last.post), time: session.last.time }) : ''}
     </span>
   );
 }
 
-const status = (s: SessionInfo) => (running(s) ? 'running' : s.active ? `active ${ago(s.active)}` : `changed ${ago(s.time)}`);
+const status = (s: SessionInfo) => (running(s) ? t('session.running.lc') : s.active ? t('session.active', { time: s.active }) : t('session.changed', { time: s.time }));
 
 type RoleChange = { role?: 'driver' | 'worker' | null; projects?: string[]; available?: boolean };
 const setRole = (session: SessionInfo, change: RoleChange) => attempt(() => api('setSessionRole', { session: ref(session), ...change }).then(bump));
@@ -38,39 +43,47 @@ const doingIn = (s: SessionInfo) => {
 
 /** One session, in two lines: what it is and what it's on, and its job. Its projects are the links on the right. */
 function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode }) {
+  const { t } = useTexts();
   const key = sessionKey(session).replace(':', '-');
   const [top, ...waiting] = session.stack;
-  const title = (p: SessionInfo['stack'][number]['post']) => ('missing' in p ? 'a post you can’t see' : p.title);
-  const meta = [folderName(session.folder), !running(session) && status(session), top && `on: ${title(top.post)}`, waiting.length && `${waiting.length} waiting`].filter(Boolean).join(' · ');
+  const meta = [folderName(session.folder), !running(session) && status(session), top && t('session.on', { title: postTitle(top.post) }), waiting.length && t('session.waiting.n', { n: waiting.length })].filter(Boolean).join(' · ');
   const show = session.host && bridge.showSession ? () => void attempt(() => bridge.showSession!(session.host!)) : undefined;
   const [naming, setNaming] = useState(false);
+  const [dressing, setDressing] = useState(false);
+  const { data: me } = useApi(() => api<Profile>('profile'), []);
   // A named session's title is its own; the Claude app's title is the note under it.
-  const about = [session.description, session.name && session.providerTitle && session.providerTitle !== session.title ? `In Claude: ${session.providerTitle}` : ''].filter(Boolean).join('\n');
+  const about = [session.description, session.name && session.providerTitle && session.providerTitle !== session.title ? t('session.in.claude', { title: session.providerTitle }) : ''].filter(Boolean).join('\n');
   return (
     <div className={`session-row${session.role ? ` is-${session.role}` : ''}${running(session) ? ' running' : ''}`}>
-      <span className="session-dot" title={running(session) ? 'Running' : status(session)} />
+      <span className="session-dot" title={running(session) ? t('session.running') : status(session)} />
+      {me && (
+        <button className="link session-face" onClick={() => setDressing(true)} title={t('session.avatar.change')} aria-label={t('word.avatar')}>
+          <SessionAvatar session={session} person={me.did} size={28} />
+        </button>
+      )}
+      {dressing && me && <SessionAvatarEditor session={session} me={me} onClose={() => setDressing(false)} />}
       <div className="session-text">
         {show ? (
-          <button className="session-title" onClick={show} title={about || 'Open in the Claude app'}>
-            {session.title ?? 'Untitled session'}
+          <button className="session-title" onClick={show} title={about || t('session.open.claude')}>
+            {session.title ?? t('session.untitled')}
           </button>
         ) : (
           <b className="session-title" title={about || undefined}>
-            {session.title ?? 'Untitled session'}
+            {session.title ?? t('session.untitled')}
           </b>
         )}
-        <span className="session-meta" title={session.last ? `Last finished: ${title(session.last.post)} (${ago(session.last.time)})` : undefined}>
-          {meta || 'free'}
+        <span className="session-meta" title={session.last ? t('session.last.finished.title', { title: postTitle(session.last.post), time: session.last.time }) : undefined}>
+          {meta || t('session.free')}
         </span>
       </div>
-      <button className="link session-name" onClick={() => setNaming(true)} title={session.name ? `Rename ${session.name}, or change what it is about` : 'Name this session'} aria-label="Name">
+      <button className="link session-name" onClick={() => setNaming(true)} title={session.name ? t('session.rename.title', { name: session.name }) : t('session.name.this')} aria-label={t('field.name')}>
         <Icon name="pencil" />
       </button>
       {naming && <NameSession session={session} onClose={() => setNaming(false)} />}
-      <select aria-label="Job" value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
-        <option value="">No job</option>
-        <option value="worker">Worker</option>
-        <option value="driver">Driver</option>
+      <select aria-label={t('session.job')} value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
+        <option value="">{t('session.job.none')}</option>
+        <option value="worker">{t('session.job.worker')}</option>
+        <option value="driver">{t('session.job.driver')}</option>
       </select>
       <input
         type="checkbox"
@@ -78,21 +91,18 @@ function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode 
         checked={!!session.available}
         disabled={!session.role}
         onChange={() => void setRole(session, { available: !session.available })}
-        title="Takes new work items"
-        aria-label="Takes new work items"
+        title={t('session.takes.items')}
+        aria-label={t('session.takes.items')}
       />
-      <label htmlFor={`available-${key}`} title="Takes new work items" />
+      <label htmlFor={`available-${key}`} title={t('session.takes.items')} />
       {port}
     </div>
   );
 }
 
 const ANY = 'any';
-const GROUPS = [
-  ['driver', 'Daily driver'],
-  ['worker', 'Workers'],
-  ['', 'Other sessions'],
-] as const;
+/** The groups of a harness's sessions, in order; their headings are session.group.<role>. */
+const GROUPS = ['driver', 'worker', ''] as const;
 /** The harnesses sessions come from, by provider; Claude Code is one of them (others, like Codex or a local model, can follow). */
 const HARNESSES: Record<string, string> = { 'claude-code': 'Claude Code' };
 const harnessName = (provider: string) => HARNESSES[provider] ?? provider;
@@ -109,6 +119,7 @@ interface Link {
  * for each project a session takes work from. Drag from one side's port to the other to link them; click a line to unlink.
  */
 function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; projects: SpaceInfo[]; onNew?(project?: string): void }) {
+  const { t } = useTexts();
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<Record<string, { x: number; y: number }>>({});
   const [hover, setHover] = useState<string>();
@@ -210,7 +221,7 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
   // One section per harness: Claude Code first (it's where new sessions start), then any other sessions come from.
   const harnesses = [...new Set([...(onNew ? ['claude-code'] : []), ...sessions.map((s) => s.provider)])].sort((a, b) => Number(b === 'claude-code') - Number(a === 'claude-code') || harnessName(a).localeCompare(harnessName(b)));
   const lit = (l: Link) => !hover || hover === `s:${sessionKey(l.session)}` || hover === `p:${l.project}`;
-  const port = (id: string) => <span className={`map-port${hold?.from === id ? ' held' : ''}`} data-port={id} onPointerDown={grab(id)} title="Drag to the other side to link" />;
+  const port = (id: string) => <span className={`map-port${hold?.from === id ? ' held' : ''}`} data-port={id} onPointerDown={grab(id)} title={t('session.drag.link')} />;
   const count = (id: string) => links.filter((l) => l.project === id && l.now !== 'only').length;
   const ends = (id: string) => ({
     'data-end': id,
@@ -222,7 +233,7 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
   return (
     <div className={`session-map${hold ? ' holding' : ''}`} ref={box}>
       <div className="map-side">
-        <div className="map-head">Agent sessions</div>
+        <div className="map-head">{t('sessions.agent.sessions')}</div>
         {harnesses.map((provider) => {
           const mine = sessions.filter((s) => s.provider === provider);
           return (
@@ -231,12 +242,12 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
                 <span className="grow">{harnessName(provider)}</span>
                 {mine.length > 0 && <span className="small">{mine.length}</span>}
               </div>
-              {GROUPS.map(([role, heading]) => {
+              {GROUPS.map((role) => {
                 const group = mine.filter((s) => (s.role ?? '') === role);
                 return (
                   group.length > 0 && (
                     <div key={role} className="map-group">
-                      <div className="map-group-head">{heading}</div>
+                      <div className="map-group-head">{t(`session.group.${role || 'other'}`)}</div>
                       {group.map((s) => {
                         const id = `s:${sessionKey(s)}`;
                         return (
@@ -254,8 +265,8 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
                   <div className="session-row">
                     <span className="session-plus">+</span>
                     <div className="session-text">
-                      <b className="session-title">New Claude Code session…</b>
-                      <span className="session-meta">In a folder, with a job; or drop a project here</span>
+                      <b className="session-title">{t('session.new.claude')}</b>
+                      <span className="session-meta">{t('session.new.hint')}</span>
                     </div>
                   </div>
                 </div>
@@ -265,8 +276,8 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
         })}
       </div>
       <div className="map-side">
-        <div className="map-head">Weave projects</div>
-        {[{ id: ANY, name: 'Any project' } as SpaceInfo, ...projects].map((p) => {
+        <div className="map-head">{t('sessions.weave.projects')}</div>
+        {[{ id: ANY, name: t('session.any.project') } as SpaceInfo, ...projects].map((p) => {
           const id = `p:${p.id}`;
           const n = count(p.id);
           return (
@@ -292,9 +303,7 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
               {l.now && <circle cx={b.x - 12} cy={b.y} r={3} className="now" />}
               {l.now !== 'only' && (
                 <path d={d} className="hit" onClick={() => void unlink(l)}>
-                  <title>
-                    Unlink: {l.session.title ?? 'this session'} no longer takes work from {l.project === ANY ? 'any project' : projects.find((p) => p.id === l.project)?.name}
-                  </title>
+                  <title>{t('session.unlink', { session: l.session.title ?? t('session.this'), project: l.project === ANY ? t('session.any.project.lc') : projects.find((p) => p.id === l.project)?.name })}</title>
                 </path>
               )}
             </g>
@@ -308,12 +317,17 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
 
 /** Your Claude sessions and their jobs: the daily driver, and the workers that take items from the app and from the driver. */
 export function SessionsView() {
+  const { t } = useTexts();
   const { data: sessions } = useApi(() => api<SessionInfo[]>('activeSessions', { hours: 72 }), []);
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const projects = (spaces ?? []).filter((s) => s.kind === 'project' && !s.closed);
   const [all, setAll] = useState(false);
   const { data: follow } = useApi(() => api<ClaudeCodeFollow>('claudeCode'), []);
   const toggleFollow = () => attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }).then(bump));
+  // Show the overlay: whether the side panel comes up beside Claude Code, on this device (only in the app).
+  const [overlay, setOverlay] = useState<boolean>();
+  useEffect(() => void bridge.overlay?.().then(setOverlay, () => {}), []);
+  const toggleOverlay = () => attempt(() => bridge.overlay!(!overlay).then(setOverlay));
   // The New session dialog, for a project or any.
   const [starting, setStarting] = useState<{ project?: string }>();
   // Sessions with a job first; the others only from the last day, unless you ask for all.
@@ -323,28 +337,36 @@ export function SessionsView() {
     <Page
       title={
         <>
-          <Icon name="code" /> Sessions
+          <Icon name="code" /> {t('nav.sessions')}
         </>
       }
       actions={
         <>
-          <span className="info-tip" tabIndex={0} aria-label="How linking works">
+          <span className="info-tip" tabIndex={0} aria-label={t('sessions.how.linking')}>
             <Icon name="info" />
             <span className="info-pop small" role="tooltip">
-              Link a session to a project by dragging from one side to the other: it then takes that project's work items, from you (Ctrl+click) and from your
-              daily driver. Click a line to unlink. A dot marks the project a session is working in now.
+              {t('sessions.how.linking.text')}
             </span>
           </span>
           <input type="checkbox" id="follow-claude-code" checked={!!follow?.on} disabled={!follow} onChange={() => void toggleFollow()} />
-          <label htmlFor="follow-claude-code" title={follow ? `Reads the agent's answers in ${follow.dir} and the Claude app's log, on this computer only` : undefined}>
-            Follow Claude Code{follow && !follow.found ? ' (not found)' : ''}
+          <label htmlFor="follow-claude-code" title={follow ? t('sessions.follow.title', { dir: follow.dir }) : undefined}>
+            {t('sessions.follow')}
+            {follow && !follow.found ? t('sessions.follow.not.found') : ''}
           </label>
+          {bridge.overlay && (
+            <>
+              <input type="checkbox" id="show-overlay" checked={!!overlay} disabled={overlay === undefined} onChange={() => void toggleOverlay()} />
+              <label htmlFor="show-overlay" title={t('sessions.overlay.title')}>
+                {t('sessions.overlay')}
+              </label>
+            </>
+          )}
           <input type="checkbox" id="sessions-all" checked={all} onChange={() => setAll((a) => !a)} />
-          <label htmlFor="sessions-all">Last 3 days</label>
+          <label htmlFor="sessions-all">{t('sessions.last.days')}</label>
         </>
       }
     >
-      {sessions && !ordered.length && <p className="empty">No Claude Code sessions here yet. Turn on Follow Claude Code to see them.</p>}
+      {sessions && !ordered.length && <p className="empty">{t('sessions.none')}</p>}
       {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
       {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
     </Page>
@@ -353,6 +375,7 @@ export function SessionsView() {
 
 /** Name a session (a session names itself once; here you rename it), and say what it is about. */
 function NameSession({ session, onClose }: { session: SessionInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [name, setName] = useState(session.name ?? '');
   const [about, setAbout] = useState(session.about ?? '');
   const [description, setDescription] = useState(session.description ?? '');
@@ -368,30 +391,27 @@ function NameSession({ session, onClose }: { session: SessionInfo; onClose(): vo
     }
   };
   return (
-    <Modal title={session.name ? `Rename ${session.name}` : 'Name this session'} onClose={onClose}>
+    <Modal title={session.name ? t('session.rename', { name: session.name }) : t('session.name.this')} onClose={onClose}>
       <form className="form" onSubmit={(e) => void save(e)}>
-        <p className="small">
-          A session names itself once, and goes by “name · about” everywhere in Weave. The name is permanent for the session: only you change it here. Its title in the Claude
-          app is the session's to set{session.providerTitle ? ` (now “${session.providerTitle}”)` : ''}.
-        </p>
+        <p className="small">{t('session.name.about', { now: session.providerTitle ? t('session.name.now', { title: session.providerTitle }) : '' })}</p>
         <div className="field-row-stacked">
-          <label htmlFor="session-name">Name (one short word nobody around you has)</label>
+          <label htmlFor="session-name">{t('session.name.field')}</label>
           <input id="session-name" required minLength={2} maxLength={24} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="session-about">About (one line on what it specializes in)</label>
+          <label htmlFor="session-about">{t('session.about.field')}</label>
           <input id="session-about" maxLength={100} value={about} onChange={(e) => setAbout(e.target.value)} />
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="session-description">Description (its job at length)</label>
+          <label htmlFor="session-description">{t('session.description.field')}</label>
           <textarea id="session-description" rows={3} maxLength={1000} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default" disabled={busy || name.trim().length < 2}>
-            Save
+            {t('button.save')}
           </button>
         </div>
       </form>
@@ -401,6 +421,7 @@ function NameSession({ session, onClose }: { session: SessionInfo; onClose(): vo
 
 /** Start a Claude Code session in a folder, with a job: it takes work from the project (or any) once the Claude app says which session it is. */
 function NewSession({ project: initial, projects, following, onClose }: { project?: string; projects: SpaceInfo[]; following: boolean; onClose(): void }) {
+  const { t } = useTexts();
   const [project, setProject] = useState(initial ?? '');
   const [folder, setFolder] = useState('');
   const [role, setRole] = useState<'worker' | 'driver' | ''>('worker');
@@ -420,7 +441,7 @@ function NewSession({ project: initial, projects, following, onClose }: { projec
     };
   }, [project]);
   const choose = async () => {
-    const picked = await bridge.pickFolder('Folder for the new session (Claude Code works in it)');
+    const picked = await bridge.pickFolder(t('session.folder.pick'));
     if (picked) setFolder(picked);
   };
   const start = async (e: React.FormEvent) => {
@@ -431,12 +452,12 @@ function NewSession({ project: initial, projects, following, onClose }: { projec
     if (ok !== undefined) onClose();
   };
   return (
-    <Modal title="New Claude Code session" onClose={onClose}>
+    <Modal title={t('session.new.title')} onClose={onClose}>
       <form className="form" onSubmit={(e) => void start(e)}>
         <div className="field-row-stacked">
-          <label htmlFor="new-session-project">Project</label>
+          <label htmlFor="new-session-project">{t('session.project')}</label>
           <select id="new-session-project" value={project} onChange={(e) => setProject(e.target.value)}>
-            <option value="">Any project</option>
+            <option value="">{t('session.any.project')}</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -445,33 +466,33 @@ function NewSession({ project: initial, projects, following, onClose }: { projec
           </select>
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="new-session-folder">Folder (Claude Code works in it)</label>
+          <label htmlFor="new-session-folder">{t('session.folder')}</label>
           <div className="field-row">
             <input id="new-session-folder" className="grow" required value={folder} onChange={(e) => setFolder(e.target.value)} />
             <button type="button" onClick={() => void choose()}>
-              Choose…
+              {t('button.choose')}
             </button>
           </div>
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="new-session-role">Job</label>
+          <label htmlFor="new-session-role">{t('session.job')}</label>
           <select id="new-session-role" value={role} onChange={(e) => setRole(e.target.value as typeof role)}>
-            <option value="worker">Worker</option>
-            <option value="driver">Daily driver</option>
-            <option value="">No job</option>
+            <option value="worker">{t('session.job.worker')}</option>
+            <option value="driver">{t('session.job.daily.driver')}</option>
+            <option value="">{t('session.job.none')}</option>
           </select>
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="new-session-text">First message (optional; it waits in the text box, not sent)</label>
+          <label htmlFor="new-session-text">{t('session.first.message')}</label>
           <textarea id="new-session-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} />
         </div>
-        {role && !following && <p className="small">Turn on Follow Claude Code first: Weave gives the session its job once it sees it in the Claude app.</p>}
+        {role && !following && <p className="small">{t('session.follow.first')}</p>}
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default" disabled={busy || !folder.trim()}>
-            Start session
+            {t('session.start')}
           </button>
         </div>
       </form>
@@ -497,6 +518,7 @@ export function chooseWorker(title: string, workers: SessionInfo[]): Promise<Wor
 
 /** Where chooseWorker() shows its window; mounted once. */
 export function WorkerChooser() {
+  const { t } = useTexts();
   const [asking, setAsking] = useState<Asking>();
   useEffect(() => {
     showChooser = setAsking;
@@ -510,28 +532,28 @@ export function WorkerChooser() {
     setAsking(undefined);
   };
   return (
-    <Modal title={`Work on “${asking.title}”`} onClose={() => done()}>
-      <p className="small">Who takes it? It goes on top of that session's stack, and the session opens in Claude with the message in its text box.</p>
+    <Modal title={t('work.on.title', { title: asking.title })} onClose={() => done()}>
+      <p className="small">{t('work.who.takes')}</p>
       <ul className="worker-list">
         {asking.workers.map((w, i) => (
           <li key={`${w.provider}:${w.id}`}>
             <button className={`worker${i === 0 ? ' default' : ''}`} autoFocus={i === 0} onClick={() => done({ session: ref(w) })} disabled={!w.host}>
               <b>
-                {w.title ?? 'Untitled session'}
-                {w.role === 'driver' ? ' (daily driver)' : ''}
+                {w.title ?? t('session.untitled')}
+                {w.role === 'driver' ? t('session.daily.driver.suffix') : ''}
               </b>
-              <span className="small">{[folderName(w.folder), status(w), w.host ? '' : 'not seen in the Claude app yet'].filter(Boolean).join(' · ')}</span>
+              <span className="small">{[folderName(w.folder), status(w), w.host ? '' : t('session.not.seen')].filter(Boolean).join(' · ')}</span>
               <Doing session={w} />
             </button>
           </li>
         ))}
       </ul>
       <div className="buttons">
-        <button onClick={() => done()}>Cancel</button>
-        <button onClick={() => done({ usual: true })} title="Its latest session, or the daily driver for your desk">
-          Where it was last
+        <button onClick={() => done()}>{t('button.cancel')}</button>
+        <button onClick={() => done({ usual: true })} title={t('work.where.last.title')}>
+          {t('work.where.last')}
         </button>
-        <button onClick={() => done({ new: true })}>New session…</button>
+        <button onClick={() => done({ new: true })}>{t('work.new.session')}</button>
       </div>
     </Modal>
   );

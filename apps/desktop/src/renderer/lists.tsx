@@ -1,11 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { KeyvaultInfo, ServiceActionInfo, ServiceListInfo, SpaceInfo } from '@weave/node/client';
+import type { TextPackage, TextRecord } from '@weave/core';
+import { useServiceTexts } from './servicetexts.ts';
 import { AccountProofDialog } from './accounts.tsx';
 import { Icon, isIconName, type IconName } from './icons.tsx';
 import { HandDialog } from './keyvaults.tsx';
 import { api, bump, navigate, onItem } from './lib.ts';
 import { ActionDialog, askAndWait, SERVICE_CHANGED } from './services.tsx';
 import { ask, attempt, AsyncButton } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /** One row of a list: its icon, title, a badge, a quieter line, its main button (or what's said instead), its icon buttons, and taking it out. */
 export interface ItemRow {
@@ -33,6 +36,7 @@ const PAGE = 10;
  * searching and the next page ask it.
  */
 export function ItemList({ title, add, rows, empty, error, more, query }: { title: string; add?: { label: string; run(): void }; rows?: ItemRow[]; empty: string; error?: string; more?(): void; query?(text: string): void }) {
+  const { t } = useTexts();
   const [text, setText] = useState('');
   const [pages, setPages] = useState(1);
   const searching = !!query || (rows?.length ?? 0) > 8;
@@ -41,30 +45,30 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
   // Searching its service: once typing pauses.
   useEffect(() => {
     if (!query) return;
-    const t = setTimeout(() => query(text.trim()), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => query(text.trim()), 300);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
   return (
     <div className="item-list">
       {/* Its title (none where the page titles it already), its search, and +. */}
       {(title || searching || add) && (
-      <div className="item-list-head">
-        <b className="grow">{title}</b>
-        {searching && <input className="item-search" type="search" placeholder="Search…" value={text} onChange={(e) => (setText(e.target.value), setPages(1))} />}
-        {add && (
-          <button className="icon-button item-add" title={add.label} aria-label={add.label} onClick={add.run}>
-            +
-          </button>
-        )}
-      </div>
+        <div className="item-list-head">
+          <b className="grow">{title}</b>
+          {searching && <input className="item-search" type="search" placeholder={t('list.search')} value={text} onChange={(e) => (setText(e.target.value), setPages(1))} />}
+          {add && (
+            <button className="icon-button item-add" title={add.label} aria-label={add.label} onClick={add.run}>
+              +
+            </button>
+          )}
+        </div>
       )}
       {error ? (
         <p className="small error-text">{error}</p>
       ) : !shown ? (
-        <p className="small muted">Looking…</p>
+        <p className="small muted">{t('looking')}</p>
       ) : !shown.length ? (
-        <p className="small muted">{text.trim() ? 'Nothing matches.' : empty}</p>
+        <p className="small muted">{text.trim() ? t('addservice.nothing.matches') : empty}</p>
       ) : (
         shown.map((r) => (
           <div className="item-row" key={r.key}>
@@ -76,9 +80,9 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
               {r.detail && <div className="small muted">{r.detail}</div>}
             </div>
             {r.main}
-            {r.tools?.map((t) => (
-              <button key={t.label} className="icon-button" title={t.label} aria-label={t.label} onClick={t.run}>
-                <Icon name={t.icon} />
+            {r.tools?.map((tool) => (
+              <button key={tool.label} className="icon-button" title={tool.label} aria-label={tool.label} onClick={tool.run}>
+                <Icon name={tool.icon} />
               </button>
             ))}
             {r.remove && (
@@ -92,39 +96,49 @@ export function ItemList({ title, add, rows, empty, error, more, query }: { titl
       {/* The next page: kept here, or asked of its service. */}
       {!query && found && found.length > pages * PAGE && (
         <button className="item-more" onClick={() => setPages((n) => n + 1)}>
-          Show {Math.min(PAGE, found.length - pages * PAGE)} more of {found.length}
+          {t('list.show.more.of', { n: Math.min(PAGE, found.length - pages * PAGE), total: found.length })}
         </button>
       )}
       {more && (
         <button className="item-more" onClick={more}>
-          Show more
+          {t('list.show.more')}
         </button>
       )}
     </div>
   );
 }
 
+/** A text as a service answers it: a string, or {name, values} resolved from its own package in the reader's language (docs/localization.md). */
+type ServiceText = string | TextRecord;
+
 /** An item as a service's list action answers it. */
 interface ServiceItem {
   id: string;
   /** One of Weave's icons, by name. */
   icon?: string;
-  title: string;
-  badge?: string;
-  detail?: string;
+  title: ServiceText;
+  badge?: ServiceText;
+  detail?: ServiceText;
   url?: string;
-  done?: string;
+  done?: ServiceText;
   use?: false;
   remove?: false;
   /** Its other buttons: a small one with an icon, or one in words. */
-  more?: Array<{ action: string; label: string; icon?: string; confirm?: true }>;
+  more?: Array<{ action: string; label: ServiceText; icon?: string; confirm?: true }>;
 }
 
 /** What a list action answers: all its items, or a page of them and where the next starts (it pages itself). */
 type ServicePage = ServiceItem[] | { items: ServiceItem[]; next?: string };
 
 /** A service's list (its manifest's lists): its items asked of it, its buttons as yours to use. */
-export function ServiceList({ space, service, list, actions }: { space: { id: string; name: string }; service: { did: string; name: string }; list: ServiceListInfo; actions: ServiceActionInfo[] }) {
+export function ServiceList({ space, service, list, actions }: { space: { id: string; name: string }; service: { did: string; name: string; texts?: TextPackage[] }; list: ServiceListInfo; actions: ServiceActionInfo[] }) {
+  const { t } = useTexts();
+  const { ts, tr } = useServiceTexts(service.texts);
+  // Its words, as its package says them: the title, what one is, and its buttons.
+  const title = ts(`lists.${list.name}.title`, list.title);
+  const item = list.item ? ts(`lists.${list.name}.item`, list.item) : undefined;
+  const useLabel = list.use ? ts(`lists.${list.name}.use.label`, list.use.label) : undefined;
+  const text = (value: ServiceText | undefined): string => tr(value) ?? '';
   const [items, setItems] = useState<ServiceItem[]>();
   const [error, setError] = useState<string>();
   // A list its service pages itself: where its next page starts, and what's searched for.
@@ -164,15 +178,16 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
   }, [service.did]);
   const mine = (name: string) => !!actions.find((a) => a.name === name)?.mine;
   const act = (action: string, id: string, label: string) => attempt(() => askAndWait(space.id, service, action, { id }, label).then((r) => (again(), bump(), r.text ?? '')));
+  const removeLabel = list.remove?.label ? ts(`lists.${list.name}.remove.label`, list.remove.label) : t('button.remove');
   const add = list.add?.mine
     ? {
-        label: list.add.label ?? `Add ${list.item ?? 'one'}`,
+        label: list.add.label ? ts(`lists.${list.name}.add.label`, list.add.label) : t('list.add.item', { item: item ?? t('list.one') }),
         run: () =>
           void (async () => {
             if (list.add!.hand) {
               // From your keyvault for that platform: yours alone to hand to a project.
               const vault = (await api<KeyvaultInfo[]>('keyvaults')).find((k) => k.platform === list.add!.hand && k.added);
-              if (!vault?.apps.length) return void ((await ask(`First add your ${list.add!.hand} keyvault in Keys & devices, and make an app there: it holds your access, and you hand projects what it reaches.`, 'Go there')) && navigate('#/keys'));
+              if (!vault?.apps.length) return void ((await ask(t('list.keyvault.first', { platform: list.add!.hand }), t('list.go.there'))) && navigate('#/keys'));
               setHanding(vault);
             } else {
               const a = actions.find((x) => x.name === list.add!.action);
@@ -181,52 +196,55 @@ export function ServiceList({ space, service, list, actions }: { space: { id: st
           })(),
       }
     : undefined;
-  const rows = items?.map(
-    (it): ItemRow => ({
+  const rows = items?.map((it): ItemRow => {
+    const title = text(it.title);
+    const detail = text(it.detail);
+    return {
       key: it.id,
       title: it.url ? (
         <a href={it.url} target="_blank" rel="noopener noreferrer">
-          {it.title}
+          {title}
         </a>
       ) : (
-        it.title
+        title
       ),
       ...(isIconName(it.icon) ? { icon: it.icon } : {}),
-      ...(it.badge ? { badge: it.badge } : {}),
-      search: `${it.title} ${it.detail ?? ''}`,
-      ...(it.detail ? { detail: it.detail } : {}),
+      ...(it.badge ? { badge: text(it.badge) } : {}),
+      search: `${title} ${detail}`,
+      ...(detail ? { detail } : {}),
       tools: (it.more ?? [])
         .filter((m) => isIconName(m.icon) && mine(m.action))
-        .map((m) => ({ icon: m.icon as IconName, label: m.label, run: () => void (async () => (!m.confirm || (await ask(`${m.label}: ${it.title}?`, m.label))) && act(m.action, it.id, `${m.label}: ${it.title}`))() })),
+        .map((m) => {
+          const label = text(m.label);
+          return { icon: m.icon as IconName, label, run: () => void (async () => (!m.confirm || (await ask(`${label}: ${title}?`, label))) && act(m.action, it.id, `${label}: ${title}`))() };
+        }),
       main: (
         <>
           {(it.more ?? [])
             .filter((m) => !isIconName(m.icon) && mine(m.action))
             .map((m) => (
-              <AsyncButton key={m.action} onClick={() => act(m.action, it.id, `${m.label}: ${it.title}`)}>
-                {m.label}
+              <AsyncButton key={m.action} onClick={() => act(m.action, it.id, `${text(m.label)}: ${title}`)}>
+                {text(m.label)}
               </AsyncButton>
             ))}
           {it.done ? (
-            <span className="small muted">{it.done}</span>
+            <span className="small muted">{text(it.done)}</span>
           ) : (
             list.use?.mine &&
             it.use !== false && (
-              <AsyncButton className="default" onClick={async () => void (list.use!.account ? setProving(list.use!.account) : await act(list.use!.action!, it.id, `${list.use!.label}: ${it.title}`))}>
-                {list.use.label}
+              <AsyncButton className="default" onClick={async () => void (list.use!.account ? setProving(list.use!.account) : await act(list.use!.action!, it.id, `${useLabel}: ${title}`))}>
+                {useLabel}
               </AsyncButton>
             )
           )}
         </>
       ),
-      ...(list.remove?.mine && it.remove !== false
-        ? { remove: { label: list.remove.label ?? 'Remove', run: () => void (async () => (await ask(`${list.remove!.label ?? 'Remove'}: ${it.title}?`, list.remove!.label ?? 'Remove')) && act(list.remove!.action, it.id, `${list.remove!.label ?? 'Remove'}: ${it.title}`))() } }
-        : {}),
-    }),
-  );
+      ...(list.remove?.mine && it.remove !== false ? { remove: { label: removeLabel, run: () => void (async () => (await ask(`${removeLabel}: ${title}?`, removeLabel)) && act(list.remove!.action, it.id, `${removeLabel}: ${title}`))() } } : {}),
+    };
+  });
   return (
     <>
-      <ItemList title={list.title} add={add} rows={rows} error={error} empty={`No ${list.item ?? 'item'}s yet.`} {...(more ? { more } : {})} {...(query ? { query } : {})} />
+      <ItemList title={title} add={add} rows={rows} error={error} empty={t('list.none.yet', { item: item ?? t('list.item') })} {...(more ? { more } : {})} {...(query ? { query } : {})} />
       {proving && <AccountProofDialog space={{ id: space.id, name: space.name } as SpaceInfo} platform={proving} onClose={() => (setProving(undefined), again())} />}
       {handing && <HandDialog vault={handing} project={{ id: space.id, name: space.name.replace(/^p\//, '') }} onClose={() => (setHanding(undefined), again())} />}
       {using && <ActionDialog space={space} service={service} action={using} onClose={() => (setUsing(undefined), again())} />}

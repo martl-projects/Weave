@@ -171,17 +171,25 @@ export async function delegatedToken(config: SignInConfig, refreshToken: string,
   return { accessToken: answer.access_token, expires: Date.now() + Math.max(60, (answer.expires_in ?? 3600) - 60) * 1000, ...(answer.refresh_token ? { refreshToken: answer.refresh_token } : {}) };
 }
 
+/**
+ * The program that opens a page, with its arguments: BROWSER's (a program and its own arguments, "node C:\path\open.mjs",
+ * then the address), else the system's. On Windows that's explorer, which hands the address to the default browser
+ * the way a click would; rundll32's url.dll read the old association instead, often still Edge whatever the person
+ * chose (Phil, 2.11.2026). No shell either way, so the address's & stays whole. Undefined: BROWSER=none, only print it.
+ */
+export function browserCommand(url: string, browser = process.env.BROWSER, platform: NodeJS.Platform = process.platform): [string, string[]] | undefined {
+  if (browser === 'none') return undefined;
+  if (browser) {
+    const [command, ...rest] = (browser.match(/"[^"]+"|\S+/g) ?? []).map((part) => part.replace(/^"|"$/g, ''));
+    return [command, [...rest, url]];
+  }
+  return platform === 'win32' ? ['explorer.exe', [url]] : platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+}
+
 /** Open a page in the system browser; BROWSER (as many tools read it) picks another program, or `none` to only print it. */
 export function openInBrowser(url: string): void {
   if (!isWebAddress(url)) throw new Error(`won't open ${url}: only https addresses open in the browser`);
-  const chosen = process.env.BROWSER;
-  if (chosen === 'none') return;
-  if (chosen) {
-    // A program and its own arguments ("node C:\path\open.mjs"), then the address: no shell, so the address's & stays whole.
-    const [command, ...rest] = (chosen.match(/"[^"]+"|\S+/g) ?? []).map((part) => part.replace(/^"|"$/g, ''));
-    return void spawn(command, [...rest, url], { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
-  }
-  const [command, args] =
-    process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
-  spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
+  const chosen = browserCommand(url);
+  if (!chosen) return;
+  spawn(chosen[0], chosen[1], { detached: true, stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
 }

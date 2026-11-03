@@ -158,7 +158,8 @@ describe('daemons', () => {
     const dir = tempHome();
     WeaveNode.init(name, dir);
     const home = resolveHome(dir);
-    saveConfig(home, { ...loadConfig(home), topics: ['friends'], bootstrap: testnet.bootstrap });
+    // Strangers who meet on an open topic: no link between them, so without the firewall (it would turn them away).
+    saveConfig(home, { ...loadConfig(home), topics: ['friends'], bootstrap: testnet.bootstrap, firewall: false });
     return dir;
   }
 

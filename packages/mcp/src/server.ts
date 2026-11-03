@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { checkServicePackage, timeGiven } from '@weave/core';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join } from 'node:path';
 import { z } from 'zod';
 import { MCP_APP_MIME, POST_CARD_HTML, POST_CARD_URI } from './postcard.ts';
 import { checkManifest, MANIFEST_EXAMPLE, MANIFEST_RULES, noAgent, releaseWorkflow, wasmReleaseWorkflow, type Backend, type FeedItem, type SessionInfo, type SessionRef } from '@weave/node';
@@ -92,6 +93,8 @@ export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and thei
 Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example publishing posts and releasing its app: weave.post and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
 Your session has a permanent name. weave_whoami says whether yours has one yet (session.name). If not, pick one now: one short pronounceable word, like a person's first name but nobody's around you ("Skala", "Heddle"), and say in one line what this session specializes in (about: "Service-, Netzwerk- und Last-Review"), then call weave_name_session. Weave refuses a name that is taken and lists the names around you: pick another. The name is for good and survives restarts and resumes: never ask to change it, your person renames a session in Weave's Sessions view. Weave shows the session as "name · about" everywhere; set your harness's own session title to that too, once (in the Claude app with its session-title tool; in a terminal ask your person to /rename). Change about and description when your job changes, not per work item.
+
+Scenes on posts: everyone has an avatar (their own, or the one their key makes). A post without an image shows your person's avatar in a scene: a pose with things around it. When you post with weave_submit and give no image, pick the scene that fits what the post says (scene: idea for an idea, bug for a bug report, shipped for a release, question, thinking, coding, celebrate…); left out, Weave picks a calm one; scene: none shows no picture at all.
 
 Linking to posts: every post has a url (http://weave.localhost:7710/project~id/board/post/title). When you mention a post to your person, write it as a Markdown link with that url and the post's title, e.g. [Links from Claude Code](http://weave.localhost:7710/weave~NqgQ/ideas/aq1i/links-from-claude-code): one click shows the post next to the chat, with a button that opens it in the Weave app. The url works for anyone who runs Weave and can see the post; tools that take a post accept it too. After creating or changing posts, also call weave_show with them: they appear as cards in the Mentions panel beside your person's work.
 
@@ -379,7 +382,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_submit',
     {
       title: 'Submit a post',
-      description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal.",
+      description: "Post into a community, or into a project's board (default: ideas). In an issues board it opens an issue, in a proposals board a proposal. Without an image, give it a scene that fits what it says (scene): your person's avatar in a pose, like idea, bug or shipped.",
       inputSchema: {
         space: z.string().describe('Project or community name or id'),
         title: z.string().min(1).max(200),
@@ -391,7 +394,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
       },
     },
     run(async ({ space, title, text, link, board, prompt, scene }: { space: string; title: string; text?: string; link?: string; board?: string; prompt?: string; scene?: string }) =>
-      backend.submit({ space, board, title, text, link, prompt, scene, as }),
+      backend.submit({ space, board, title, text, link, prompt, scene, as, ...(options.session ? { session: options.session } : {}) }),
     ),
   );
 
@@ -521,7 +524,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     },
     run(async ({ who, text, reply_to }: { who: string; text: string; reply_to?: string }) => {
       const chat = await backend.openChat(who);
-      return backend.say({ space: chat.id, text, replyTo: reply_to, as });
+      return backend.say({ space: chat.id, text, replyTo: reply_to, as, ...(options.session ? { session: options.session } : {}) });
     }),
   );
 
@@ -553,17 +556,24 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     'weave_chat',
     {
       title: 'Read chat',
-      description: "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat. A message's file (name, size, type, ref) is a file or image attached: weave_get_file saves it here.",
+      description:
+        "Recent chat messages, oldest first, with replies and reactions: in a project's, group's or community's channels (omit channel for all), or in one post's chat. Keep it small: since (and until) narrow the time range, people_only leaves out what agents wrote (yours included), limit caps the count (the last ones). A message's file (name, size, type, ref) is a file or image attached: weave_get_file saves it here.",
       inputSchema: {
         space: z.string().optional().describe('Project, group or community name or id'),
         channel: z.string().optional(),
         post: z.string().min(6).optional().describe('Read this post\'s chat instead of a channel'),
         limit: z.number().int().min(1).max(200).optional(),
+        since: z.string().optional().describe('Only from this time on: ISO 8601, or how long ago, like 30m, 2h, 3d'),
+        until: z.string().optional().describe('Only up to this time: ISO 8601, or how long ago, like 1h'),
+        people_only: z.boolean().optional().describe('Only what people wrote themselves, not their agents'),
       },
       annotations: { readOnlyHint: true },
     },
-    run(async ({ space, channel, post, limit }: { space?: string; channel?: string; post?: string; limit?: number }) => backend.messages(space, { channel, post, limit: limit ?? 50 })),
+    run(async ({ space, channel, post, limit, since, until, people_only }: { space?: string; channel?: string; post?: string; limit?: number; since?: string; until?: string; people_only?: boolean }) =>
+      backend.messages(space, { channel, post, limit: limit ?? 50, ...(since ? { since: timeGiven(since) } : {}), ...(until ? { until: timeGiven(until) } : {}), ...(people_only ? { people: true } : {}) }),
+    ),
   );
+
 
   /** Media types by extension for files attached to chat; anything else goes as application/octet-stream. */
   const FILE_TYPES: Record<string, string> = {
@@ -595,7 +605,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         if (size > 2 * 1024 * 1024) throw new Error(`${file} is ${(size / 1024 / 1024).toFixed(1)} MB; files are at most 2 MB`);
         attachment = await backend.putFile({ data: readFileSync(file).toString('base64'), name: basename(file), type: FILE_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream' });
       }
-      return backend.say({ space, post, text: text ?? '', channel, replyTo: reply_to, as, ...(attachment ? { file: attachment } : {}) });
+      return backend.say({ space, post, text: text ?? '', channel, replyTo: reply_to, as, ...(attachment ? { file: attachment } : {}), ...(options.session ? { session: options.session } : {}) });
     }),
   );
 
@@ -746,16 +756,18 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Open Weave for your person',
       description:
-        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub. Tell them what to do there.",
+        "Bring the Weave app on your person's computer to the front, for a step only they can take: 'space' opens a space; 'inbox' opens the Inbox; 'post' opens a post (its id or url); 'person' opens someone's hub; 'keyvault' opens Keys & devices at their GitHub keyvault, with the dialog to make their GitHub App there (one click, on GitHub), or, with space (a project), the dialog to hand that project a repository; 'service' opens a project's (space) services: with service, one it runs (its name or did), or its Add a service catalog with that picked (one Weave ships, like github-releases or websites; a setup pack; a release), one click from added. Tell them what to do there.",
       inputSchema: {
-        what: z.enum(['space', 'inbox', 'post', 'person']),
-        space: z.string().optional().describe('Group, tier or project name or id'),
+        what: z.enum(['space', 'inbox', 'post', 'person', 'keyvault', 'service']),
+        space: z.string().optional().describe('Group, tier or project name or id (for keyvault: the project to hand a repository to; for service: the project)'),
         post: z.string().optional().describe('For post: its id or url'),
         who: z.string().optional().describe('For person: name, did:key or person url'),
+        keyvault: z.string().optional().describe('For keyvault: which one, by platform (github, the default) or name'),
+        service: z.string().optional().describe("For service: one the project runs (name or did), or what to pick in its catalog (a shipped service's name, a setup pack, a release's app); left out, the catalog"),
       },
     },
-    run(async ({ what, space, post, who }: { what: 'space' | 'inbox' | 'post' | 'person'; space?: string; post?: string; who?: string }) => ({
-      ...(await backend.openInApp({ what, space, post, who })),
+    run(async ({ what, space, post, who, keyvault, service }: { what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service'; space?: string; post?: string; who?: string; keyvault?: string; service?: string }) => ({
+      ...(await backend.openInApp({ what, space, post, who, keyvault, service, ...(as ? { as } : {}) })),
       note: 'Weave is coming to the front on their computer (if the app is open). Tell your person what to do there.',
     })),
   );
@@ -981,15 +993,36 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     ),
   );
 
+  /** The packages next to a manifest (weave.texts.<lang>.json, docs/localization.md): each as read, by file name. */
+  const textsNextTo = (file: string): Array<{ file: string; package: unknown }> => {
+    const dir = dirname(file);
+    let names: string[];
+    try {
+      names = readdirSync(dir).filter((n) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)*\.json$/.test(n)).sort();
+    } catch {
+      return [];
+    }
+    return names.map((n) => {
+      try {
+        return { file: n, package: JSON.parse(readFileSync(join(dir, n), 'utf8')) as unknown };
+      } catch (error) {
+        return { file: n, package: { error: `not readable JSON: ${(error as Error).message}` } };
+      }
+    });
+  };
+
   server.registerTool(
     'weave_app_publish',
     {
       title: "Describe one of a project's artifacts",
       description:
-        "Maintainers: describe one of a project's artifacts from its weave.app.json on this computer (a new one, or the next description of one, by its id): a project has any number, each released from its own source. Release files set by weave_app_release are kept. Needs the weave.app permission.",
+        "Maintainers: describe one of a project's artifacts from its weave.app.json on this computer (a new one, or the next description of one, by its id): a project has any number, each released from its own source. Release files set by weave_app_release are kept. The artifact's texts in other languages (weave.texts.<lang>.json next to the manifest, see weave_app_manifest) are published with it. Needs the weave.app permission, and weave.app.texts when texts are next to the manifest.",
       inputSchema: { project: z.string(), file: z.string().describe('Path to weave.app.json') },
     },
-    run(async ({ project, file }: { project: string; file: string }) => backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), as })),
+    run(async ({ project, file }: { project: string; file: string }) => {
+      const texts = textsNextTo(file).map((t) => t.package);
+      return backend.publishApp({ project, manifest: JSON.parse(readFileSync(file, 'utf8')), ...(texts.length ? { texts } : {}), as });
+    }),
   );
 
   server.registerTool(
@@ -997,7 +1030,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: "An artifact's manifest: rules, example, check",
       description:
-        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how it runs (start.image, a container, or wasm; start.command only for people starting a checkout by hand). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it. Writes nothing.",
+        "weave.app.json describes one of a project's artifacts (a service, a website, a keyvault, a fetcher, a file…): its id and name, the ports a website shares (services, with the pages host and joiners open), and how it runs (start.image, a container, or wasm; start.command only for people starting a checkout by hand). Without arguments: the rules and an annotated example. With file (a path) or manifest (the JSON): every problem at once, warnings, and the manifest as Weave reads it; with file, the texts next to it too (weave.texts.<lang>.json: the manifest's labels and hints in another language by field path, like actions.bet.label or settings.deepseek-api-key.hint, plus the names the service answers at run time; plain text, Weave's glossary as {@weave:word.project}). Writes nothing.",
       inputSchema: { file: z.string().optional().describe('Path to a weave.app.json'), manifest: z.unknown().optional().describe('The manifest itself') },
       annotations: { readOnlyHint: true },
     },
@@ -1012,7 +1045,10 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         }
       }
       const checked = checkManifest(input);
-      return { ok: checked.problems.length === 0, ...checked, ...(checked.problems.length ? { rules: MANIFEST_RULES } : {}) };
+      // The packages next to the file: each against the manifest as read.
+      const texts = file !== undefined && checked.manifest ? textsNextTo(file).map((t) => ({ file: t.file, problems: checkServicePackage(t.package, checked.manifest!).map((p) => (p.name ? `${p.name}: ${p.problem}` : p.problem)) })) : [];
+      const ok = checked.problems.length === 0 && texts.every((t) => t.problems.length === 0);
+      return { ok, ...checked, ...(texts.length ? { texts } : {}), ...(checked.problems.length ? { rules: MANIFEST_RULES } : {}) };
     }),
   );
 
@@ -1084,10 +1120,12 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         repo: z.string().optional().describe('Where its releases are, owner/name: a new source starts a new artifact'),
         assets: z.record(z.string(), z.string()).optional(),
         wait: z.number().min(0).max(20).optional().describe('Minutes to wait for the release and its files, while a workflow builds it'),
+        file: z.string().optional().describe("Path to the checkout's weave.app.json: the texts next to it (weave.texts.<lang>.json) are published with the release"),
       },
     },
-    run(async ({ project, tag, artifact, repo, assets, wait }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number }) => {
-      const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}) };
+    run(async ({ project, tag, artifact, repo, assets, wait, file }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number; file?: string }) => {
+      const texts = file ? textsNextTo(file).map((t) => t.package) : [];
+      const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}), ...(texts.length ? { texts } : {}) };
       // A pushed tag becomes a release with files a few minutes later, if a workflow makes it: look every 30 seconds.
       const until = Date.now() + (wait ?? 0) * 60_000;
       if (wait) {

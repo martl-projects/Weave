@@ -21,6 +21,8 @@ Stage 1's known limit: tags and meeting points also accept a space's previous ke
 
 Each side decides this from its own keys: a match on its current key's tag is full sync, a match only on its previous key's tag is keys-only. A behind member sees a full match from its side and may send what it has (to a member: fine).
 
+**Amended 1.11.2026:** a node announces *every* key it holds of a space, not the current and previous only. Two rotations in a row (two people removed one after the other, six seconds apart) had left every member who was offline at the time two keys behind: their one tag matched nothing, so the space wasn't shared at all, and the rekeys that would have brought them the new keys never came. Now a match on any earlier key is keys-only; the behind member takes the keys, says hello again and syncs fully. The meeting points (`spaceTopics`) still use the two newest keys: a member further behind meets the others through any other shared space or a friend's direct chat, which is how nodes find each other in practice.
+
 ## 3. History for newcomers
 
 A space setting, `weave.space.history {history}`: `all` (as today, the default), `30d` or `joining`. Set by whoever manages the space (owner, maintainers, moderators), a control event, shown in the space.

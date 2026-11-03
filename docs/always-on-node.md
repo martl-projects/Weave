@@ -18,12 +18,26 @@ A server, a NAS or a home cluster that keeps your spaces and hosts your rooms wh
 
 Spaces you join later reach it too: while you have an always-on node, your computers keep a sealed list of your spaces for it in your own space.
 
+## Your front door
+
+An always-on node is your front door: besides your own meeting point it's found at a public one, which only front
+doors announce and let people in through. Your computers never do.
+
+- `weave contact --door` (on any of your computers) prints a contact link through the front door. Give that one to
+  anyone: a website, a post, an app's bundle. Whoever adds it reaches your always-on node, never your computer.
+- Through it, a newcomer gets your public side (your name, your public posts and project pages) and nothing about
+  the people you know. That holds for every peer: a node shares only its person's public side and that of the people
+  the peer shares a space or a chat with there.
+- Your personal contact link stays as it was: for people you want to reach your computer.
+- A node's config can say otherwise: `"frontDoor": false` closes the door on an always-on node; `"frontDoor": true`
+  makes any node one.
+
 ## With Docker
 
 ```bash
-docker run -it --rm -v weave:/data ghcr.io/martldennl/weave-server pair kitchen-nas
-docker run -it --rm -v weave:/data ghcr.io/martldennl/weave-server join 'weave:node-answer:…'
-docker run -d --name weave --restart unless-stopped -v weave:/data ghcr.io/martldennl/weave-server
+docker run -it --rm -v weave:/data ghcr.io/martl-projects/weave-server pair kitchen-nas
+docker run -it --rm -v weave:/data ghcr.io/martl-projects/weave-server join 'weave:node-answer:…'
+docker run -d --name weave --restart unless-stopped -v weave:/data ghcr.io/martl-projects/weave-server
 ```
 
 - **Ports:** It needs no open ports: Weave finds its peers through the network's DHT and connects outward, and connections through firewalls work too (hole punching).
@@ -48,7 +62,7 @@ spec:
     spec:
       containers:
         - name: weave
-          image: ghcr.io/martldennl/weave-server:0.17.2
+          image: ghcr.io/martl-projects/weave-server:0.17.2
           volumeMounts: [{ name: data, mountPath: /data }]
           livenessProbe: { exec: { command: [node, /app/weave-server.mjs, status] }, periodSeconds: 60 }
         - name: party-app            # a room's app, beside the node

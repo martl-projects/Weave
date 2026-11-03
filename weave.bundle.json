@@ -1,12 +1,6 @@
 {
   "contacts": [
-    "weave:contact:eyJkaWQiOiJkaWQ6a2V5Ono2TWtuWG1Ld25aZW5peWFrTnNCempUZ21ZTVhBY3QzQjlpenZWZGt6S3lDQ2Q1ZyIsImVudHJ5Ijp7ImJvb3RzdHJhcCI6W10sInRvcGljcyI6WyJkaWQ6a2V5Ono2TWtuWG1Ld25aZW5peWFrTnNCempUZ21ZTVhBY3QzQjlpenZWZGt6S3lDQ2Q1ZyJdfSwibmFtZSI6Im1hcnRsIiwidiI6MX0"
+    "weave:contact:eyJkaWQiOiJkaWQ6a2V5Ono2TWtuWG1Ld25aZW5peWFrTnNCempUZ21ZTVhBY3QzQjlpenZWZGt6S3lDQ2Q1ZyIsImRvb3IiOnRydWUsImVudHJ5Ijp7ImJvb3RzdHJhcCI6W10sIm1lZXQiOiJ6QkZETXBOVHdqVXJGYm1CZE1qam9MSTBhWFdCNEMzX21Mdm1GWnU5WmprIiwidG9waWNzIjpbIm1lZXQ6MzhFMlNVVWxyRTE1TnNSRk1wTUpOSnY0NXh2LTBIcHFmdlpFODJMX2xnMCJdfSwibmFtZSI6Im1hcnRsIiwidiI6MX0"
   ],
-  "tiers": [
-    {
-      "tier": "YXRbK8DY4PDgzBAhxw0aDA",
-      "creator": "did:key:z6MknXmKwnZeniyakNsBzjTgmYMXAct3B9izvVdkzKyCCd5g",
-      "note": "Joined through the Weave app"
-    }
-  ]
+  "tiers": []
 }

@@ -7,8 +7,10 @@ import { newSession, openSession, pasteBack, rememberFront, showSession, startPa
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
 import { RENDERER_METHODS, type RendererMethod } from './methods.ts';
+import { loadOverlay, overlayOpens, saveOverlay } from './overlay.ts';
 import { Updater } from './update.ts';
 import type { UpdateAction } from './updatestate.ts';
+import { loadLanguage, setLanguage, t } from './texts.ts';
 
 // --home <dir>         Weave home to open (default: $WEAVE_HOME or ~/.weave)
 // --route <hash>       start on a view, e.g. "#/groups"
@@ -23,6 +25,7 @@ const { values } = parseArgs({
 // Relative paths are relative to where `npm run` was called, not to apps/desktop.
 const homeArg = values.home as string | undefined;
 const home = resolveHome(homeArg && resolve(process.env.INIT_CWD ?? process.cwd(), homeArg));
+loadLanguage(home);
 
 let daemon: RunningDaemon | undefined;
 /** Why the daemon couldn't be started or reached, for the window to say. */
@@ -174,6 +177,8 @@ ipcMain.handle('weave:show', () => showWindow());
 let mentions: BrowserWindow | undefined;
 /** The panel is open as far as you're concerned (until you close it), though hidden while another app is in front. */
 let mentionsWanted = false;
+/** Whether the panel comes up by itself on this device (overlay.ts). */
+let overlay = loadOverlay(home.dir);
 /** The app in front, where Weave can tell (Windows); undefined elsewhere. */
 let front: Front | undefined;
 let stopWatchingFront: (() => void) | undefined;
@@ -188,12 +193,17 @@ function frontChanged(now: Front): void {
 
 /**
  * The Mentions panel: a small window that stays on top beside your work (Claude
- * Code), with the posts agents point to. It comes up by itself, without taking
- * the focus, when a new one arrives, but only beside the Claude app (or Weave):
- * with another app in front it waits until you're back in Claude. Closing it
- * only hides it, until it's opened again.
+ * Code), with the posts agents point to. Opened by hand (focus) it comes now.
+ * By itself, without taking the focus, when a session or a mention comes up:
+ * the first time on this device with its introduction, after that only while
+ * Show the overlay is on (Sessions page), and only beside the Claude app (or
+ * Weave): with another app in front it waits until you're back in Claude.
+ * Closing it only hides it, until it's opened again.
  */
 function showMentions(focus = true): void {
+  if (!overlayOpens(overlay, focus)) return;
+  const intro = !overlay.introduced;
+  if (intro) saveOverlay(home.dir, (overlay = { ...overlay, introduced: true }));
   mentionsWanted = true;
   stopWatchingFront ??= watchFront(frontChanged);
   // Opened by you: now. By itself: only where it belongs.
@@ -211,7 +221,7 @@ function showMentions(focus = true): void {
     y: area.y + 16,
     minWidth: 300,
     minHeight: 240,
-    title: 'Weave · Mentions',
+    title: t('main.mentions.title'),
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -242,13 +252,26 @@ function showMentions(focus = true): void {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url);
   });
   panel.once('ready-to-show', () => (focus ? panel.show() : now && panel.showInactive()));
-  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: '/overlay' });
+  void panel.loadFile(join(__dirname, 'renderer', 'index.html'), { hash: intro ? '/overlay?intro=1' : '/overlay' });
 }
 
 ipcMain.handle('weave:mentions', (_event, action: string) => {
   if (action !== 'hide') return showMentions();
   mentionsWanted = false;
   mentions?.hide();
+});
+
+/** Show the overlay (Sessions page): on, it comes up now and whenever a session or a mention does; off, it goes. */
+ipcMain.handle('weave:overlay', (_event, on?: unknown) => {
+  if (typeof on === 'boolean' && on !== overlay.on) {
+    saveOverlay(home.dir, (overlay = { introduced: true, on }));
+    if (on) showMentions();
+    else {
+      mentionsWanted = false;
+      mentions?.hide();
+    }
+  }
+  return overlay.on;
 });
 
 /**
@@ -274,8 +297,8 @@ ipcMain.handle('weave:work-on', async (_event, post: string, choice?: { session?
   }
   let folder = target.folders[0];
   if (!folder) {
-    const where = target.post.space ? `${target.post.space.kind} ${target.post.space.name}` : 'this post';
-    const options = { title: `Folder for ${where} (Claude Code works in it)`, properties: ['openDirectory' as const, 'createDirectory' as const] };
+    const where = target.post.space ? `${t(`word.${target.post.space.kind === 'direct' ? 'chat' : target.post.space.kind}`)} ${target.post.space.name}` : t('main.this.post');
+    const options = { title: t('main.folder.for', { where }), properties: ['openDirectory' as const, 'createDirectory' as const] };
     const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
     if (picked.canceled || !picked.filePaths[0]) return { how: 'cancelled' };
     folder = picked.filePaths[0];
@@ -334,7 +357,7 @@ async function showPicker(tab: PickerTab = 'all'): Promise<void> {
     useContentSize: true,
     x: Math.round(at.x + (at.width - width) / 2),
     y: Math.round(at.y + at.height / 5),
-    title: 'Weave · Address book',
+    title: t('main.addressbook.title'),
     thickFrame: false,
     frame: false,
     resizable: false,
@@ -428,17 +451,27 @@ function createTray(): void {
   if (icon.isEmpty()) return; // no icon, no tray: closing the window quits as before
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
   tray.setToolTip('Weave');
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Open Weave', click: showWindow },
-      { label: 'Mentions panel', click: () => showMentions() },
-      { label: 'Address book…', ...(PICKER_SHORTCUTS[0] ? { accelerator: PICKER_SHORTCUTS[0][0] } : {}), click: () => void showPicker() },
-      { type: 'separator' },
-      { label: 'Quit Weave', click: () => app.quit() },
-    ]),
-  );
+  tray.setContextMenu(trayMenu());
   tray.on('click', showWindow);
 }
+
+/** The tray's menu, in the language of the moment. */
+const trayMenu = () =>
+  Menu.buildFromTemplate([
+    { label: t('tray.open'), click: showWindow },
+    { label: t('tray.mentions'), click: () => showMentions() },
+    { label: t('tray.addressbook'), ...(PICKER_SHORTCUTS[0] ? { accelerator: PICKER_SHORTCUTS[0][0] } : {}), click: () => void showPicker() },
+    { type: 'separator' },
+    { label: t('tray.quit'), click: () => app.quit() },
+  ]);
+
+// The window changed the language: menus and titles follow.
+ipcMain.handle('weave:language', (_event, setting: unknown) => {
+  if (!setLanguage(setting)) return;
+  tray?.setContextMenu(trayMenu());
+  if (process.platform === 'darwin' && hasCommand()) Menu.setApplicationMenu(Menu.buildFromTemplate(macMenu()));
+  mentions?.setTitle(t('main.mentions.title'));
+});
 
 /** A folder on this computer, picked by the person (for a project app's local copy). */
 // A new Claude Code session from the Sessions page: it gets its job and projects once the Claude app says which session it is.
@@ -454,7 +487,7 @@ ipcMain.handle('weave:new-session', async (_event, input: { folder?: unknown; ro
 });
 
 ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
-  const options = { title: String(title ?? 'Choose a folder').slice(0, 80), properties: ['openDirectory' as const] };
+  const options = { title: String(title ?? t('main.choose.folder')).slice(0, 80), properties: ['openDirectory' as const] };
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 });

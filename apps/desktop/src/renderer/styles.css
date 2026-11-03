@@ -165,11 +165,13 @@ button .icon { vertical-align: -3px; }
 .score { font: bold 12px var(--content-font); }
 .thumb { display: block; width: 66px; height: 66px; padding: 1px; background: #fff; box-shadow: inset -1px -1px #fff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
 .thumb .sprite { margin: 1px; }
+/* A post that chose no picture: the room for one stays, empty, so the list stays aligned. */
+.thumb.no-picture, :root .thumb.no-picture { background: none; box-shadow: none; border: 0; }
 .thumb.has-image { overflow: hidden; }
 .thumb.has-image img, .thumb.has-image .blob-loading { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: cover; }
 .post-image { display: block; max-width: 100%; max-height: min(240px, 24vh); margin: 6px 0; border: 1px solid #808080; }
 .post-image.blob-loading { width: 320px; height: 180px; max-width: 100%; }
-.post-body { min-width: 0; }
+.post-body { min-width: 0; flex: 1; }
 .post-title { font: bold 14px var(--content-font); color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
 a.post-title:hover { text-decoration: underline; }
 a.post-title:visited { color: #551a8b; }
@@ -244,6 +246,17 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 /* A flat dark wash over the banner, so white text stays readable on any picture. */
 .hero.has-banner::before { content: ''; position: absolute; inset: 0; background: #00104099; z-index: 1; }
 .hero > :not(.hero-bg) { position: relative; z-index: 2; }
+/* Its members on the banner: one row in the middle, from the navel up over its bottom edge, the same size however
+   many (more of them make it wider); behind its text (over its background's wash). */
+.hero > .hero-group { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); height: 72%; max-width: 100%; margin: 0; pointer-events: none; z-index: 1; }
+.hero-group img { height: 100%; width: 100%; object-fit: contain; object-position: bottom; }
+/* A veil over them and the background together (not see-through figures), under the text: in the banner's own colour
+   (white on a light one, its dark wash over a picture). */
+.hero.has-members::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: var(--hero-veil, rgba(31, 58, 122, .5)); }
+.hero.has-members.has-banner { --hero-veil: rgba(0, 16, 64, .35); }
+:root[data-skin='clean'] .hero.has-members:not(.has-banner) { --hero-veil: color-mix(in srgb, var(--cl-panel) 55%, transparent); }
+:root[data-skin='cozy'] .hero.has-members:not(.has-banner) { --hero-veil: rgba(232, 247, 255, .55); }
+:root[data-skin='arcade'] .hero.has-members:not(.has-banner) { --hero-veil: rgba(8, 0, 20, .5); }
 .hero-art { flex: none; width: 88px; height: 88px; border: 2px solid #fff; box-shadow: 2px 2px 0 #0006; background: #fff; }
 .hero-art img, .hero-art canvas { display: block; width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }
 .hero-text { flex: 1; min-width: 0; }
@@ -360,6 +373,21 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .post-embed-title { font-size: 13px; color: var(--link); overflow-wrap: anywhere; }
 .post-embed-text { color: #222; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .post-embed.missing a { font-style: italic; color: #555; }
+
+/* ---------- invitations in chat */
+.invite-chip { display: inline-block; padding: 0 5px; background: #e8f0d8; color: #2b5a0e; border: 1px solid #8aa86a; font-weight: bold; text-decoration: none; }
+.invite-chip::before { content: '✉ '; }
+.invite-embed { max-width: 520px; margin: 6px 0; }
+.invite-embed.missing { font-style: italic; color: #555; font-size: 12px; }
+.invite-card { display: flex; align-items: center; gap: 10px; padding: 8px; background: #fff; color: #000; cursor: pointer; font-family: var(--content-font); font-size: 12px; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+.invite-card .post-embed-body { flex: 1; }
+.invite-card:hover .post-embed-title { text-decoration: underline; }
+.invite-card.expired, .invite-card.old, .invite-card.damaged, .invite-card.elsewhere { opacity: 0.75; }
+.invite-card.expired .post-embed-meta, .invite-card.old .post-embed-meta, .invite-card.elsewhere .post-embed-meta { color: #a00; }
+.invite-card.waiting .post-embed-meta { color: #7a5a00; }
+.invite-card.member .post-embed-meta { color: #2b5a0e; }
+.invite-action { flex: none; }
+.invite-dialog p { margin: 0 0 8px; }
 .md p:last-child, .msg-text p:last-child { margin-bottom: 0; }
 .md pre, .msg-text pre { padding: 6px 8px; background: #f4f4f4; border: 1px solid #c0c0c0; overflow-x: auto; }
 .md code, .msg-text code { font-family: 'Lucida Console', Consolas, monospace; font-size: 12px; background: #f4f4f4; }
@@ -431,12 +459,20 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .scene-image { display: inline-block; line-height: 0; }
 .scene-image img { width: 100%; height: 100%; object-fit: contain; }
 .thumb .scene-image { width: 100%; height: 100%; }
+/* Written together: everyone in the post's picture. */
+.thumb .post-group { max-width: none; margin: 0; width: 100%; height: 100%; }
+.post-scene.post-group { max-width: none; margin: 0; }   /* beside a post's title: as big as its scene alone (.post-scene) */
+.post-group img { width: 100%; height: 100%; object-fit: contain; }
 .thumb.has-image .scene-image img { object-fit: contain; }
 .thumb:has(.scene-image) { background: transparent; box-shadow: none; border: 0; }
-.post-scene { flex: none; width: 160px; height: 160px; align-self: flex-start; }
+.post-scene { flex: none; width: 112px; height: 112px; align-self: flex-start; }
+/* A post's head: its picture beside the title and who wrote it; the text below runs the post's whole width */
+.post-head { display: flex; gap: 10px; align-items: center; }
+.post-head-text { min-width: 0; flex: 1; }
 .scene-picker { display: flex; flex-wrap: wrap; gap: 4px; }
 .field-row-stacked .scene-picker button { display: flex; flex-direction: column; align-items: center; width: 76px; min-width: 0; height: 88px; padding: 2px; }
 .scene-picker .scene-image { width: 64px; height: 64px; }
+.scene-picker .surprise { display: block; width: 64px; height: 64px; line-height: 64px; font-size: 30px; font-weight: 700; text-align: center; opacity: .7; }
 .scene-picker button span { font-size: 10px; line-height: 1.1; text-align: center; }
 .scene-picker button.sel, .avatar-grid button.sel, .avatar-colors button.sel { outline: 2px solid #000080; outline-offset: -2px; }
 .avatar-editor { display: flex; gap: 8px; min-height: 420px; }
@@ -452,10 +488,42 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .avatar-editor .avatar-grid button { aspect-ratio: 1; min-width: 0; min-height: 0; height: auto; padding: 0; overflow: hidden; font-size: 11px; }
 .avatar-editor .avatar-grid button img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .avatar-colors { display: flex; flex-wrap: wrap; gap: 4px; }
-.avatar-colors button { width: 24px; height: 24px; min-width: 0; padding: 0; border: 1px solid #404040; box-shadow: none; }
-.avatar-adjust { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 4px; font-size: 11px; }
-.avatar-step { display: inline-flex; align-items: center; gap: 2px; }
-.avatar-step button { min-width: 0; width: 26px; padding: 0; }
+.avatar-editor .avatar-colors button { width: 24px; height: 24px; min-width: 0; min-height: 0; padding: 0; border: 1px solid #404040; box-shadow: none; }
+/* Fine adjustments: a grid of the same cells (word, then its two buttons), the symbols centered in them. */
+.avatar-adjust { display: grid; grid-template-columns: repeat(auto-fill, 112px); gap: 4px 14px; margin-bottom: 6px; font-size: 11px; }
+.avatar-step { display: grid; grid-template-columns: 44px 28px 28px; align-items: center; gap: 3px; }
+.avatar-editor .avatar-step button { width: 28px; height: 24px; min-width: 0; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; font-size: 12px; }
+/* A space's group photo, above its member list; and a tier's members as faces. */
+.group-photo { margin: 2px auto 6px; max-width: 240px; }
+.group-photo img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* The group photo in front of the space's background. */
+.space-photo-group.has-background { max-width: 240px; margin: 2px auto 6px; background-size: cover; background-position: center; border-radius: 3px; }
+.space-photo-group.has-background .group-photo { margin: 0 auto; }
+/* A photo of its own: the banner's text as a ribbon across its top. */
+.space-photo { position: relative; margin: 2px auto 6px; max-width: 240px; line-height: 0; }
+.space-photo img { display: block; width: 100%; max-height: 180px; object-fit: cover; border-radius: 3px; }
+.space-photo figcaption { position: absolute; left: 8%; right: 8%; top: 6px; padding: 3px 6px; background: #3c8eea; color: #fff; font: 800 12px/1.2 system-ui, sans-serif; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); }
+.photo-order { margin: 0; padding: 0; list-style: none; max-height: 220px; overflow: auto; }
+.photo-order li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.photo-order button { min-width: 0; width: 26px; height: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.space-photo-settings { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.space-photo-preview { flex: 0 0 220px; }
+/* A group's little icon: its photo, or two of its people's faces overlapping. */
+.group-icon { position: relative; display: inline-block; flex: none; line-height: 0; overflow: hidden; }
+.group-icon > img { width: 100%; height: 100%; object-fit: cover; border-radius: 2px; }
+.group-icon.faces { overflow: visible; }
+.group-icon.faces > .avatar { position: absolute; }
+.group-icon.faces > .avatar:first-child { left: 0; top: 0; }
+.group-icon.faces > .avatar:last-child { right: 0; bottom: 0; }
+.tier-faces { display: inline-flex; align-items: center; margin-left: 6px; }
+.tier-faces > span { margin-right: -5px; line-height: 0; }
+.tier-faces .small { margin-left: 9px; }
+/* Narrow windows: the figure above, its parts below. */
+@media (max-width: 680px) {
+  .avatar-editor { flex-direction: column; min-height: 0; }
+  .avatar-stage { flex: none; height: 240px; }
+  .avatar-panel { max-height: none; }
+}
 .presence { position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border: 1px solid #000; }
 .presence.online { background: #20c020; }
 .presence.offline { background: #a0a0a0; }
@@ -708,10 +776,26 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mentions-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 8px; overflow: hidden; }
 .mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
-.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; position: relative; z-index: 1; }
+/* Behind the overlay's content, faded and pinned to its bottom: the session's figure left, its work item's picture right. */
+/* Out to the edges and down: the pictures' own empty margins hang over the window's edges. */
+.panel-decor { position: absolute; left: -9%; right: -9%; bottom: -7%; height: 42%; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; z-index: 0; opacity: .3; filter: saturate(.6); }
+/* Each half a fixed width (so it counts as on screen before its picture is drawn), its picture against its outer edge. */
+.panel-decor > * { height: 100%; width: 48%; line-height: 0; }
+.panel-decor img { height: 100%; width: 100%; object-fit: contain; }
+.panel-decor-session img { object-position: left bottom; }
+.panel-decor-post img { object-position: right bottom; }
+/* The work item's own scene is the backdrop now, not beside its title. */
+.panel-current .post-scene { display: none; }
 .mentions-scroll > .empty, .mentions-scroll > .panel-toggles, .mentions-scroll > .panel-lines, .mentions-scroll > .panel-sessions { margin-left: 8px; margin-right: 8px; }
 .mentions-scroll > .panel-sessions { margin-top: 8px; }
 .mentions-scroll > * { flex-shrink: 0; }
+/* The overlay introducing itself, the first time on a device. */
+.panel-intro { margin: 8px 8px 0; display: flex; flex-direction: column; gap: 4px; font-family: var(--content-font); font-size: 13px; }
+.panel-intro-title { font-size: 15px; }
+.panel-intro p, .panel-intro ul { margin: 0; }
+.panel-intro ul { padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.panel-intro button { align-self: flex-start; margin-top: 4px; }
 .panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
 .panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
 .stack-item { display: flex; flex-direction: column; gap: 3px; }
@@ -780,6 +864,8 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .map-group + .map-group { margin-top: 6px; }
 .map-group-head { font-size: 11px; opacity: .6; padding: 0 0 2px 24px; }
 .session-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 4px 14px 4px 8px; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); font-family: var(--content-font); user-select: text; }
+/* A session's face: its avatar (a screen for a head), so it's known again; click to change it. */
+.session-row .session-face { flex: none; min-width: 0; min-height: 0; padding: 0; line-height: 0; border: 0; background: none; box-shadow: none; }
 .map-group-head + .map-session .session-row { border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
 .session-row > .map-port { position: absolute; right: -6px; top: 50%; margin-top: -5px; }
 .session-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1px solid color-mix(in srgb, currentColor 50%, transparent); }
@@ -881,3 +967,15 @@ button.session-title:hover { text-decoration: underline; }
 /* Under a message announcing something live: the thing, as one row, with its button. */
 .announce-card { max-width: 560px; margin: 4px 0; padding: 2px 8px; border: 1px solid var(--line, #c0c0c0); border-radius: 6px; }
 .question-text { white-space: pre-line; }
+
+/* An ⓘ (ui.tsx Info): inline, its explanation unfolds below the line it sits on. */
+.info { display: inline; }
+.info > summary { display: inline; list-style: none; cursor: pointer; opacity: 0.7; user-select: none; }
+.info > summary::-webkit-details-marker { display: none; }
+.info > summary:hover { opacity: 1; }
+.info[open] > summary { opacity: 1; }
+.info > .info-body { display: block; margin: 4px 0 6px; padding: 4px 8px; background: #ffffe1; border: 1px solid #c0c0a0; color: #000; }
+.info > .info-body ol, .info > .info-body ul { margin: 4px 0 0 18px; padding: 0; }
+
+/* The people table's small tools (make a maintainer, remove). */
+.people-table .icon-button.people-tool { min-width: 0; min-height: 0; padding: 0 3px; line-height: 1; }

@@ -1,0 +1,28 @@
+{
+  "texts": "derby",
+  "lang": "de",
+  "of": "v1.4.0",
+  "names": {
+    "name": "Derby",
+    "about": "Pferderennen mit Wetten, für bis zu acht Spieler",
+    "start.hint": "npm start im Checkout",
+    "settings.deepseek-api-key.label": "DeepSeek-API-Schlüssel",
+    "settings.deepseek-api-key.hint": "Ein Schlüssel mit Lesezugriff, für den Kommentar",
+    "actions.bet.label": "Wetten",
+    "actions.bet.input.horse.label": "Pferd",
+    "actions.bet.input.amount.label": "Einsatz",
+    "actions.horses.label": "Pferde",
+    "actions.enter.label": "Pferd aufstellen",
+    "actions.enter.input.name.label": "Name",
+    "actions.scratch.label": "Zurückziehen",
+    "lists.horses.title": "Pferde",
+    "lists.horses.item": "Pferd",
+    "lists.horses.add.label": "Pferd aufstellen",
+    "lists.horses.remove.label": "Zurückziehen",
+    "lists.horses.use.label": "Wetten",
+    "services.derby.open.host.label": "Rennen leiten",
+    "services.derby.open.joiner.label": "Mitspielen",
+    "horse.odds": "Quote {odds} · {@weave:word.project} {project}",
+    "race.won": "{horse} gewinnt mit {lengths, plural, one {# Länge} other {# Längen}} Vorsprung"
+  }
+}

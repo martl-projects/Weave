@@ -7,8 +7,9 @@ import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectI
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
 import { Marks } from './marks.tsx';
-import { SceneImage } from './avatar.tsx';
-import { ScenePicker } from './avatar-editor.tsx';
+import { AuthorAvatar, PostScene, postScene } from './avatar.tsx';
+import { PicturePicker } from './avatar-editor.tsx';
+import { t, T, useTexts } from './texts.tsx';
 
 // ---------------------------------------------------------------- names and links
 
@@ -39,31 +40,33 @@ export async function startChat(did: string): Promise<void> {
  * the co-author (or their own person), so this is never just a claim.
  */
 export function Coauthors({ post }: { post: PostInfo }) {
+  const { t } = useTexts();
   if (!post.coauthors?.length) return null;
   return (
-    <span className="coauthors" title="Co-authors confirm with their own signature">
-      {' with '}
+    <span className="coauthors" title={t('coauthors.title')}>
+      {t('coauthors.with')}
       {post.coauthors.map((c, i) => (
         <span key={`${c.did}-${c.agent ?? ''}`} className={`coauthor ${c.state}`}>
           {i > 0 && ', '}
           <a href={`#/space/${encodeURIComponent(c.did)}`}>{c.name ?? shortDid(c.did)}</a>
-          {c.agent && <span className="agent-tag">{c.agent} · agent</span>}
-          {c.state === 'confirmed' ? ' ✓' : c.state === 'declined' ? ' (declined)' : ' (asked)'}
+          {c.agent && <span className="agent-tag">{t('agent.tag', { agent: c.agent })}</span>}
+          {c.state === 'confirmed' ? ' ✓' : c.state === 'declined' ? t('coauthor.declined') : t('coauthor.asked')}
         </span>
       ))}
     </span>
   );
 }
 
-export const actorName = (a: Actor, meDid: string) => (a.did === meDid && !a.agent ? 'you' : (a.name ?? shortDid(a.did)));
+export const actorName = (a: Actor, meDid: string) => (a.did === meDid && !a.agent ? t('actor.you') : (a.name ?? shortDid(a.did)));
 
 const BOARD_ICONS: Record<string, IconName> = { releases: 'megaphone', ideas: 'lightbulb', issues: 'bug', proposals: 'flag', posts: 'notes' };
 export const boardIcon = (b: Pick<BoardInfo, 'name' | 'type'>): IconName => BOARD_ICONS[b.name] ?? (b.type === 'issues' ? 'bug' : b.type === 'proposals' ? 'flag' : 'notes');
 
+/** The sorts, in the picker's order; their texts are sort.<value>. */
 export const SORTS = [
-  { value: 'hot', label: 'Hot', icon: 'fire' as const },
-  { value: 'new', label: 'New', icon: 'clock' as const },
-  { value: 'top', label: 'Top', icon: 'trophy' as const },
+  { value: 'hot', icon: 'fire' as const },
+  { value: 'new', icon: 'clock' as const },
+  { value: 'top', icon: 'trophy' as const },
 ];
 
 /** Remembers a sort choice per list, in this browser only. */
@@ -90,14 +93,15 @@ function useSort(key: string, fallback?: string): [string | undefined, (s: strin
 // ---------------------------------------------------------------- votes and actions
 
 export function VoteBox({ post, vertical = true }: { post: PostInfo; vertical?: boolean }) {
+  const { t } = useTexts();
   const vote = (value: number) => attempt(() => api('upvote', { target: post.id, value: post.myVote === value ? 0 : value }).then(bump));
   return (
     <div className={`votes${vertical ? '' : ' row'}`}>
-      <button className={`vote up${post.myVote > 0 ? ' on' : ''}`} title="Upvote" onClick={() => vote(1)}>
+      <button className={`vote up${post.myVote > 0 ? ' on' : ''}`} title={t('vote.up')} onClick={() => vote(1)}>
         <Icon name="arrowUp" size={20} />
       </button>
       <b className="score">{post.score}</b>
-      <button className={`vote down${post.myVote < 0 ? ' on' : ''}`} title="Downvote" onClick={() => vote(-1)}>
+      <button className={`vote down${post.myVote < 0 ? ' on' : ''}`} title={t('vote.down')} onClick={() => vote(-1)}>
         <Icon name="arrowDown" size={20} />
       </button>
     </div>
@@ -114,16 +118,15 @@ export interface Editing {
 }
 
 function PostActions({ post, spaces, curate, editing }: { post: PostInfo; spaces: SpaceInfo[]; curate?: Curate; editing?: Editing }) {
+  const { t } = useTexts();
   const [sharing, setSharing] = useState(false);
   const [changing, setChanging] = useState(false);
   const own = post.type === 'post' && !!editing && post.by.did === editing.meDid;
   const mayDelete = post.type === 'post' && (own || !!editing?.moderator);
   const remove = async () => {
-    const question = own
-      ? `Delete “${post.title}” and hide its chat? People who already have it keep a copy in their logs.`
-      : `Delete “${post.title}” by ${post.by.name ?? 'someone'} for everyone here? It stays in the logs, out of sight.`;
-    if (!(await ask(question, 'Delete'))) return;
-    const done = await attempt(() => api('deletePost', { post: post.id }).then(() => true), 'Deleted');
+    const question = own ? t('post.delete.own', { title: post.title }) : t('post.delete.other', { title: post.title, name: post.by.name ?? t('word.someone.lc') });
+    if (!(await ask(question, t('button.delete')))) return;
+    const done = await attempt(() => api('deletePost', { post: post.id }).then(() => true), t('post.deleted'));
     if (done) {
       editing?.onDeleted?.();
       bump();
@@ -133,28 +136,28 @@ function PostActions({ post, spaces, curate, editing }: { post: PostInfo; spaces
   return (
     <div className="post-actions">
       <a href={postHref(post)}>
-        <Icon name="message" /> {post.type === 'project' ? `${post.chat} messages` : `${post.chat} in chat`}
+        <Icon name="message" /> {t(post.type === 'project' ? 'post.chat.messages' : 'post.chat.in', { n: post.chat })}
       </a>
       <button className="link" onClick={() => setSharing(true)}>
-        <Icon name="share" /> share
+        <Icon name="share" /> {t('post.share')}
       </button>
-      <button className="link" onClick={() => save(post.saved === 'saved' ? null : 'saved', post.saved === 'saved' ? 'Removed from saved' : 'Saved')}>
-        <Icon name="bookmark" /> {post.saved === 'saved' ? 'unsave' : 'save'}
+      <button className="link" onClick={() => save(post.saved === 'saved' ? null : 'saved', t(post.saved === 'saved' ? 'post.saved.removed' : 'post.saved'))}>
+        <Icon name="bookmark" /> {t(post.saved === 'saved' ? 'post.unsave' : 'post.save')}
       </button>
-      <button className="link" onClick={() => save(post.saved === 'pinned' ? null : 'pinned', post.saved === 'pinned' ? 'Unpinned from your home' : 'Pinned to the top of your home')}>
-        <Icon name="mapPin" /> {post.saved === 'pinned' ? 'unpin from home' : 'pin to home'}
+      <button className="link" onClick={() => save(post.saved === 'pinned' ? null : 'pinned', t(post.saved === 'pinned' ? 'post.unpinned' : 'post.pinned.home'))}>
+        <Icon name="mapPin" /> {t(post.saved === 'pinned' ? 'post.unpin' : 'post.pin')}
       </button>
       {curate && (
         <>
           <button className="link" onClick={() => curate.toggle(post.id)}>
-            <Icon name="star" /> {post.pinned ? 'unsticky' : 'sticky'}
+            <Icon name="star" /> {t(post.pinned ? 'post.unsticky' : 'post.sticky')}
           </button>
           {post.pinned && (
             <>
-              <button className="link" title="Move up" onClick={() => curate.move(post.id, -1)}>
+              <button className="link" title={t('post.move.up')} onClick={() => curate.move(post.id, -1)}>
                 ▲
               </button>
-              <button className="link" title="Move down" onClick={() => curate.move(post.id, 1)}>
+              <button className="link" title={t('post.move.down')} onClick={() => curate.move(post.id, 1)}>
                 ▼
               </button>
             </>
@@ -163,12 +166,12 @@ function PostActions({ post, spaces, curate, editing }: { post: PostInfo; spaces
       )}
       {own && (
         <button className="link" onClick={() => setChanging(true)}>
-          <Icon name="pencil" /> edit
+          <Icon name="pencil" /> {t('post.edit')}
         </button>
       )}
       {mayDelete && (
         <button className="link" onClick={remove}>
-          <Icon name="trash" /> delete
+          <Icon name="trash" /> {t('post.delete')}
         </button>
       )}
       {sharing && <ShareDialog post={post} spaces={spaces} onClose={() => setSharing(false)} />}
@@ -202,14 +205,15 @@ function useCurate(space: string | undefined, board: BoardInfo | undefined, allo
 // ---------------------------------------------------------------- rows and lists
 
 function Badges({ post }: { post: PostInfo }) {
+  const { t } = useTexts();
   return (
     <>
-      {post.pinned && <span className="tag sticky">sticky</span>}
-      {post.saved === 'pinned' && <span className="tag">on your home</span>}
-      {post.type === 'project' && <span className="tag project">project</span>}
-      {post.project && post.type !== 'project' && <span className="tag project">project: {post.project.name}</span>}
-      {post.issue && <span className={`tag status-${post.issue.status}`}>{post.issue.status}</span>}
-      {post.proposal && <span className={`tag ${post.proposal.closed ? (post.proposal.passed ? 'passed' : 'rejected') : 'voting'}`}>{post.proposal.closed ? (post.proposal.passed ? 'passed' : 'not passed') : 'voting'}</span>}
+      {post.pinned && <span className="tag sticky">{t('tag.sticky')}</span>}
+      {post.saved === 'pinned' && <span className="tag">{t('tag.on.home')}</span>}
+      {post.type === 'project' && <span className="tag project">{t('word.project')}</span>}
+      {post.project && post.type !== 'project' && <span className="tag project">{t('tag.project.name', { name: post.project.name })}</span>}
+      {post.issue && <span className={`tag status-${post.issue.status}`}>{t(`issue.status.${post.issue.status}`)}</span>}
+      {post.proposal && <span className={`tag ${post.proposal.closed ? (post.proposal.passed ? 'passed' : 'rejected') : 'voting'}`}>{t(post.proposal.closed ? (post.proposal.passed ? 'proposal.passed' : 'proposal.rejected') : 'proposal.voting')}</span>}
     </>
   );
 }
@@ -224,12 +228,13 @@ function Where({ space, spaces }: { space: NonNullable<PostInfo['space']>; space
 }
 
 export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; showWhere?: boolean; curate?: Curate; moderator?: boolean }) {
+  const { t } = useTexts();
   const href = postHref(post);
   return (
-    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title="Ctrl+click: work on it in Claude">
+    <article className={`post-row${post.pinned || post.saved === 'pinned' ? ' is-pinned' : ''}`} data-post={post.id} title={t('post.row.title')}>
       <VoteBox post={post} />
-      <a className={`thumb${post.image || post.scene ? ' has-image' : ''}`} href={href}>
-        {post.scene ? <SceneImage did={post.by.did} scene={post.scene} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
+      <a className={`thumb${post.image || postScene(post) ? ' has-image' : ''}${post.scene === 'none' && !post.image ? ' no-picture' : ''}`} href={href}>
+        {post.scene === 'none' && !post.image ? null : postScene(post) ? <PostScene post={post} scene={postScene(post)!} size={128} close /> : post.image ? <BlobImage src={post.image} alt="" /> : post.project ? <ProjectIcon id={post.project.id} icon={post.project.icon} size={64} /> : <Sprite seed={post.id} size={64} />}
       </a>
       <div className="post-body">
         <a className="post-title" href={href}>
@@ -251,12 +256,12 @@ export function PostRow({ post, meDid, spaces, showWhere = true, curate, moderat
           )}
           <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
           {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
-          {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
+          {post.by.agent && <span className="agent-tag" title={post.by.session ? t('agent.tag.session.title', { session: post.by.session.name }) : undefined}>{t('agent.tag', { agent: post.by.agent })}{post.by.session ? t('agent.tag.in.session', { session: post.by.session.name }) : ''}</span>}
           <Coauthors post={post} />
           {' · '}
           {ago(post.time)}
-          {post.edited && <span title={`edited ${new Date(post.edited).toLocaleString()}`}> · edited</span>}
-          {post.active !== post.time && <> · active {ago(post.active)}</>}
+          {post.edited && <span title={t('post.edited.title', { time: post.edited })}>{t('post.edited')}</span>}
+          {post.active !== post.time && <>{t('post.active', { time: post.active })}</>}
         </div>
         {post.text && <p className="excerpt">{plain(post.text).slice(0, 220)}</p>}
         <PostActions post={post} spaces={spaces} curate={curate} editing={{ meDid, moderator }} />
@@ -287,6 +292,7 @@ export function PostList({
   toolbar?: ReactNode;
   above?: ReactNode;
 }) {
+  const { t } = useTexts();
   const [sort, setSort] = useSort(`${query.space ?? 'home'}/${query.board ?? ''}${query.saved ? '/saved' : ''}`, board?.sort);
   const { data: posts } = useApi(() => api<PostInfo[]>('posts', { ...query, sort }), [query, sort]);
   const curate = useCurate(query.space, board, canCurate);
@@ -298,17 +304,17 @@ export function PostList({
           {board?.following !== undefined && query.space && (
             <button
               className={board.following ? 'chosen' : ''}
-              title={board.following ? 'Its posts come to your Home and notify you. Click to stop.' : 'Bring its posts to your Home and get notified about new ones'}
-              onClick={() => attempt(() => api('followBoard', { project: query.space, board: board.name, on: !board.following }).then(bump), board.following ? `Stopped following ${board.title}` : `Following ${board.title}`)}
+              title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
+              onClick={() => attempt(() => api('followBoard', { project: query.space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
             >
-              {board.following ? '✓ Following' : 'Follow'}
+              {t(board.following ? 'board.following' : 'board.follow')}
             </button>
           )}
           {toolbar}
-          <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label="Sort posts">
+          <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label={t('posts.sort')}>
             {SORTS.map((s) => (
               <option key={s.value} value={s.value}>
-                {s.label}
+                {t(`sort.${s.value}`)}
               </option>
             ))}
           </select>
@@ -327,8 +333,8 @@ export function PostList({
         {posts?.length === 0 && <div className="empty">{empty}</div>}
         {query.space && posts?.some((p) => p.heldBy) && (
           <div className="buttons load-older">
-            <AsyncButton onClick={() => attempt(() => api('fetchOlder', { space: query.space! }).then(bump), 'Asked the members for the month before')}>Load older</AsyncButton>
-            <span className="small muted">Older posts are with the members who keep them.</span>
+            <AsyncButton onClick={() => attempt(() => api('fetchOlder', { space: query.space! }).then(bump), t('posts.older.asked'))}>{t('posts.older')}</AsyncButton>
+            <span className="small muted">{t('posts.older.where')}</span>
           </div>
         )}
       </div>
@@ -338,47 +344,40 @@ export function PostList({
 
 // ---------------------------------------------------------------- how long things stay
 
-const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: new Date(iso).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
-
 /** Why a post stays for good, or until when and what stretched it. */
 export function lifetimeText(l: NonNullable<PostInfo['lifetime']>): string {
-  const yours = l.yours ? ' Your devices keep it regardless.' : '';
-  if ('forever' in l) return { pinned: 'Stays for good: it is pinned.', permanent: 'Stays for good: issues, proposals and releases always do.', 'no-rule': 'Stays for good: this board has no rule for forgetting.' }[l.forever];
-  if (l.full) return `Goes now: the board is over its size, and this post would go soonest.${yours}`;
-  const why = l.grace
-    ? ', given 14 days after the rule was set'
-    : l.overShare
-      ? `, shortened: its author posts ${l.overShare}× their share of this board`
-      : l.upvotes
-        ? `, ${l.upvotes} upvote${l.upvotes === 1 ? '' : 's'} added ${l.addedDays} days`
-        : '';
+  const yours = l.yours ? t('lifetime.yours') : '';
+  if ('forever' in l) return t({ pinned: 'lifetime.pinned', permanent: 'lifetime.permanent', 'no-rule': 'lifetime.norule' }[l.forever]);
+  if (l.full) return t('lifetime.full', { yours });
+  const why = l.grace ? t('lifetime.why.grace') : l.overShare ? t('lifetime.why.overshare', { n: l.overShare }) : l.upvotes ? t('lifetime.why.upvotes', { n: l.upvotes, days: l.addedDays }) : '';
   const gone = Date.parse(l.until) <= Date.now();
-  return `${gone ? 'Forgotten since' : 'Stays until'} ${day(l.until)}${why}.${yours}`;
+  return t(gone ? 'lifetime.gone' : 'lifetime.until', { day: l.until, why, yours });
 }
 
 /** Roughly who holds a post of a big space: an estimate, from what everyone knows. */
 export function heldByText(h: NonNullable<PostInfo['heldBy']>): string {
-  if (h.recent) return `Held by everyone online while it's recent (${h.about} members).`;
-  const parts = ['its author', `${h.share} member${h.share === 1 ? '' : 's'} by share`, ...(h.upvoters ? [`${h.upvoters} who upvoted`] : [])];
-  return `Held by about ${h.about}: ${parts.join(', ')}.`;
+  if (h.recent) return t('held.recent', { n: h.about });
+  const parts = [t('held.author'), t('held.share', { n: h.share }), ...(h.upvoters ? [t('held.upvoters', { n: h.upvoters })] : [])];
+  return t('held.about', { n: h.about, parts: parts.join(', ') });
 }
 
 /** A board's rule, said in a line, with who set it when. */
 export function ruleText(rule: NonNullable<BoardInfo['rule']>): string {
-  const keep = rule.keepDays ? `Posts here stay ${rule.keepDays} days after their last activity, longer with upvotes` : 'Posts here stay';
-  const size = rule.maxMB ? `${rule.keepDays ? ', and' : ''} up to ${rule.maxMB} MB in all` : '';
-  return `${keep}${size}. Set by ${rule.by.name ?? shortDid(rule.by.did)} on ${day(rule.time)}.`;
+  const keep = rule.keepDays ? t('rule.keep.days', { n: rule.keepDays }) : t('rule.keep');
+  const size = rule.maxMB ? t(rule.keepDays ? 'rule.size.and' : 'rule.size', { mb: rule.maxMB }) : '';
+  return t('rule.set', { keep, size, name: rule.by.name ?? shortDid(rule.by.did), day: rule.time });
 }
 
 // ---------------------------------------------------------------- one post
 
 function IssueControls({ post, meDid }: { post: PostInfo; meDid: string }) {
+  const { t } = useTexts();
   const issue = post.issue!;
   const mine = issue.assignee?.did === meDid && !issue.assignee.agent;
   return (
     <fieldset className="work">
-      <legend>Issue</legend>
-      <span>{issue.assignee ? <>Assigned to <b>{actorName(issue.assignee, meDid)}</b>{issue.assignee.agent ? ` · ${issue.assignee.agent}` : ''}</> : 'Nobody is on it yet.'}</span>
+      <legend>{t('issue.legend')}</legend>
+      <span>{issue.assignee ? <T name="issue.assigned" values={{ name: <b>{actorName(issue.assignee, meDid)}</b>, agent: issue.assignee.agent ? ` · ${issue.assignee.agent}` : '' }} /> : t('issue.nobody')}</span>
       {issue.labels.map((l) => (
         <span key={l} className="tag">
           {l}
@@ -386,11 +385,13 @@ function IssueControls({ post, meDid }: { post: PostInfo; meDid: string }) {
       ))}
       <span className="grow" />
       {!mine && issue.status !== 'done' && issue.status !== 'closed' && (
-        <AsyncButton onClick={() => attempt(() => api('claimIssue', { issue: post.id }).then(bump), "It's yours")}>Take it</AsyncButton>
+        <AsyncButton onClick={() => attempt(() => api('claimIssue', { issue: post.id }).then(bump), t('issue.taken'))}>{t('issue.take')}</AsyncButton>
       )}
       <select value={issue.status} onChange={(e) => attempt(() => api('setIssueStatus', { issue: post.id, status: e.target.value }).then(bump))}>
         {['open', 'in-progress', 'done', 'closed'].map((s) => (
-          <option key={s}>{s}</option>
+          <option key={s} value={s}>
+            {t(`issue.status.${s}`)}
+          </option>
         ))}
       </select>
     </fieldset>
@@ -398,6 +399,7 @@ function IssueControls({ post, meDid }: { post: PostInfo; meDid: string }) {
 }
 
 export function Tally({ p }: { p: ProposalInfo }) {
+  const { t } = useTexts();
   const total = Math.max(1, p.yes + p.no + p.abstain);
   return (
     <>
@@ -407,41 +409,35 @@ export function Tally({ p }: { p: ProposalInfo }) {
         <span className="abstain" style={{ width: `${(p.abstain / total) * 100}%` }} />
       </div>
       <p className="small">
-        Yes {p.yes} · No {p.no} · Abstain {p.abstain} · {p.voted} of {p.eligible} counted · quorum {p.quorum} {p.quorumReached ? '✓' : ''} ·{' '}
-        {p.closed ? 'closed' : `open until ${new Date(p.deadline).toLocaleString()}`}
+        {t('tally.counts', { yes: p.yes, no: p.no, abstain: p.abstain, voted: p.voted, eligible: p.eligible, quorum: p.quorum })} {p.quorumReached ? '✓' : ''} ·{' '}
+        {p.closed ? t('tally.closed') : t('tally.open', { deadline: p.deadline })}
       </p>
     </>
   );
 }
 
 function ProposalControls({ post }: { post: PostInfo }) {
+  const { t } = useTexts();
   const p = post.proposal!;
-  const vote = (choice: 'yes' | 'no' | 'abstain', label: string) => (
+  const vote = (choice: 'yes' | 'no' | 'abstain') => (
     <AsyncButton className={p.myVote?.choice === choice && !p.myVote.via ? 'chosen' : ''} onClick={() => attempt(() => api('vote', { proposal: post.id, choice }).then(bump))}>
-      {label}
+      {t(`vote.${choice}`)}
     </AsyncButton>
   );
   return (
     <fieldset className="work">
-      <legend>Vote · one per participant</legend>
+      <legend>{t('vote.legend')}</legend>
       <div className="grow">
         <Tally p={p} />
         <span className="small">
-          {p.myVote ? (
-            <>
-              Your vote: <b>{p.myVote.choice}</b>
-              {p.myVote.via ? ` (via ${p.myVote.via.name ?? 'someone'})` : ''}
-            </>
-          ) : (
-            'You have not voted.'
-          )}
+          {p.myVote ? <T name="vote.yours" values={{ choice: <b>{t(`vote.${p.myVote.choice}`)}</b>, via: p.myVote.via ? t('vote.via', { name: p.myVote.via.name ?? t('word.someone.lc') }) : '' }} /> : t('vote.none')}
         </span>
       </div>
       {!p.closed && (
         <span className="vote-buttons">
-          {vote('yes', 'Yes')}
-          {vote('no', 'No')}
-          {vote('abstain', 'Abstain')}
+          {vote('yes')}
+          {vote('no')}
+          {vote('abstain')}
         </span>
       )}
     </fieldset>
@@ -450,6 +446,7 @@ function ProposalControls({ post }: { post: PostInfo }) {
 
 /** A shared project: what it is, and whether you can go in. */
 function ProjectCard({ post }: { post: PostInfo }) {
+  const { t } = useTexts();
   const project = post.project!;
   return (
     <div className="project-card sunken">
@@ -459,15 +456,16 @@ function ProjectCard({ post }: { post: PostInfo }) {
         {project.description && <p className="small">{plain(project.description).slice(0, 300)}</p>}
       </div>
       {project.member ? (
-        <button onClick={() => navigate(`#/p/${project.id}`)}>Open project</button>
+        <button onClick={() => navigate(`#/p/${project.id}`)}>{t('project.open')}</button>
       ) : (
-        <span className="small muted">You're not in this project yet: ask in the chat below to be invited.</span>
+        <span className="small muted">{t('project.not.in')}</span>
       )}
     </div>
   );
 }
 
 export function PostHeader({ post, meDid, spaces, back, moderator }: { post: PostInfo; meDid: string; spaces: SpaceInfo[]; back?: { href: string; label: string }; moderator?: boolean }) {
+  const { t } = useTexts();
   return (
     <article className="post-full">
       {back && (
@@ -477,30 +475,34 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
       )}
       <div className="post-full-main">
         <VoteBox post={post} />
-        {post.scene && <SceneImage did={post.by.did} scene={post.scene} size={320} className="post-scene" />}
         <div className="post-body">
-          <h2 className="post-title">
-            {post.title} <Badges post={post} />
-          </h2>
-          <div className="post-meta">
-            {post.space && (
-              <>
-                <Where space={post.space} spaces={spaces} />
-                {' · '}
-              </>
-            )}
-            <Avatar did={post.by.did} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
-            {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
-            {post.by.agent && <span className="agent-tag">{post.by.agent} · agent</span>}
-            <Coauthors post={post} /> · {ago(post.time)}
-            {post.edited && <span title={new Date(post.edited).toLocaleString()}> · edited {ago(post.edited)}</span>}
-          </div>
-          {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
-            <div className="small muted lifetime">
-              <Icon name="clock" /> {lifetimeText(post.lifetime)}
+          <div className="post-head">
+            {postScene(post) && <PostScene post={post} scene={postScene(post)!} size={320} className="post-scene" />}
+            <div className="post-head-text">
+              <h2 className="post-title">
+                {post.title} <Badges post={post} />
+              </h2>
+              <div className="post-meta">
+                {post.space && (
+                  <>
+                    <Where space={post.space} spaces={spaces} />
+                    {' · '}
+                  </>
+                )}
+                <AuthorAvatar by={post.by} size={16} /> <a href={`#/space/${encodeURIComponent(post.by.did)}`}>u/{post.by.name ?? shortDid(post.by.did)}</a>
+                {!post.by.agent && <Marks did={post.by.did} slot="author" space={post.space?.id} />}
+                {post.by.agent && <span className="agent-tag" title={post.by.session ? t('agent.tag.session.title', { session: post.by.session.name }) : undefined}>{t('agent.tag', { agent: post.by.agent })}{post.by.session ? t('agent.tag.in.session', { session: post.by.session.name }) : ''}</span>}
+                <Coauthors post={post} /> · {ago(post.time)}
+                {post.edited && <span title={t('post.edited.title', { time: post.edited })}>{t('post.edited.ago', { time: post.edited })}</span>}
+              </div>
+              {post.lifetime && !('forever' in post.lifetime && post.lifetime.forever === 'no-rule') && (
+                <div className="small muted lifetime">
+                  <Icon name="clock" /> {lifetimeText(post.lifetime)}
+                </div>
+              )}
+              {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
             </div>
-          )}
-          {post.heldBy && <div className="small muted lifetime">{heldByText(post.heldBy)}</div>}
+          </div>
           {post.link && (
             <a className="post-link big" href={post.link}>
               <Icon name="externalLink" /> {post.link}
@@ -511,7 +513,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
           {post.project && post.type !== 'project' && <ProjectCard post={post} />}
           {post.share?.space && post.share.member && post.type !== 'project' && !post.project && (
             <p className="small">
-              Shared from <a href={spaceHref(post.share.space)}>{spaceLabel(post.share.space)}</a>
+              {t('post.shared.from')} <a href={spaceHref(post.share.space)}>{spaceLabel(post.share.space)}</a>
             </p>
           )}
           {post.issue && <IssueControls post={post} meDid={meDid} />}
@@ -525,6 +527,7 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
 
 /** A post with its chat below, like a Discord channel about one thing. */
 export function PostView({ id, space, members, meDid, meName, spaces, back, moderator }: { id: string; space?: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; back?: { href: string; label: string }; moderator?: boolean }) {
+  const { t } = useTexts();
   const { data: post, error } = useApi(() => api<PostInfo>('post', id), [id]);
   if (error) return <div className="empty">{error}</div>;
   if (!post) return <div className="pane-main" />;
@@ -534,14 +537,14 @@ export function PostView({ id, space, members, meDid, meName, spaces, back, mode
         <b>
           <Icon name="message" /> {post.title}
         </b>
-        <span className="pane-tools small">{post.chat} in chat</span>
+        <span className="pane-tools small">{t('post.chat.in', { n: post.chat })}</span>
       </header>
       <div className="post-split">
         <PostHeader post={post} meDid={meDid} spaces={spaces} back={back} moderator={moderator} />
         {space ? (
           <ChatView space={space} post={post.id} meDid={meDid} meName={meName} members={members} />
         ) : (
-          <div className="empty">Public posts have no chat. Share it into a community to talk about it.</div>
+          <div className="empty">{t('post.public.nochat')}</div>
         )}
       </div>
     </section>
@@ -551,6 +554,7 @@ export function PostView({ id, space, members, meDid, meName, spaces, back, mode
 // ---------------------------------------------------------------- dialogs
 
 export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceInfo[]; space?: string; board?: string; onClose(): void }) {
+  const { t } = useTexts();
   const targets = spaces.filter((s) => s.kind !== 'group');
   const [where, setWhere] = useState(space ?? targets[0]?.id ?? '');
   const target = targets.find((s) => s.id === where);
@@ -566,7 +570,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, scene: scene || undefined, with: coauthors.length ? coauthors : undefined }), 'Posted');
+    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, scene: scene || undefined, with: coauthors.length ? coauthors : undefined }), t('submit.posted'));
     if (post) {
       onClose();
       bump();
@@ -574,13 +578,13 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
     }
   };
   return (
-    <Modal title="Submit a post" onClose={onClose} wide>
+    <Modal title={t('submit.title')} onClose={onClose} wide>
       {targets.length === 0 ? (
-        <p>Create or join a community or project first.</p>
+        <p>{t('submit.first')}</p>
       ) : (
         <form className="form" onSubmit={submit}>
           <div className="field-row">
-            <label htmlFor="submit-where">Post to:</label>
+            <label htmlFor="submit-where">{t('submit.to')}</label>
             <select id="submit-where" value={where} onChange={(e) => setWhere(e.target.value)}>
               {targets.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -589,7 +593,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
               ))}
             </select>
             {target?.kind === 'project' && boards && (
-              <select aria-label="Board" value={chosenBoard?.name} onChange={(e) => setBoardName(e.target.value)}>
+              <select aria-label={t('word.board')} value={chosenBoard?.name} onChange={(e) => setBoardName(e.target.value)}>
                 {boards
                   .filter((b) => b.canWrite !== false)
                   .map((b) => (
@@ -600,34 +604,28 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
               </select>
             )}
           </div>
-          {chosenBoard?.type === 'issues' && <p className="small">This opens an issue.</p>}
-          {chosenBoard?.type === 'proposals' && <p className="small">This puts a proposal to a vote for 3 days.</p>}
+          {chosenBoard?.type === 'issues' && <p className="small">{t('submit.issue.note')}</p>}
+          {chosenBoard?.type === 'proposals' && <p className="small">{t('submit.proposal.note')}</p>}
           <div className="field-row-stacked">
-            <label htmlFor="submit-title">Title</label>
+            <label htmlFor="submit-title">{t('field.title')}</label>
             <input id="submit-title" required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
           <div className="field-row-stacked">
-            <label htmlFor="submit-link">Link (optional)</label>
+            <label htmlFor="submit-link">{t('field.link')}</label>
             <input id="submit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
           </div>
-          {!chosenBoard || chosenBoard.type === 'posts' ? (
-            <div className="field-row-stacked">
-              <label>Image (optional)</label>
-              <ImagePicker value={image} onChange={setImage} label="Image" wide />
-            </div>
-          ) : null}
-          <ScenePicker value={scene} onChange={setScene} />
+          <PicturePicker image={image} scene={scene} onImage={setImage} onScene={setScene} imageAllowed={!chosenBoard || chosenBoard.type === 'posts'} />
           <div className="field-row-stacked">
-            <label>Text (optional)</label>
-            <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
+            <label>{t('field.text')}</label>
+            <RichEditor value={text} onChange={setText} placeholder={t('field.text.placeholder')} minHeight={140} max={TEXT_LIMITS.text} />
           </div>
           {target && (!chosenBoard || chosenBoard.type === 'posts') && <CoauthorPicker space={target.id} value={coauthors} onChange={setCoauthors} />}
           <div className="buttons">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('button.cancel')}
             </button>
             <button className="default" disabled={text.length > TEXT_LIMITS.text}>
-              Submit
+              {t('tool.submit')}
             </button>
           </div>
         </form>
@@ -638,24 +636,25 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
 
 /** Who wrote this with you: people in the space, their agents, and your own agents. Each one confirms before it shows. */
 function CoauthorPicker({ space, value, onChange }: { space: string; value: string[]; onChange(v: string[]): void }) {
+  const { t } = useTexts();
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space), [space]);
   const { data: me } = useApi(() => api<{ did: string; agents: Array<{ name: string }> }>('whoami'), []);
   const [adding, setAdding] = useState('');
   if (!members || !me) return null;
   const options = [
-    ...me.agents.map((a) => ({ key: a.name, label: `${a.name} · your agent` })),
-    ...members.filter((m) => m.did !== me.did).flatMap((m) => [{ key: m.did, label: m.name ?? shortDid(m.did) }, ...m.agents.map((a) => ({ key: `${m.did}·${a}`, label: `${m.name ?? shortDid(m.did)} · ${a}` }))]),
+    ...me.agents.map((a) => ({ key: a.name, label: t('coauthor.your.agent', { name: a.name }) })),
+    ...members.filter((m) => m.did !== me.did).flatMap((m) => [{ key: m.did, label: m.name ?? shortDid(m.did) }, ...m.agents.map((a) => ({ key: `${m.did}·${a}`, label: t('coauthor.agent', { name: m.name ?? shortDid(m.did), agent: a }) }))]),
   ];
   const label = (key: string) => options.find((o) => o.key === key)?.label ?? key;
   const left = options.filter((o) => !value.includes(o.key));
   return (
     <div className="field-row-stacked">
-      <label>Written with (optional)</label>
+      <label>{t('coauthors.field')}</label>
       <div className="grantees">
         {value.map((key) => (
           <span key={key} className="chip">
             {label(key)}
-            <button type="button" className="small-btn" title="Remove" onClick={() => onChange(value.filter((k) => k !== key))}>
+            <button type="button" className="small-btn" title={t('button.remove')} onClick={() => onChange(value.filter((k) => k !== key))}>
               ✕
             </button>
           </span>
@@ -663,13 +662,13 @@ function CoauthorPicker({ space, value, onChange }: { space: string; value: stri
         {left.length > 0 && value.length < 10 && (
           <select
             value={adding}
-            aria-label="Add a co-author"
+            aria-label={t('coauthors.add')}
             onChange={(e) => {
               if (e.target.value) onChange([...value, e.target.value]);
               setAdding('');
             }}
           >
-            <option value="">Add a person or agent…</option>
+            <option value="">{t('coauthors.add.option')}</option>
             {left.map((o) => (
               <option key={o.key} value={o.key}>
                 {o.label}
@@ -678,13 +677,14 @@ function CoauthorPicker({ space, value, onChange }: { space: string; value: stri
           </select>
         )}
       </div>
-      {value.length > 0 && <span className="small muted">Each one confirms with their own signature before they show as co-author.</span>}
+      {value.length > 0 && <span className="small muted">{t('coauthors.confirm')}</span>}
     </div>
   );
 }
 
 /** Change your own post: title, link, image, scene and text. */
 function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) {
+  const { t } = useTexts();
   const [title, setTitle] = useState(post.title);
   const [text, setText] = useState(post.text);
   const [link, setLink] = useState(post.link ?? '');
@@ -704,40 +704,36 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
     if (image !== (post.image ?? '')) changes.image = image;
     if (scene !== (post.scene ?? '')) changes.scene = scene;
     if (!Object.keys(changes).length) return onClose();
-    const saved = await attempt(() => api<PostInfo>('editPost', { post: post.id, ...changes }), 'Saved');
+    const saved = await attempt(() => api<PostInfo>('editPost', { post: post.id, ...changes }), t('post.saved'));
     if (saved) {
       bump();
       onClose();
     }
   };
   return (
-    <Modal title="Edit post" onClose={onClose} wide>
+    <Modal title={t('post.edit.title')} onClose={onClose} wide>
       <form className="form" onSubmit={save}>
         <div className="field-row-stacked">
-          <label htmlFor="edit-title">Title</label>
+          <label htmlFor="edit-title">{t('field.title')}</label>
           <input id="edit-title" required maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <div className="field-row-stacked">
-          <label htmlFor="edit-link">Link (optional)</label>
+          <label htmlFor="edit-link">{t('field.link')}</label>
           <input id="edit-link" type="url" placeholder="https://" value={link} onChange={(e) => setLink(e.target.value)} />
         </div>
+        <PicturePicker image={image} scene={scene} onImage={setImage} onScene={setScene} postId={post.id} />
         <div className="field-row-stacked">
-          <label>Image (optional)</label>
-          <ImagePicker value={image} onChange={setImage} label="Image" wide />
-        </div>
-        <ScenePicker value={scene} onChange={setScene} />
-        <div className="field-row-stacked">
-          <label>Text (optional)</label>
-          <RichEditor value={text} onChange={setText} placeholder="Say more, paste or drop images…" minHeight={140} max={TEXT_LIMITS.text} />
+          <label>{t('field.text')}</label>
+          <RichEditor value={text} onChange={setText} placeholder={t('field.text.placeholder')} minHeight={140} max={TEXT_LIMITS.text} />
         </div>
         {post.space && me && <CoauthorPicker space={post.space.id} value={coauthors ?? named} onChange={setCoauthors} />}
-        <p className="small">Everyone sees the new version, marked as edited. Earlier versions stay in the logs.</p>
+        <p className="small">{t('post.edit.note')}</p>
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default" disabled={text.length > TEXT_LIMITS.text}>
-            Save
+            {t('button.save')}
           </button>
         </div>
       </form>
@@ -746,33 +742,30 @@ function EditPostDialog({ post, onClose }: { post: PostInfo; onClose(): void }) 
 }
 
 export function ShareDialog({ post, spaces, onClose }: { post: PostInfo; spaces: SpaceInfo[]; onClose(): void }) {
+  const { t } = useTexts();
   const communities = spaces.filter((s) => s.kind === 'community' && s.id !== post.space?.id);
   const [to, setTo] = useState(communities[0]?.id ?? (post.type === 'project' ? 'followers' : ''));
   const [text, setText] = useState('');
   const link = post.url ?? postLink(post.id);
   const into = communities.length > 0 || post.type === 'project';
   return (
-    <Modal title={`Share “${post.title}”`} onClose={onClose}>
+    <Modal title={t('share.title', { title: post.title })} onClose={onClose}>
       <div className="field-row-stacked">
-        <label htmlFor="share-link">Link to send someone</label>
+        <label htmlFor="share-link">{t('share.link')}</label>
         <div className="field-row">
           <input id="share-link" className="grow" readOnly value={link} onFocus={(e) => e.target.select()} />
-          <button type="button" className={into ? '' : 'default'} onClick={() => copy(link, 'Link copied')}>
-            Copy link
+          <button type="button" className={into ? '' : 'default'} onClick={() => copy(link, t('share.copied'))}>
+            {t('share.copy')}
           </button>
         </div>
-        <p className="small">
-          {post.space && post.space.kind !== 'direct'
-            ? `Opens the post in Weave for people in ${spaceLabel(post.space)}; it shows nobody else anything.`
-            : `Opens the post in Weave. It's public: people who follow ${post.by.name ?? 'its author'} can open it.`}
-        </p>
+        <p className="small">{post.space && post.space.kind !== 'direct' ? t('share.opens.in', { space: spaceLabel(post.space) }) : t('share.opens.public', { name: post.by.name ?? t('share.author') })}</p>
       </div>
       {into ? (
         <form
           className="form"
           onSubmit={async (e) => {
             e.preventDefault();
-            const shared = await attempt(() => api<PostInfo>('share', { post: post.id, to, text: text || undefined }), 'Shared');
+            const shared = await attempt(() => api<PostInfo>('share', { post: post.id, to, text: text || undefined }), t('share.shared'));
             if (shared) {
               bump();
               onClose();
@@ -780,34 +773,34 @@ export function ShareDialog({ post, spaces, onClose }: { post: PostInfo; spaces:
           }}
         >
           <div className="field-row">
-            <label htmlFor="share-to">Share to:</label>
+            <label htmlFor="share-to">{t('share.to')}</label>
             <select id="share-to" value={to} onChange={(e) => setTo(e.target.value)}>
               {communities.map((c) => (
                 <option key={c.id} value={c.id}>
                   {spaceLabel(c)}
                 </option>
               ))}
-              {post.type === 'project' && <option value="followers">My followers (public page only)</option>}
+              {post.type === 'project' && <option value="followers">{t('share.followers')}</option>}
             </select>
           </div>
           <div className="field-row-stacked">
-            <label htmlFor="share-text">Say something (optional)</label>
+            <label htmlFor="share-text">{t('share.say')}</label>
             <textarea id="share-text" rows={3} placeholder={plain(post.text).slice(0, 120)} value={text} onChange={(e) => setText(e.target.value)} />
           </div>
-          {post.type === 'project' && <p className="small">People in the community see the project's name and description, and can talk about it in the post's chat. Only you decide who joins.</p>}
+          {post.type === 'project' && <p className="small">{t('share.project.note')}</p>}
           <div className="buttons">
             <button type="button" onClick={onClose}>
-              Cancel
+              {t('button.cancel')}
             </button>
             <button className="default" disabled={!to}>
-              Share
+              {t('button.share')}
             </button>
           </div>
         </form>
       ) : (
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Close
+            {t('button.close')}
           </button>
         </div>
       )}
@@ -816,4 +809,4 @@ export function ShareDialog({ post, spaces, onClose }: { post: PostInfo; spaces:
 }
 
 /** Copy text to the clipboard with a toast. */
-export const copy = (text: string, what = 'Copied') => navigator.clipboard.writeText(text).then(() => toast(what));
+export const copy = (text: string, what?: string) => navigator.clipboard.writeText(text).then(() => toast(what ?? t('copied')));

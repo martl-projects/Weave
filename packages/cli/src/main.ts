@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 import { parseArgs } from 'node:util';
-import { contractWords, formatUnits, isAddress, parseBlobRef, parseUnits, TEST_USDC, whoWords, type Attachment, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
+import { contractWords, formatUnits, isAddress, parseBlobRef, parseUnits, TEST_USDC, timeGiven, whoWords, type Attachment, type Json, type ServiceContract, type VisitorRule } from '@weave/core';
 import {
   claudeBundle,
   connectDaemon,
@@ -223,10 +223,11 @@ github — repositories that follow a group, tier or project (members who give t
   service add --shipped <name>     one Weave ships (packages/shipped), checked by its digest each time it starts
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
-  service add github --builtin github   the GitHub service Weave ships: hands a project's release files to its participants
-                             (it offers artifact.fetch) and keeps linked repositories' access in step  [--spaces <project,…>]
-                             [--setting GITHUB_APP_ID=<id> --setting GITHUB_APP_KEY=@<key.pem>]: as a GitHub App of your own,
-                             installed on the organization, so nobody has to sign in (with --node, on an always-on node)
+  service add --shipped github-releases   the GitHub releases service Weave ships: hands a project's release files to its
+                             participants (it offers artifact.fetch). Its access to a private repository comes from your GitHub
+                             keyvault (Keys & devices: your own GitHub App, made in one click; hand the project its repository
+                             there, or let an agent ask you with weave_request_repository)  [--spaces <project,…>]
+  service add --shipped github-access   gives the project's members access to its repositories, from the same keyvault
   service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
                              declares (asks you to approve it); one with a web page serves it as a website in its projects
                              [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
@@ -387,7 +388,8 @@ direct chats with friends (people you follow who follow you back):
   dm <who> <text...>         send them a message              [--reply <id>]
 
 chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>):
-  chat                       recent messages            [-c <channel>] [-n <count>]   (a file attached shows as 📎 name (size) wblob:…)
+  chat                       recent messages            [-c <channel>] [-n <count>] [--since <time>] [--until <time>] [--people: not agents' messages]
+                             (a file attached shows as 📎 name (size) wblob:…)
   say <text...>              send a message             [-c <channel>] [--reply <id>] [--file <path>: attach a file or image, at most 2 MB; text optional then]
   unsay <id>                 take a message down: yours, or any where you moderate (it stays in the logs)
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
@@ -419,7 +421,7 @@ keys (recovery words are read from a prompt or stdin, never from the command lin
   revoke <key>               revoke a device (needs your words) or agent: its events after --since are void  [--since <time>]
   rotate                     rotate your root key with your words  [--encryption: also a new encryption key]
   find <text>                search everyone you know of by name or did:key
-  contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)
+  contact                    print your contact link, to send via WhatsApp, email, anything (holds no keys)  [--door: through your front door, your always-on node, to give to anyone]
   add <link>                 add someone by their contact link: connect, follow, keep in your address book
 
 global options:
@@ -444,7 +446,10 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
+    until: { type: 'string' },
+    people: { type: 'boolean' },
     bare: { type: 'boolean', default: false },
+    door: { type: 'boolean', default: false },
     file: { type: 'string' },
     invite: { type: 'string' },
     auto: { type: 'boolean' },
@@ -2696,7 +2701,9 @@ ${postLine(p)}`);
       if (sub === 'publish') {
         const file = resolvePath(process.env.INIT_CWD ?? process.cwd(), values.file ?? 'weave.app.json');
         if (!existsSync(file)) throw new Error(`no app manifest at ${file}`);
-        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')) });
+        // The texts next to it (weave.texts.<lang>.json) go with it.
+        const texts = readdirSync(dirname(file)).filter((n) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)*\.json$/.test(n)).sort().map((n) => JSON.parse(readFileSync(join(dirname(file), n), 'utf8')) as unknown);
+        const app = await b.publishApp({ project: needProject(), manifest: JSON.parse(readFileSync(file, 'utf8')), ...(texts.length ? { texts } : {}) });
         return out(app, () => `published ${app.name} (${app.app}) in ${values.project}\n${app.services.map((s) => `  shares port ${s.port} (${s.protocol})${s.open?.joiner ? ` · players open ${s.open.joiner.path}` : ''}`).join('\n')}`);
       }
       if (sub === 'list') {
@@ -2856,7 +2863,7 @@ ${postLine(p)}`);
     }
 
     case 'chat': {
-      const messages = await (await backend()).messages(values.post ? undefined : needSpace(), { channel: values.channel, post: values.post, limit: values.n ? Number(values.n) : 30 });
+      const messages = await (await backend()).messages(values.post ? undefined : needSpace(), { channel: values.channel, post: values.post, limit: values.n ? Number(values.n) : 30, ...(values.since ? { since: timeGiven(values.since) } : {}), ...(values.until ? { until: timeGiven(values.until) } : {}), ...(values.people ? { people: true } : {}) });
       return out(messages, () =>
         messages
           .map((m) => {
@@ -2991,7 +2998,8 @@ ${postLine(p)}`);
     }
 
     case 'contact': {
-      const link = await (await backend()).contactLink();
+      const link = await (await backend()).contactLink(values.door ? { door: true } : {});
+      if (values.door) return out({ link }, () => `${link}\n\nYour front door: give it to anyone (a website, a post, the app's bundle). Whoever adds it reaches your always-on node, never this computer, and sees only your public side.`);
       return out({ link }, () => `${link}\n\nSend this to anyone, however you like. They add you with: weave add <link>\nIt is your address, not a key: it lets people find your node and read your public space.`);
     }
 

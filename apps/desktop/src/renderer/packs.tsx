@@ -6,6 +6,7 @@ import { HandDialog } from './keyvaults.tsx';
 import { api, bump, useApi } from './lib.ts';
 import { ItemList } from './lists.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
+import { useTexts } from './texts.tsx';
 
 /**
  * A setup pack, walked through for a project: its steps in order, each done or the next to do with one click (Weave
@@ -13,6 +14,7 @@ import { attempt, AsyncButton, Modal } from './ui.tsx';
  * services) takes clicks, not knowing how they fit.
  */
 export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo; pack: Pack; onClose(): void }) {
+  const { t } = useTexts();
   const { data: vaults, reload: reloadVaults } = useApi(() => api<KeyvaultInfo[]>('keyvaults'), []);
   const { data: services, reload: reloadServices } = useApi(() => api<ServiceInfo[]>('services'), []);
   const { data: shipped } = useApi(() => api<ShippedServiceInfo[]>('shippedServices').catch(() => [] as ShippedServiceInfo[]), []);
@@ -39,18 +41,18 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
     return !!vault(step.keyvault)?.apps.some((a) => a.handed.some((h) => h.project.id === project.id && h.resources.length));
   };
   const again = () => (reloadVaults(), reloadServices(), bump());
-  const label = (step: PackStep): { icon: IconName; title: string } => {
-    if (step.kind === 'service') return { icon: 'plug', title: `Add ${shipped?.find((s) => s.name === step.service)?.title ?? step.service} to p/${project.name}` };
+  const label = (step: PackStep): { icon: IconName; heading: string } => {
+    if (step.kind === 'service') return { icon: 'plug', heading: t('pack.add.service', { service: shipped?.find((s) => s.name === step.service)?.title ?? step.service, project: project.name }) };
     const v = vaults?.find((x) => x.name === step.keyvault);
-    const what = v?.resources ?? 'resources';
-    if (step.kind === 'keyvault') return { icon: 'lock', title: `Add your ${v?.title ?? step.keyvault}` };
-    if (step.kind === 'app') return { icon: 'lock', title: `Make your ${(v?.settings.find((s) => s.register)?.label ?? 'app').replace(/^your /i, '')}` };
-    if (step.kind === 'install') return { icon: 'download', title: `Install it on your ${what}` };
-    return { icon: 'folder', title: `Hand p/${project.name} its ${what}` };
+    const what = v?.resources ?? t('pack.resources');
+    if (step.kind === 'keyvault') return { icon: 'lock', heading: t('pack.add.keyvault', { keyvault: v?.title ?? step.keyvault }) };
+    if (step.kind === 'app') return { icon: 'lock', heading: t('pack.make.app', { app: (v?.settings.find((s) => s.register)?.label ?? t('pack.app')).replace(/^your /i, '') }) };
+    if (step.kind === 'install') return { icon: 'download', heading: t('pack.install.on', { what }) };
+    return { icon: 'folder', heading: t('pack.hand', { project: project.name, what }) };
   };
   /** The next step's button: one click each. */
   const act = (step: PackStep) => {
-    if (step.kind === 'keyvault') return <AsyncButton className="default" onClick={() => attempt(() => api('addKeyvault', { shipped: step.keyvault }).then(again))}>Add it</AsyncButton>;
+    if (step.kind === 'keyvault') return <AsyncButton className="default" onClick={() => attempt(() => api('addKeyvault', { shipped: step.keyvault }).then(again))}>{t('pack.add.it')}</AsyncButton>;
     if (step.kind === 'app') {
       const setting = vault(step.keyvault)?.settings.find((s) => s.register);
       return (
@@ -62,10 +64,10 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
               window.open(url, '_blank', 'noopener');
               await api('finishKeyvaultApp', { id });
               again();
-            }, 'Made: now install it')
+            }, t('pack.made.install'))
           }
         >
-          Make it on {setting?.register ? new URL(setting.register.page).hostname : 'its site'}…
+          {t('pack.make.on', { site: setting?.register ? new URL(setting.register.page).hostname : t('pack.its.site') })}
         </AsyncButton>
       );
     }
@@ -73,8 +75,12 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
       const next = vault(step.keyvault)?.apps[0]?.next;
       return (
         <>
-          {next && <button className="default" onClick={() => window.open(next, '_blank', 'noopener')}>Install…</button>}
-          <AsyncButton onClick={() => ask(step.keyvault)}>Check again</AsyncButton>
+          {next && (
+            <button className="default" onClick={() => window.open(next, '_blank', 'noopener')}>
+              {t('catalog.install')}
+            </button>
+          )}
+          <AsyncButton onClick={() => ask(step.keyvault)}>{t('pack.check.again')}</AsyncButton>
         </>
       );
     }
@@ -83,11 +89,15 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
       const mine = services?.find((s) => s.shipped === step.service && !s.node);
       return (
         <AsyncButton className="default" onClick={() => attempt(() => (mine ? api('setService', { name: mine.name, spaces: [...mine.spaces.map((x) => x.id), project.id] }) : api('addService', { shipped: step.service, spaces: [project.id] })).then(again))}>
-          Add it
+          {t('pack.add.it')}
         </AsyncButton>
       );
     }
-    return <button className="default" onClick={() => setHanding(vault(step.keyvault))}>Choose…</button>;
+    return (
+      <button className="default" onClick={() => setHanding(vault(step.keyvault))}>
+        {t('button.choose')}
+      </button>
+    );
   };
   // The first step not done is the one to do; those after it wait for it.
   const first = pack.steps.findIndex((s) => done(s) === false);
@@ -95,8 +105,8 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
     <Modal title={`${pack.title} · p/${project.name}`} onClose={onClose} wide>
       {pack.about && <p className="small">{pack.about}</p>}
       <ItemList
-        title="Steps"
-        empty="Looking…"
+        title={t('pack.steps')}
+        empty={t('looking')}
         {...(vaults && services
           ? {
               rows: pack.steps.map((step, i) => {
@@ -106,9 +116,9 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
                 return {
                   key: `${i}`,
                   icon: ok ? ('flag' as const) : l.icon,
-                  title: `${i + 1}. ${l.title}`,
+                  title: `${i + 1}. ${l.heading}`,
                   detail: [step.why, problem].filter(Boolean).join(' · '),
-                  main: ok ? <span className="small muted">✓ Done</span> : i === first ? act(step) : <span className="small muted">after the step before</span>,
+                  main: ok ? <span className="small muted">{t('pack.done')}</span> : i === first ? act(step) : <span className="small muted">{t('pack.after.before')}</span>,
                 };
               }),
             }
@@ -116,11 +126,11 @@ export function SetupPackDialog({ project, pack, onClose }: { project: SpaceInfo
       />
       {first === -1 && vaults && services && (
         <p className="note">
-          <Icon name="flag" /> All set: {pack.title} works.
+          <Icon name="flag" /> {t('pack.all.set', { pack: pack.title })}
         </p>
       )}
       <div className="buttons">
-        <button onClick={onClose}>{first === -1 ? 'Done' : 'Later'}</button>
+        <button onClick={onClose}>{t(first === -1 ? 'button.done' : 'update.later')}</button>
       </div>
       {handing && <HandDialog vault={handing} project={{ id: project.id, name: project.name }} onClose={() => (setHanding(undefined), again())} />}
     </Modal>

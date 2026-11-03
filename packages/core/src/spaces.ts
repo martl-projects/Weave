@@ -233,12 +233,15 @@ export function parseScope(scope: string): { kind: SpaceKind; id: string } | und
 /** A space's meeting point in the DHT for one of its keys: it moves with every new key, so removed members can't find the rest. */
 const topicOfKey = (key: string): string => `space/${b64u.encode(sha256(new Uint8Array([...utf8('weave/rendezvous/v2'), ...b64u.decode(key)])))}`;
 
-/** A space's meeting points: for its current key and the one before, so a member who hasn't got the new key yet still meets the others. */
-export const spaceTopics = (space: SpaceKeys): string[] =>
+/**
+ * A space's meeting points: for its current key and the one before, so a member who hasn't got the new key yet still
+ * meets the others, and for every key from epoch `since` on (a member who missed several).
+ */
+export const spaceTopics = (space: SpaceKeys, since = Infinity): string[] =>
   Object.keys(space.keys)
     .map(Number)
     .sort((a, b) => b - a)
-    .slice(0, 2)
+    .filter((epoch, i) => i < 2 || epoch >= since)
     .map((epoch) => topicOfKey(space.keys[String(epoch)]));
 
 /** A space's meeting point for its current key. */
@@ -396,7 +399,11 @@ export interface Invite {
   invite: string;
   inviter: Did;
   expires: string;
-  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  /**
+   * `meet`: the secret behind the inviter's meeting point (its topic is `topics[0]`), base64url. Holding it is how a
+   * node behind a firewall lets you in: only those given a link can reach it. Links from before it have none.
+   */
+  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }>; meet?: string };
   /** Keys of read-limited boards the link gives access to: board → epoch → key. */
   boards?: Record<string, Record<string, string>>;
   /** The link's own key (see inviteKeys): `invite` is its public half, which everyone in the space reads. */
@@ -432,7 +439,10 @@ const INVITE_PREFIX = 'weave:invite:';
 
 export const encodeInvite = (invite: Invite): string => INVITE_PREFIX + b64u.encode(utf8(canonicalJson(invite as unknown as Json)));
 
-export function decodeInvite(text: string): Invite {
+export const isInviteLink = (text: string): boolean => text.trim().startsWith(INVITE_PREFIX);
+
+/** An invite link's contents, whatever its age: well formed, but maybe expired or without a key. decodeInvite checks those too. */
+export function peekInvite(text: string): Invite {
   const trimmed = text.trim();
   if (!trimmed.startsWith(INVITE_PREFIX)) throw new Error('not a Weave invite');
   let invite: Invite;
@@ -442,9 +452,14 @@ export function decodeInvite(text: string): Invite {
     throw new Error('invite is damaged');
   }
   const s = invite?.space;
-  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys) {
+  if (invite?.v !== 2 || !s || !isSpaceKind(s.kind) || s.kind === 'direct' || typeof s.id !== 'string' || typeof s.name !== 'string' || !isDid(s.founder) || !isDid(invite.inviter) || typeof s.secret !== 'string' || !s.keys || typeof invite.expires !== 'string') {
     throw new Error('invite is damaged or from an older Weave version');
   }
+  return invite;
+}
+
+export function decodeInvite(text: string): Invite {
+  const invite = peekInvite(text);
   // A link without its own key (made before protocol 3) proves nothing about who holds it: its maker's node closed it (xQ0as76W), and a join with it wouldn't count.
   if (typeof invite.key !== 'string') throw new Error('this link was made by an older Weave and no longer works: ask for a new one');
   if (Date.parse(invite.expires) < Date.now()) throw new Error('invite has expired');

@@ -1,9 +1,15 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
+import type { TextPackage } from '@weave/core';
+import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, Language, LanguageSetting, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, Attachment, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
 
 export type { AppManifest } from '@weave/core';
+
+/** This computer's Weave's own settings (docs/localization.md): the UI's language, when it isn't the system's. */
+export interface Preferences {
+  language?: Language;
+}
 import type { Theme } from './theme.ts';
 export { TEXT_LIMITS } from '@weave/core/limits';
 
@@ -142,6 +148,8 @@ export interface Status {
   keystore: KeystoreKind;
   /** Said when the keys aren't protected by the operating system. */
   keystoreWarning?: string;
+  /** No folder of the services Weave ships next to this daemon (a checkout whose packages/shipped isn't built): no Unread counts, no Websites, no GitHub releases. */
+  shippedMissing?: true;
 }
 
 /** Where a home's key is kept (stage 2, 14, 17). */
@@ -171,6 +179,20 @@ export interface FeedQuery {
 export interface SpaceInfo extends SpaceRef {
   /** Projects: the icon from the project's page (wblob: reference), if it has one. */
   icon?: string;
+  /** A photo of its own (wblob: reference) instead of everyone's avatars as a group photo. */
+  photo?: string;
+  /** The text on its group photo's banner (its name when not set). */
+  bannerText?: string;
+  /** A picture behind its group photo (wblob: reference); a project's banner too, unless its page has one. */
+  background?: string;
+  /** Projects: their members stand on the banner, as a group. */
+  membersOnBanner?: true;
+  /** Who stands where on its group photo, front row first, left to right; others after them. */
+  photoOrder?: Did[];
+  /** How someone poses on its group photo: their key → a pose's or a scene's id (Weave avatar's); the others take turns. */
+  photoPoses?: Record<Did, string>;
+  /** Its photo stands above its member list (by default for groups and communities; projects have their banner). */
+  photoInList?: boolean;
   founder: Did;
   founderName?: string;
   members: number;
@@ -307,6 +329,14 @@ export interface LaunchingWebsiteInfo {
 }
 
 /** A release of a project, as it can be started as a service. */
+/** Who reaches your computer, and whether you have a front door (see WeaveNode.reach). */
+export interface ReachInfo {
+  /** Anyone who finds it gets in and sees everything public it holds; else only people you know. */
+  anyone: boolean;
+  /** You have an always-on node: your front door, the one your door contact link leads to. */
+  door: boolean;
+}
+
 export interface ArtifactInfo {
   id: string;
   project: SpaceRef;
@@ -343,6 +373,8 @@ export interface ArtifactInfo {
   /** A file's name, size and media type. */
   file?: { name: string; size?: number };
   type?: string;
+  /** Its own texts in other languages, published by a maintainer with the release (docs/localization.md). */
+  texts?: TextPackage[];
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -358,6 +390,8 @@ export interface ServiceProfileInfo {
   origin: ServiceOriginInfo;
   /** The settings it asks for (its manifest's env): what its spaces' maintainers can fill in. */
   settings?: AppSetting[];
+  /** Its own texts in other languages (weave.texts.<lang>.json with its release), from a verified release only: the renderer resolves them (docs/localization.md). */
+  texts?: TextPackage[];
   time: string;
 }
 
@@ -761,6 +795,31 @@ export interface KnockInfo {
   access: Array<{ board: string; read?: boolean; write?: boolean }>;
 }
 
+/**
+ * What an invite or knock link says, looked at without joining: for the card a
+ * link makes in a chat, and the "Join?" that follows. Only what the link itself
+ * carries, plus where you stand with that space.
+ */
+export interface InviteLook {
+  /** An invite link joins right away; a knock link asks the inviter first. */
+  kind: 'invite' | 'knock';
+  space: SpaceRef & { founder: Did; founderName?: string };
+  inviter: { did: Did; name?: string };
+  expires: string;
+  /** Read-limited boards the link opens, by name. */
+  boards: string[];
+  /**
+   * Where you stand: open (you may join, or ask), member (you're in already), waiting (you asked, the inviter decides),
+   * mine (your own link), expired, old (made by an older Weave, no longer works), elsewhere (your company keeps you in
+   * its spaces), damaged.
+   */
+  standing: 'open' | 'member' | 'waiting' | 'mine' | 'expired' | 'old' | 'elsewhere' | 'damaged';
+  /** What's wrong, for expired, old, elsewhere and damaged. */
+  problem?: string;
+  /** How many are in, when you are (a link says nothing about the inside). */
+  members?: number;
+}
+
 /** Options for an invite link. */
 export interface InviteOptions {
   /** The link only lets people ask; you let each one in (they get no keys until then). */
@@ -1154,8 +1213,15 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'space' | 'inbox' | 'post' | 'person';
+  what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service';
+  /** For keyvault: a project to hand something to there; for service: the project; else the space to show. */
   space?: SpaceRef;
+  /** For service: one the project runs (its name or did), shown alone; else what to pick in its Add a service catalog (one Weave ships, a setup pack, a release), or nothing: the catalog. */
+  service?: string;
+  /** The person's agent that asked (its name, as it signs): said in the dialog, so they know why it's open. */
+  askedBy?: string;
+  /** For keyvault: which one (Keys & devices), ready to make the person's app there, or to hand the project a repository. */
+  keyvault?: { name: string; title: string };
   /** For post: the post to show. */
   post?: { id: string; title: string };
   /** For person: whose hub to show. */
@@ -1226,6 +1292,8 @@ export interface SessionInfo {
   role?: 'driver' | 'worker';
   /** The projects whose items it takes; none means any. */
   projects?: SpaceRef[];
+  /** Its avatar (Weave avatar), so it's known again; none: the one its name makes. */
+  avatar?: Record<string, number>;
   /** It takes new work items, from the app (Ctrl+click) and from your driver. */
   available?: boolean;
   /** The item it last finished. */
@@ -1467,8 +1535,10 @@ export interface Profile {
    */
   url: string;
   theme: Theme;
-  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as their sprite. */
+  /** Their avatar (Weave avatar): their figure as parts and numbers; none, and they show as the figure their key makes. */
   avatar?: Record<string, number>;
+  /** Their agents' avatars, by the agent's name (a screen for a head); the others show as their default. */
+  agentAvatars?: Record<string, Record<string, number>>;
   me: boolean;
   /** I follow them. */
   following: boolean;
@@ -1671,8 +1741,10 @@ export type { PlatformInfo };
 export interface ProfileInput {
   name?: string;
   theme?: Partial<Theme>;
-  /** Your avatar's figure (Weave avatar), or null to show your sprite again. */
+  /** Your avatar's figure (Weave avatar), or null for the one your key makes. */
   avatar?: Record<string, number> | null;
+  /** Your agents' avatars, by name: a figure, or null for their default again. Agents not named keep theirs. */
+  agentAvatars?: Record<string, Record<string, number> | null>;
 }
 
 /** Who did something: the person, and the agent if one acted for them. */
@@ -1680,6 +1752,8 @@ export interface Actor {
   did: Did;
   name?: string;
   agent?: string;
+  /** The session the agent wrote it in, by its name (the session itself stays its person's). */
+  session?: { name: string };
 }
 
 export interface ReactionInfo {
@@ -1825,6 +1899,8 @@ export interface Backend {
   invite(space: string, hours?: number, options?: InviteOptions): Promise<string>;
   /** Join with an invite link; with a link that needs the inviter's OK, ask to be let in (`note` goes with the request). */
   joinSpace(invite: string, note?: string): Promise<SpaceInfo>;
+  /** What an invite or knock link says and where you stand with its space, without joining: for the card and the "Join?" dialog. */
+  lookAtInvite(link: string): Promise<InviteLook>;
   /** People asking to join with your links that need your OK. */
   knocks(): Promise<KnockInfo[]>;
   /** Let someone in (or turn them away) who asked with your link. */
@@ -2010,6 +2086,8 @@ export interface Backend {
   releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
   /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */
   getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }>;
+  /** How far getting a file artifact got (bytes so far, and its size when the release says it), or why it failed; nothing when it isn't being got or is here. */
+  artifactFileJob(input: { project: string; artifact: string }): Promise<{ progress?: { state: 'downloading' | 'unpacking'; done: number; total?: number }; error?: string } | undefined>;
   /** Your fetchers, and those this Weave ships that you haven't added. */
   fetchers(): Promise<FetcherInfo[]>;
   /** Add a fetcher Weave ships, for these projects (names or ids) or all; added again, for more of them. */
@@ -2075,7 +2153,7 @@ export interface Backend {
   /** Post into a community or into a project's board; in an issues or proposals board this opens an issue or a proposal. */
   /** `with`: co-authors to name (people by name or did:key, your agents by name, others' as "person·agent"); each confirms before showing. */
   /** prompt: as a work item, what a session should do with it (its starting prompt). */
-  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo>;
+  submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo>;
   /** Confirm (or decline) being a co-author of a post that names you, or (with `as`) your agent. */
   confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo>;
   /** Posts that name you or one of your agents as co-author and wait for an answer. */
@@ -2097,7 +2175,7 @@ export interface Backend {
   /** An agent asks its person to hand a project repositories from their keyvault for a platform (github): waits in their Inbox, like a permission. */
   requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
   showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
   /** The Mentions panel: posts agents pointed to on this computer, newest first. */
@@ -2255,14 +2333,18 @@ export interface Backend {
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
-  /** The avatars of these people, by their did: those who have one. */
-  avatars(people: Did[]): Promise<Record<Did, Record<string, number>>>;
+  /** A space's photo (a picture of its own, or '' for everyone's avatars), its banner's text ('' for its name) and the background behind it. */
+  setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo>;
+  /** The avatars of these people (did) and agents ("did·agent"): those who have one. */
+  avatars(people: string[]): Promise<Record<string, Record<string, number>>>;
+  /** A session's avatar, so you know it again; null for the one its name makes. */
+  setSessionAvatar(input: { session: SessionRef; avatar: Record<string, number> | null }): Promise<SessionInfo>;
   /** Everyone whose profile this node has seen and everyone in your address book, yourself excluded; `query` matches names and ids. */
   directory(query?: string): Promise<Profile[]>;
   /** The address book picker: people, projects and posts (issues, ideas, proposals) matching `query`, best first, each with its url; `only` keeps one kind. */
   find(query: string, limit?: number, only?: FoundKind): Promise<Found[]>;
   /** Your contact link: your address, to send to people however you like. Holds no keys. */
-  contactLink(): Promise<string>;
+  contactLink(input?: { door?: boolean }): Promise<string>;
   /** Add someone by their contact link (or a message containing it): connect to their node, follow them, keep them in your address book. */
   addContact(link: string): Promise<Profile>;
 
@@ -2283,7 +2365,7 @@ export interface Backend {
   /** The project's artifact description (its weave.app.json as last published), if a maintainer published one. */
   projectApp(project: string): Promise<AppManifest | null>;
   /** Maintainers: publish (or replace) the project's artifact description (the contents of weave.app.json). */
-  publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
+  publishApp(input: { project: string; manifest: unknown; texts?: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: release an artifact from a release on GitHub (by tag); each file is fingerprinted once. `assets`: platform → file name, when names don't say. */
   releaseApp(input: { project: string; tag: string; repo?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
   /** Release a Weave service (maintainers): an image, ref:tag, with its manifest in its "dev.weave.service" label; pinned to its digest. */
@@ -2295,7 +2377,7 @@ export interface Backend {
   /** The releases one of a project's artifacts could publish (or a new source's), as its provider sees them. */
   artifactReleases(input: { project: string; artifact?: string; source?: string }): Promise<AppReleases>;
   /** Maintainers: release one of a project's artifacts (or a new one, from a new source), by tag: fingerprinted by its provider. */
-  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; as?: string }): Promise<AppManifest>;
+  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: describe one of a project's artifacts (its weave.app.json): a new one, or the next description of one. */
   publishArtifact(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
   /**
@@ -2315,6 +2397,11 @@ export interface Backend {
   updateReady(input: { version: string }): Promise<UpdateReady | null>;
   /** Download new versions in the background, or only say there is one. */
   updateSettings(input: { auto: boolean }): Promise<{ auto: boolean }>;
+  reach(): Promise<ReachInfo>;
+  setReach(input: { anyone: boolean }): Promise<ReachInfo>;
+  /** This computer's own settings, about no space: the UI's language (absent: the system's). The main process and the daemon read the same one. */
+  preferences(): Promise<Preferences>;
+  setPreferences(input: { language?: LanguageSetting }): Promise<Preferences>;
   /** The app API's address and a room's token, for its handler when it runs by itself (Weave sets them for handlers it starts). */
   websiteEnv(room: string): Promise<AppEnv>;
   /** Rooms in a project (or all your projects); ended ones are left out. */
@@ -2439,9 +2526,10 @@ export interface Backend {
   channels(space: string): Promise<ChannelInfo[]>;
   createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo>;
   /** A channel's messages, or with `post` that post's chat (the space is then taken from the post). */
-  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number }): Promise<MessageInfo[]>;
+  /** A chat's messages, oldest first, the last `limit` of those in the range (`since`, `until`: times) and, with `people`, of those people wrote themselves (not their agents). */
+  messages(space: string | undefined, options?: { channel?: string; post?: string; limit?: number; since?: string; until?: string; people?: boolean }): Promise<MessageInfo[]>;
   /** Say something, with a file or image attached (from putFile, or an image from putBlob): text may be empty then. */
-  say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo>;
+  say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo>;
   /** Add (or with on: false remove) an emoji reaction on a message, post, thread, reply, issue or proposal. */
   /** Take a chat message down: yours, or any in a space you maintain or moderate. */
   deleteMessage(input: { message: string; as?: string }): Promise<void>;
@@ -2472,16 +2560,16 @@ export { LENS_CSP } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'directory', 'find', 'contactLink', 'addContact',
+  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'reach', 'setReach', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',

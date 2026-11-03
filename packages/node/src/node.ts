@@ -106,6 +106,9 @@ import {
   currentEpoch,
   decodeContact,
   decodeInvite,
+  isInviteLink,
+  peekInvite,
+  peekKnock,
   directSpace,
   DEFAULT_CHANNEL,
   delegation,
@@ -222,6 +225,7 @@ import {
   sessionsOf,
   takeOff,
   type SessionRecord,
+  type SessionStamp,
   type StackItem,
   postTargetOf,
   postUrl,
@@ -405,7 +409,12 @@ import {
   type Builtin,
   type Pack,
   artifactKindOf,
+  unrunnableRelease,
+  isLanguageSetting,
+  LANGUAGES,
+  type LanguageSetting,
 } from '@weave/core';
+import { checkServicePackage, KIND_APP_TEXTS } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type KeepAccess, type SpaceAccess } from '@weave/net';
 import {
@@ -456,6 +465,7 @@ import {
   type FeedQuery,
   type HomeSource,
   type GranteeInfo,
+  type InviteLook,
   type InviteOptions,
   type KeepersInfo,
   type AuditLine,
@@ -502,6 +512,7 @@ import {
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
   type ArtifactInfo,
+  type ReachInfo,
   type AccountInfo,
   type MyAccountInfo,
   type FetcherInfo,
@@ -510,6 +521,7 @@ import {
   type KeyvaultInfo,
   type ArtifactLine,
   type AppReleases,
+  type Preferences,
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
@@ -557,7 +569,7 @@ import {
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
-import { Releases, type ArtifactRef as StoredArtifact } from './artifacts.ts';
+import { fileAssetOf, Releases, type ArtifactRef as StoredArtifact, type InstallJob } from './artifacts.ts';
 import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
@@ -594,6 +606,16 @@ interface Sso {
 export const KIND_PROFILE = 'weave.profile';
 /** A project's page, sealed inside the project; the latest one by a maintainer counts. */
 export const KIND_PAGE = 'weave.project.page';
+/**
+ * A space's photo, as those who run it set it: a picture of their own (a wblob: reference), or none (everyone's
+ * avatars as a group photo), the text on the banner in it (its name when empty), and a background behind the group
+ * photo (a wblob: reference; a project's banner too, unless its page has one), and whether a project's members stand
+ * on its banner (members: true), who stands where in the group photo (order: dids, front row first) and how (poses:
+ * did → a pose's or a scene's id, as Weave avatar names them), and whether the
+ * photo stands above its member list (list; by default for groups and communities, not for projects, which have a
+ * banner). The latest one counts.
+ */
+export const KIND_SPACE_PHOTO = 'weave.space.photo';
 /** A public copy of a project's page, published by a maintainer when the project is public. */
 export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
@@ -797,6 +819,23 @@ const KIND_GENERATION = 'weave.org.generation';
 const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
 
 /**
+ * A person's meeting point: the DHT topic their node is found on, from a secret that only their links carry (so a
+ * DID, which is public, never tells where a computer is). The topic is a hash, so it never shows the secret.
+ */
+const meetTopic = (secret: Uint8Array): string => `meet:${b64u.encode(new Uint8Array(createHash('sha256').update('weave/meet-topic/v1').update(secret).digest()))}`;
+
+/** A meeting point's secret from a link (base64url, 32 bytes), if it carries a valid one. */
+function meetSecretOf(entry: { meet?: unknown } | undefined): Uint8Array | undefined {
+  if (typeof entry?.meet !== 'string') return undefined;
+  try {
+    const secret = b64u.decode(entry.meet);
+    return secret.length === 32 ? secret : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * An event as a carry restates it: what it said, with its original signed
  * envelope (`e`) and the salt sealed with it, so that anyone can check the
  * restatement against its author's signature (the envelope signs the salted
@@ -815,8 +854,22 @@ const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: nu
   ...(d.outer ? { sealed: { kind: d.outer.kind, body: d.outer.body } as unknown as Json, ...(d.outer.salt ? { salt: d.outer.salt } : {}) } : d.inner.salt ? { salt: d.inner.salt } : {}),
 });
 
+/** Who stands where on a space's group photo: people's keys, each once, front row first (at most 100). */
+const photoOrderOf = (value: unknown): Did[] =>
+  Array.isArray(value) ? [...new Set(value.filter((d): d is Did => typeof d === 'string' && /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(d)))].slice(0, 100) : [];
+
+/** How each one poses on a space's group photo: their key → a pose's or a scene's id (what they mean is Weave avatar's). */
+const photoPosesOf = (value: unknown): Record<Did, string> =>
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.entries(value)
+          .filter((e): e is [Did, string] => /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(e[0]) && typeof e[1] === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(e[1]))
+          .slice(0, 100),
+      )
+    : {};
+
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
-const CARRIED_STATE = new Set(['weave.project.page', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
+const CARRIED_STATE = new Set(['weave.project.page', 'weave.space.photo', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);
 
 const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
@@ -1279,13 +1332,20 @@ export class WeaveNode implements Backend {
     if (this.replica.authority.grant(key)) throw new Error('that node is linked already');
     this.replica.write(this.identity, delegation(key, 'agent', NODE_PERMISSIONS, `${NODE_PREFIX}${name}`));
     this.#writeNodeIndex(true);
-    // Who you are (and what you're called) and who signs for you: the node checks its own key against them from the start.
-    const authority = new Set(['weave.identity', 'weave.rotate', 'weave.delegate', 'weave.revoke', KIND_PROFILE]);
+    // Who you are (and what you're called) and who signs for you: the node checks its own key against them from the
+    // start. Your public side whole: each key's events form a chain, and one taken out leaves the rest waiting for it
+    // (martl's door node, 2.11.2026: his device's tiers and gifts sat between his delegations). And from before v0.4,
+    // the v1 originals that the v2 events restate (`was`), first: without them a node takes none of those.
     const payload = {
       person: me,
       name: this.nameOf(me) ?? null,
       encryption: this.#encryption.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })),
-      events: this.replica.events().filter((e) => e.author === me && authority.has(canonicalKind(e.kind))) as unknown as Json[],
+      events: [
+        ...Object.keys(this.replica.heads())
+          .filter((signer) => this.replica.authority.personOf(signer as Did) === me)
+          .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
+        ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
+      ] as unknown as Json[],
       spaces: this.#nodeSpaces() as unknown as Json[],
       bootstrap: this.config.bootstrap as unknown as Json,
     };
@@ -1374,22 +1434,63 @@ export class WeaveNode implements Backend {
     return this.#swarm !== undefined;
   }
 
-  /** Every DHT topic this node listens on: its identity, configured topics, its spaces and their entry points. */
+  /**
+   * Every DHT topic this node listens on: its meeting point, configured topics, its spaces and their entry points.
+   * Never its DID: that's public, and would tell anyone where this computer is.
+   */
   get topics(): string[] {
-    const topics = new Set([this.identity.author, ...this.config.topics]);
+    const topics = new Set([meetTopic(this.#meetSecret()), ...(this.#frontDoor() ? [meetTopic(this.#doorSecret())] : []), ...this.config.topics]);
     for (const space of this.#spaces.values()) {
-      for (const topic of spaceTopics(space)) topics.add(topic);
+      for (const topic of this.#meetingTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
     }
-    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend))) topics.add(topic);
+    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend), 0)) topics.add(topic);
     return [...topics];
+  }
+
+  /**
+   * A space's meeting points this node is found at: those of every key only people still in it were given (made after
+   * everyone who left or was removed had gone, and not boxed to them), and always its current key and the one before.
+   * So a member who missed several new keys (offline for a while, an older Weave) still finds the others, and nobody
+   * who left finds them past the key that followed.
+   */
+  #meetingTopics(space: StoredSpace): string[] {
+    const state = this.#state(space);
+    const gone = [...state.removed];
+    if (space.kind === 'direct' || !gone.length) return spaceTopics(space, 0);
+    const scope = spaceScope(space);
+    const safe = new Map<number, boolean>();
+    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+      const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
+      const epoch = body?.epoch;
+      if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) continue;
+      const seen = this.#seenAt(e);
+      const time = e.time < seen ? e.time : seen;
+      const ok = gone.every(([did, at]) => time > at && !body?.boxes?.[did]);
+      safe.set(epoch as number, (safe.get(epoch as number) ?? true) && ok);
+    }
+    // From the newest key down, as long as each is one only those still here hold.
+    let since = Infinity;
+    for (const epoch of Object.keys(space.keys).map(Number).sort((a, b) => b - a)) {
+      if (!safe.get(epoch)) break;
+      since = epoch;
+    }
+    return spaceTopics(space, since);
+  }
+
+  /**
+   * A topic only looked up, never announced on: someone else's meeting point (or, from a link made before meeting
+   * points, their DID). Announcing there would tell whoever looks where we are, and that we know them.
+   */
+  #looksOnly(topic: string): boolean {
+    return (topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret()) && !(this.#frontDoor() && topic === meetTopic(this.#doorSecret()));
   }
 
   /** Connect to peers and join all topics. */
   async goOnline(): Promise<void> {
     if (this.#swarm) return;
     this.#swarm = new SwarmNode(this.replica, this.config.bootstrap.length ? { bootstrap: this.config.bootstrap } : {}, this.blobs, this.sessionAccess());
-    await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic)));
+    await Promise.all(this.topics.map((topic) => this.#swarm!.join(topic, { announce: !this.#looksOnly(topic) })));
     // Reopen the rooms we host that are still open (their keys come from our own secret).
     for (const { room } of this.#website.allRooms()) if (room.open && this.#website.hostedHere(room)) await this.#live.host(room).catch(() => {});
     await this.#remote.start().catch((error: Error) => console.error(`weave: phones can't connect: ${error.message}`));
@@ -1453,6 +1554,12 @@ export class WeaveNode implements Backend {
     if (!input.as && this.#isLinkedNode && !permits(NODE_PERMISSIONS, input.kind)) throw new Error(`this is ${this.nameOf(this.identity.author) ?? 'your'} always-on node: it keeps spaces and hosts rooms, and doesn't post or change anything for them (${input.kind})`);
     // Readers would cut anything longer: refuse instead, so nothing is shortened without the author knowing.
     checkTextFields(input.body);
+    // A release of a website or service that Weave couldn't run: refused, whoever publishes it (a person, an agent, a
+    // project's release service), before it sits in the project as something nobody can start.
+    if (canonicalKind(input.kind) === KIND_APP) {
+      const problem = unrunnableRelease(parseManifest(input.body));
+      if (problem) throw new Error(problem);
+    }
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
     const space = input.space ? this.#space(input.space) : undefined;
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new Error(`${space.name} is closed: it's kept as it is, read-only`);
@@ -1569,7 +1676,7 @@ export class WeaveNode implements Backend {
       this.config = { ...this.config, topics: [...this.config.topics, topic] };
       saveConfig(this.home, this.config);
     }
-    await this.#swarm?.join(topic);
+    await this.#swarm?.join(topic, { announce: !this.#looksOnly(topic) });
   }
 
   async status(): Promise<Status> {
@@ -1592,7 +1699,14 @@ export class WeaveNode implements Backend {
       heldBack: this.#heldBack,
       keystore: vaultOf(this.home).keystore,
       ...(vaultOf(this.home).warning ? { keystoreWarning: vaultOf(this.home).warning } : {}),
+      ...(this.shippedMissing ? { shippedMissing: true as const } : {}),
     };
+  }
+
+  /** No services Weave ships next to this daemon: a checkout whose packages/shipped/dist isn't built. Everything from Unread to Websites is missing then. */
+  get shippedMissing(): boolean {
+    const dir = this.wasmSetup.shippedDir ?? SHIPPED_DIR;
+    return !dir || !existsSync(joinPath(dir, 'shipped.json'));
   }
 
   async watch(onItem: (item: FeedItem) => void, signal: AbortSignal): Promise<void> {
@@ -1697,6 +1811,39 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(space);
   }
 
+  async lookAtInvite(text: string): Promise<InviteLook> {
+    const link = text.trim();
+    const knock = isKnockLink(link);
+    if (!knock && !isInviteLink(link)) throw new Error('not a Weave invite link');
+    let parsed: { space: { id: string; kind: SpaceKind; name: string; founder: Did }; inviter: Did; expires: string; boards?: Record<string, unknown>; key?: string };
+    try {
+      parsed = knock ? peekKnock(link) : peekInvite(link);
+    } catch (error) {
+      throw new Error((error as Error).message);
+    }
+    const me = this.identity.author;
+    const held = this.#spaces.get(parsed.space.id);
+    const look: InviteLook = {
+      kind: knock ? 'knock' : 'invite',
+      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
+      inviter: { did: parsed.inviter, ...(this.nameOf(parsed.inviter) ? { name: this.nameOf(parsed.inviter) } : {}) },
+      expires: parsed.expires,
+      boards: Object.keys(parsed.boards ?? {}),
+      standing: 'open',
+    };
+    const state = held ? this.#state(held) : undefined;
+    if (parsed.inviter === me) return { ...look, standing: 'mine', ...(state ? { members: state.members.size } : {}) };
+    // In already: we hold its keys and weren't removed (a join written here counts before the invite it cites has synced).
+    // Removed and asked back with a new link: open, as #takeInvite takes it.
+    if (state && (state.members.has(me) || !state.removed.has(me))) return { ...look, standing: 'member', members: state.members.size };
+    if (knock && this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === parsed.space.id && b.inviter === parsed.inviter)) return { ...look, standing: 'waiting' };
+    if (!knock && typeof parsed.key !== 'string') return { ...look, standing: 'old', problem: 'this link was made by an older Weave and no longer works: ask for a new one' };
+    if (Date.parse(parsed.expires) < this.clock()) return { ...look, standing: 'expired', problem: 'this link has expired: ask for a new one' };
+    const inside = this.#insideOnly(parsed.space.founder);
+    if (inside) return { ...look, standing: 'elsewhere', problem: inside };
+    return look;
+  }
+
   /** An invite's space and keys, kept here; the join itself is written by the caller. */
   async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
     const invite = decodeInvite(text);
@@ -1725,8 +1872,9 @@ export class WeaveNode implements Backend {
     if (this.#spaces.has(link.space.id)) throw new Error(`you are already in ${link.space.name}`);
     if (link.inviter === this.identity.author) throw new Error("that's your own link");
     this.#adoptBootstrap(link.entry);
-    for (const topic of new Set([link.inviter, ...link.entry.topics])) await this.join(topic);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter } }));
+    // The meeting point the link holds (links from before meeting points hold the inviter's DID instead).
+    for (const topic of new Set(link.entry.topics)) await this.join(topic);
+    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter, ...(link.entry.meet ? { meet: link.entry.meet } : {}) } }));
     this.replica.write(this.identity, knockFor(link, note.trim(), this.#entryPoint()));
     return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, history: 'all', waiting: true };
   }
@@ -1821,20 +1969,63 @@ export class WeaveNode implements Backend {
    * boards) and its latest state (page, app, channels, curation, theme), with
    * their original ids, authors and times.
    */
-  #carry(space: StoredSpace, shared: Set<string>): void {
+  #carry(space: StoredSpace, shared: Set<string>): boolean {
     const events = this.#decodedIn(space.id)
       .filter((d) => (classOf(canonicalKind(d.inner.kind)) === 'control' || CARRIED_STATE.has(d.inner.kind)) && d.inner.kind !== KIND_CARRY && !d.board)
       .filter((d) => !shared.has(String((d.event.body as { epoch?: unknown } | null)?.epoch ?? '')))
       .map(carriedItem);
-    if (events.length) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json } }));
+    if (!events.length) return false;
+    // v: 3, its items carry their envelopes: checkable (or, from before protocol 3, vouched for by the founder).
+    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json, v: 3 } }));
+    return true;
   }
+
+  /**
+   * Carries from before protocol 3 restate their events without envelopes, which nobody else takes any more: who came
+   * in through one never learns what came before, not even who founded the space, so its founder's messages don't
+   * show (Julian, 1.11.2026). The founder restates it all once more, in today's shape, under the current key, so
+   * everyone who read an old one reads the new one.
+   *
+   * Known limit: for an envelope from before protocol 3 the founder vouches for what it sealed, so they could claim
+   * any content for another author's old envelope (a control or carried-state kind, from before 30.10.2026). Who wrote
+   * it, with which key, as which number and when still holds (its signature); and a founder can do nearly anything in
+   * their space anyway.
+   */
+  #recarry(space: StoredSpace, state: SpaceState): number {
+    // Once settled for a space, settled for this run: our node writes only carries of today's shape from then on.
+    if (this.#recarried.has(space.id)) return 0;
+    if (space.kind === 'direct' || space.founder !== this.identity.author || (state.history?.value ?? 'all') === 'all') return 0;
+    const epochOf = (d: Decoded) => Number((d.event.body as { epoch?: unknown } | null)?.epoch);
+    // Our carries as written (the decoded views have them only as the events they restate).
+    const scope = spaceScope(space);
+    const carries = this.replica
+      .events((r) => r.scope === scope && r.author === this.identity.author && r.kind === KIND_SEALED)
+      .flatMap((r) => {
+        const d = this.#decode(r);
+        return d && d.inner.kind === KIND_CARRY ? [d] : [];
+      });
+    const old = carries.filter((d) => (d.inner.body as { v?: unknown } | null)?.v !== 3).map(epochOf).filter(Number.isSafeInteger);
+    const newest = old.length ? Math.max(...old) : -1;
+    if (!old.length || carries.some((d) => (d.inner.body as { v?: unknown } | null)?.v === 3 && epochOf(d) >= newest)) {
+      this.#recarried.add(space.id);
+      return 0;
+    }
+    const wrote = this.#carry(space, new Set([String(currentEpoch(space))]));
+    if (wrote) this.#recarried.add(space.id);
+    return wrote ? 1 : 0;
+  }
+
+  /** Spaces whose carries are of today's shape (see #recarry). */
+  #recarried = new Set<string>();
 
   /**
    * A carry becomes the events it restates, each checked against its original
    * envelope: signed by its author's key, in this space, sealing exactly what
    * the carry says (ih). Who wrote it and when come from that envelope, never
    * from the carry. Items that can't be checked count only in our own private
-   * carries (`unchecked`): anyone else could make them up.
+   * carries (`unchecked`): anyone else could make them up. One exception: an
+   * envelope from before protocol 3 (no inner hash), restated by the space's
+   * founder, who vouches for what it sealed.
    */
   #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined, unchecked = false): Decoded[] {
     if (d.inner.kind !== KIND_CARRY || !space) return [];
@@ -1851,7 +2042,12 @@ export class WeaveNode implements Backend {
       const signed = sealed && typeof sealed.kind === 'string' ? { kind: sealed.kind, body: (sealed.body ?? null) as Json } : inner;
       const opened = signed === inner ? undefined : space.kind === 'project' ? openBoard(space, signed, space.boards) : undefined;
       const opensTo = signed === inner || (!!opened && opened.kind === inner.kind && canonicalJson(opened.body) === canonicalJson(inner.body));
-      if (isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e)) {
+      const checked = isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e);
+      // An envelope from before protocol 3 signs no inner hash: what it sealed can't be checked against it. Its author,
+      // signer, number and time still can (its signature), and the space's founder vouches for the rest: in a space
+      // that lets newcomers read only from when they come, that's how they learn what came before (Julian, 1.11.2026).
+      const vouched = !checked && !sealed && isWellFormedV2(e) && e.ih === undefined && e.kind === KIND_SEALED && e.space === scope && d.event.author === space.founder && verifyEventV2(e);
+      if (checked || vouched) {
         const id = canonicalIdV2(e);
         if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
         const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, cseq: e.class === 'control' ? e.seq : undefined, cs: e.class === 'content' ? e.cs : undefined, time: e.time, body: null };
@@ -2189,7 +2385,7 @@ export class WeaveNode implements Backend {
     this.#decoded = undefined;
     removeSpace(this.home, space.id);
     this.#announceNow();
-    for (const topic of spaceTopics(space)) await this.#swarm?.leave(topic).catch(() => {});
+    for (const topic of spaceTopics(space, 0)) await this.#swarm?.leave(topic).catch(() => {});
   }
 
   async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
@@ -2245,6 +2441,53 @@ export class WeaveNode implements Backend {
     this.replica.write(this.identity, fields);
     this.#afterRekey(space, epoch, key);
     return 1;
+  }
+
+  /**
+   * Keys someone missed because their join came in after them: made after their invite, while their join was still
+   * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
+   * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite, unless the
+   * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
+   */
+  #handMissedKeys(space: StoredSpace, state: SpaceState): number {
+    if (space.kind === 'direct' || !canManage(state, this.identity.author)) return 0;
+    const scope = spaceScope(space);
+    // Who each epoch's key was boxed to, by rekeys that count.
+    const boxed = new Map<number, Set<Did>>();
+    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+      const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
+      if (!Number.isSafeInteger(body?.epoch) || !rekeyCounts(state, e)) continue;
+      const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
+      for (const did of Object.keys(body?.boxes ?? {})) to.add(did as Did);
+      boxed.set(body!.epoch as number, to);
+    }
+    // The epoch each invite was sealed with: what came after it is the newcomer's to read.
+    const invitedAt = new Map<string, number>();
+    for (const d of this.#decodedIn(space.id)) {
+      const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
+      const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
+      if (canonicalKind(d.inner.kind) === KIND_INVITE && typeof invite === 'string' && Number.isSafeInteger(epoch)) invitedAt.set(invite, epoch as number);
+    }
+    // A space that once let newcomers read only part of it and now lets them read everything: those who came in
+    // meanwhile get the keys from before too (Julian, 2.11.2026), not only newcomers from now on.
+    const opened = (state.history?.value ?? 'all') === 'all' && this.#decodedIn(space.id).some((d) => d.inner.kind === KIND_HISTORY && (d.inner.body as { history?: unknown } | null)?.history !== 'all');
+    let handed = 0;
+    const epochs = opened ? Object.keys(space.keys).map(Number) : [...boxed.keys()];
+    for (const epoch of epochs) {
+      const key = space.keys[String(epoch)];
+      if (!key) continue;
+      const to = boxed.get(epoch) ?? new Set<Did>();
+      const missing = [...state.members.values()]
+        .filter((m) => m.did !== this.identity.author && !to.has(m.did))
+        .filter((m) => opened || (m.invite !== undefined && invitedAt.has(m.invite) && epoch > invitedAt.get(m.invite)!))
+        .map((m) => m.did);
+      if (!missing.length) continue;
+      const boxes: Record<string, Json> = {};
+      for (const did of missing) boxes[did] = boxTo(this.#encryptionKeyOf(did), { space: space.id, epoch, key }) as unknown as Json;
+      this.replica.write(this.identity, { kind: KIND_REKEY, scope, body: { epoch, boxes } });
+      handed++;
+    }
+    return handed;
   }
 
   async removeMember(ref: string, who: string): Promise<void> {
@@ -2340,7 +2583,14 @@ export class WeaveNode implements Backend {
     return matches[0];
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
+  /** What an agent writes in a session says which one (by its name, once it has one); the session itself stays yours. */
+  #sessionStamp(session: SessionRef | undefined, as: string | undefined): Json | undefined {
+    if (!session || !as) return undefined;
+    const record = this.#sessionRecord(session);
+    return record.name ? { name: record.name } : undefined;
+  }
+
+  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo> {
     const title = input.title?.trim();
     if (!title) throw new Error('a post needs a title');
     if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
@@ -2356,6 +2606,8 @@ export class WeaveNode implements Backend {
     if (link) body.link = link;
     if (image) body.image = image;
     if (scene) body.scene = scene;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     if (input.with?.length) body.with = this.#coauthorList(space, input.with);
     const prompt = input.prompt?.trim();
     if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
@@ -2497,8 +2749,30 @@ export class WeaveNode implements Backend {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string }): Promise<AppOpen> {
-    if (!['space', 'inbox', 'post', 'person'].includes(input.what)) throw new Error('what is space, inbox, post or person');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen> {
+    if (!['space', 'inbox', 'post', 'person', 'keyvault', 'service'].includes(input.what)) throw new Error('what is space, inbox, post, person, keyvault or service');
+    // Which agent asked, for the dialog to say (an agent of theirs: it signs as one).
+    const askedBy = input.as && this.#agents.some((a) => a.name === input.as) ? { askedBy: input.as } : {};
+    if (input.what === 'service') {
+      // A project's services: one it runs, or its Add a service catalog with something picked (the person adds it).
+      if (!input.space) throw new Error('say which project');
+      const project = this.#project(input.space);
+      const service = input.service?.trim();
+      const open: AppOpen = { what: 'service', space: { id: project.id, kind: 'project', name: project.name }, ...(service ? { service } : {}), ...askedBy };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
+    if (input.what === 'keyvault') {
+      // A keyvault in Keys & devices (GitHub's by default): the person makes their app there, or hands a project a repository.
+      const vaults = await this.keyvaults();
+      const wanted = (input.keyvault ?? 'github').toLowerCase();
+      const k = vaults.find((v) => v.name.toLowerCase() === wanted || v.title.toLowerCase() === wanted || v.platform.toLowerCase() === wanted);
+      if (!k) throw new Error(vaults.length ? `no keyvault ${input.keyvault ?? 'github'} here (${vaults.map((v) => v.name).join(', ')})` : 'no keyvaults here');
+      const project = input.space ? this.#project(input.space) : undefined;
+      const open: AppOpen = { what: 'keyvault', keyvault: { name: k.name, title: k.title }, ...(project ? { space: { id: project.id, kind: 'project', name: project.name } } : {}), ...askedBy };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     if (input.what === 'person') {
       if (!input.who) throw new Error('say who');
       const did = this.resolve(input.who);
@@ -2727,6 +3001,15 @@ export class WeaveNode implements Backend {
       if (problem) throw new Error(`${problem}; names around you: ${[...new Set(taken.filter((t): t is string => !!t))].sort((a, b) => a.localeCompare(b)).join(', ') || 'none yet'}`);
     }
     return this.#saveSession({ ...record, name: name === '' ? undefined : (name ?? record.name), about, description });
+  }
+
+  /** A session's avatar (Weave avatar), so you know it again; null: the one its name makes. Only you set it. */
+  async setSessionAvatar(input: { session: SessionRef; avatar: Record<string, number> | null }): Promise<SessionInfo> {
+    const record = this.#sessionRecord(input.session);
+    const avatar = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+    if (input.avatar !== null && !avatar) throw new Error('an avatar is parts with whole numbers, like { "head": 1, "screen": 2 }');
+    const { avatar: _old, ...rest } = record;
+    return this.#saveSession({ ...rest, ...(avatar ? { avatar } : {}) });
   }
 
   /** Names a session can't take (except `own`'s): your other sessions', people's around you, your agents' and yours. */
@@ -2973,6 +3256,7 @@ export class WeaveNode implements Backend {
       ...(known?.role ? { role: known.role } : {}),
       ...(known?.projects ? { projects: known.projects } : {}),
       ...(known?.available ? { available: true } : {}),
+      ...(known?.avatar ? { avatar: known.avatar } : {}),
       ...(known?.last ? { last: known.last } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
@@ -2993,6 +3277,7 @@ export class WeaveNode implements Backend {
       ...(record.role ? { role: record.role } : {}),
       ...(record.projects?.length ? { projects: record.projects } : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar as unknown as Json } : {}),
       ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
     };
     const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
@@ -3025,6 +3310,7 @@ export class WeaveNode implements Backend {
         ? { projects: record.projects.map((id) => this.#spaces.get(id)).filter((s): s is StoredSpace => !!s).map((s) => ({ id: s.id, kind: s.kind, name: s.name })) }
         : {}),
       ...(record.available ? { available: true } : {}),
+      ...(record.avatar ? { avatar: record.avatar } : {}),
       ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
       time: record.time,
     };
@@ -3478,11 +3764,13 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
     this.#prefetchBlobs();
-    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests());
+    let changed = (await this.#expireMemberships()) + (await this.#grantAutomatic()) + (await this.#checkContractWallets()) + (await this.#grantPaid()) + (await this.#grantTickets()) + (await this.#renewPaid()) + (await this.#sendQueuedRequests()) + this.#tellContacts();
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
     changed += await this.#closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#handMissedKeys(space, this.#state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#recarry(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
     changed += this.#applyShreds();
     changed += this.#forget();
@@ -3656,6 +3944,40 @@ export class WeaveNode implements Backend {
     const inner: Inner = { kind: EDGE_KIND[input.edge], body: edgeBody(subject, input.on) };
     const isPrivate = input.private ?? input.edge !== 'follow';
     this.replica.write(this.identity, isPrivate ? this.#sealForSelf(inner) : inner);
+    // A follow they were told of in our direct chat ends there too, or they'd still count us as a friend.
+    if (input.edge === 'follow' && !input.on && this.#toldFollow(subject)) this.#tellFollow(subject, false);
+  }
+
+  /** Whether we told someone in our direct chat that we follow them (or since, that we don't). */
+  #toldFollow(peer: Did): boolean {
+    if (!this.#keysHere(peer)) return false;
+    const direct = this.#direct(peer);
+    return this.#decodedIn(direct.id).some((d) => d.event.author === this.identity.author && d.inner.kind === KIND_FOLLOW && (d.inner.body as { subject?: unknown } | null)?.subject === peer);
+  }
+
+  /** Their log is here, with their encryption keys: before it, our direct chat's key would be made from their DID alone. */
+  #keysHere(peer: Did): boolean {
+    return this.#eventsOf(peer).length > 0;
+  }
+
+  /** Follow someone where only the two of us read it: sealed in our direct chat. Friends without a public follow. */
+  #tellFollow(peer: Did, on: boolean): void {
+    this.replica.write(this.identity, sealFor(this.#cipher(this.#direct(peer)), { kind: KIND_FOLLOW, body: edgeBody(peer, on) }));
+  }
+
+  /**
+   * Contacts we follow, told so in our direct chat once their keys are here (adding a contact may come before
+   * their log does). Returns how many were told.
+   */
+  #tellContacts(): number {
+    const following = this.#graph().get(this.identity.author)?.following;
+    let told = 0;
+    for (const did of this.#contacts().keys()) {
+      if (!following?.has(did) || !this.#keysHere(did) || this.#toldFollow(did)) continue;
+      this.#tellFollow(did, true);
+      told++;
+    }
+    return told;
   }
 
   async social(): Promise<Social> {
@@ -3690,6 +4012,7 @@ export class WeaveNode implements Backend {
       url: personUrl(name, did),
       theme: this.themeOf(did),
       ...((figure) => (figure ? { avatar: figure } : {}))(this.avatarOf(did)),
+      ...((agents) => (Object.keys(agents).length ? { agentAvatars: agents } : {}))(this.#agentAvatars(did)),
       me: did === me,
       following: mine?.following.has(did) ?? false,
       followsMe: graph.get(did)?.following.has(me) ?? false,
@@ -3713,10 +4036,19 @@ export class WeaveNode implements Backend {
       const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
       this.replica.write(this.identity, { kind: KIND_THEME, body: { ...theme } });
     }
-    if (input.avatar !== undefined) {
-      const figure = input.avatar === null ? undefined : sanitizeFigure(input.avatar);
-      if (input.avatar !== null && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
-      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null } });
+    if (input.avatar !== undefined || input.agentAvatars !== undefined) {
+      const figure = input.avatar === undefined ? this.avatarOf(this.identity.author) : input.avatar === null ? undefined : sanitizeFigure(input.avatar);
+      if (input.avatar && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
+      // Your agents' figures: by their name, null takes one back (it shows as its default again).
+      const agents = { ...this.#agentAvatars(this.identity.author) };
+      for (const [name, f] of Object.entries(input.agentAvatars ?? {})) {
+        if (!this.#agents.some((a) => a.name === name)) throw new Error(`you have no agent named ${name}`);
+        const clean = f === null ? undefined : sanitizeFigure(f);
+        if (f !== null && !clean) throw new Error(`${name}'s avatar is parts with whole numbers, like { "head": 1 }`);
+        if (clean) agents[name] = clean;
+        else delete agents[name];
+      }
+      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null, ...(Object.keys(agents).length ? { agents: agents as unknown as Json } : {}) } });
     }
     return this.profile();
   }
@@ -3767,37 +4099,67 @@ export class WeaveNode implements Backend {
       .map((f) => f.item);
   }
 
-  async contactLink(): Promise<string> {
+  /**
+   * Your contact link. `door`: through your front door instead, to give to anyone (a website, the app's bundle):
+   * whoever adds it reaches only your always-on node, never this computer, and learns only your public side.
+   */
+  async contactLink(input: { door?: boolean } = {}): Promise<string> {
     const name = this.nameOf(this.identity.author);
-    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry: this.#entryPoint() });
+    const door = this.#doorSecret();
+    const entry = input.door ? { topics: [meetTopic(door)], bootstrap: this.config.bootstrap, meet: b64u.encode(door) } : this.#entryPoint();
+    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry, ...(input.door ? { door: true as const } : {}) });
   }
 
   async addContact(link: string): Promise<Profile> {
     const contact = decodeContact(link);
     if (contact.did === this.identity.author) throw new Error("that's your own contact link");
     this.#adoptBootstrap(contact.entry);
-    for (const topic of new Set([contact.did, ...contact.entry.topics])) await this.join(topic);
-    if (!this.#contacts().has(contact.did)) {
-      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null } }));
+    // Their meeting point, looked up only (a link from before meeting points names their DID there instead).
+    for (const topic of new Set(contact.entry.topics)) await this.join(topic);
+    const meet = meetSecretOf(contact.entry) && contact.entry.meet;
+    // Kept with the contact: holding it is how their node lets us in. A newer link of someone we have brings it.
+    if (!this.#contacts().has(contact.did) || (meet && !this.#selfBodies(KIND_CONTACT).some((b) => b.did === contact.did && b.meet === meet))) {
+      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null, ...(meet ? { meet } : {}) } }));
     }
-    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true });
+    // Not a public follow: whom you know stays between the two of you (sealed to yourself, and in your direct chat
+    // once their keys are here).
+    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true, private: true });
+    this.#tellContacts();
     return this.profile(contact.did);
   }
 
   /** A space's theme: the latest theme event its author published. */
-  /** Someone's avatar: their figure, or none (they show as their sprite). */
+  /** Someone's avatar: their figure, or none (they show as the figure their key makes). */
   avatarOf(author: Did): AvatarFigure | undefined {
     let body: unknown;
     for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
     return sanitizeFigure((body as { figure?: unknown } | undefined)?.figure);
   }
 
-  /** The avatars of these people, those who have one: what the app draws for them. */
-  async avatars(people: Did[]): Promise<Record<Did, AvatarFigure>> {
-    const out: Record<Did, AvatarFigure> = {};
-    for (const did of new Set(people.slice(0, 500))) {
-      const figure = this.avatarOf(did);
-      if (figure) out[did] = figure;
+  /** Someone's agents' avatars, by the agent's name, as they set them. */
+  #agentAvatars(author: Did): Record<string, AvatarFigure> {
+    let body: unknown;
+    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
+    const agents = (body as { agents?: unknown } | undefined)?.agents;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return {};
+    const out: Record<string, AvatarFigure> = {};
+    for (const [name, f] of Object.entries(agents).slice(0, 50)) {
+      const figure = sanitizeFigure(f);
+      if (figure && name.length <= 40) out[name] = figure;
+    }
+    return out;
+  }
+
+  /**
+   * The avatars of these people (and of their agents, asked for as "did·agent"), those who have one: what the app
+   * draws for them.
+   */
+  async avatars(people: string[]): Promise<Record<string, AvatarFigure>> {
+    const out: Record<string, AvatarFigure> = {};
+    for (const ref of new Set(people.slice(0, 500))) {
+      const at = ref.indexOf('·');
+      const figure = at < 0 ? this.avatarOf(ref as Did) : this.#agentAvatars(ref.slice(0, at) as Did)[ref.slice(at + 1)];
+      if (figure) out[ref] = figure;
     }
     return out;
   }
@@ -3853,7 +4215,7 @@ export class WeaveNode implements Backend {
     return this.publishApp(input);
   }
 
-  async publishApp(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest> {
+  async publishApp(input: { project: string; manifest: unknown; texts?: unknown; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_APP);
     const project = this.#project(input.project);
     this.#maintainerState(project);
@@ -3861,8 +4223,31 @@ export class WeaveNode implements Backend {
     // A description usually doesn't list the release files (releasing adds them): keep those of this artifact's line.
     const before = this.#lines(project).get(manifest.app)?.install;
     if (before?.assets && !manifest.install?.assets) manifest = { ...manifest, install: { ...before, ...(manifest.install?.steps ? { steps: manifest.install.steps } : {}) } };
-    await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    // Its texts, checked before anything is published: a broken package publishes nothing.
+    const texts = this.#checkedTexts(manifest, input.texts, input.as);
+    const item = await this.publish({ kind: KIND_APP, body: manifest as unknown as Json, space: project.id, as: input.as });
+    await this.#publishTexts(project, item.id, texts, input.as);
     return manifest;
+  }
+
+  /**
+   * A release's packages (weave.texts.<lang>.json next to its manifest, docs/localization.md): each checked against the
+   * manifest, then published as one event by the maintainer, pointing at the release. Nothing is added to the manifest.
+   */
+  #checkedTexts(manifest: AppManifest, texts: unknown, as?: string): unknown[] | undefined {
+    if (texts === undefined) return undefined;
+    if (!Array.isArray(texts)) throw new Error('texts: the packages next to the manifest, as a list');
+    for (const pkg of texts) {
+      const problems = checkServicePackage(pkg, manifest);
+      const lang = (pkg as { lang?: unknown } | null)?.lang;
+      if (problems.length) throw new Error(`weave.texts.${typeof lang === 'string' ? lang : '?'}.json: ${problems.map((p) => (p.name ? `${p.name}: ${p.problem}` : p.problem)).join('; ')}`);
+    }
+    if (texts.length && as) this.#agentMay(as, KIND_APP_TEXTS);
+    return texts;
+  }
+
+  async #publishTexts(project: StoredSpace, release: string, texts: unknown[] | undefined, as?: string): Promise<void> {
+    if (texts?.length) await this.publish({ kind: KIND_APP_TEXTS, body: { release, packages: texts as Json }, space: project.id, as });
   }
 
   // ---------------------------------------------------------------- releases
@@ -3962,6 +4347,35 @@ export class WeaveNode implements Backend {
   }
 
   /**
+   * Who reaches this computer: people you know (with your link, or a space or a chat you share), or anyone who finds
+   * it (and then sees everything public it holds); and whether you have a front door (an always-on node).
+   */
+  async reach(): Promise<ReachInfo> {
+    const door = this.replica.authority.grantsOf(this.identity.author).some((g) => g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    return { anyone: this.config.firewall === false, door };
+  }
+
+  async setReach(input: { anyone: boolean }): Promise<ReachInfo> {
+    const { firewall: _firewall, ...rest } = this.config;
+    this.config = { ...rest, ...(input.anyone ? { firewall: false as const } : {}) };
+    saveConfig(this.home, this.config);
+    return this.reach();
+  }
+
+  async preferences(): Promise<Preferences> {
+    return this.config.language ? { language: this.config.language } : {};
+  }
+
+  /** The UI's language on this computer: a shipped one, or "system" to follow the computer's. */
+  async setPreferences(input: { language?: LanguageSetting }): Promise<Preferences> {
+    if (input.language !== undefined && !isLanguageSetting(input.language)) throw new Error(`not a language Weave has: ${String(input.language)} (${LANGUAGES.join(', ')}, or system)`);
+    const { language: _language, ...rest } = this.config;
+    this.config = { ...rest, ...(input.language && input.language !== 'system' ? { language: input.language } : {}) };
+    saveConfig(this.home, this.config);
+    return this.preferences();
+  }
+
+  /**
    * Which of a project's artifact lines a release is of, and where it comes from: the artifact named, the line released
    * from the source given (a new line, if none is), or its only line. Its source's provider, when that's known.
    */
@@ -4000,13 +4414,16 @@ export class WeaveNode implements Backend {
    * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
    * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
    */
-  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; announce?: boolean; as?: string }): Promise<AppManifest> {
+  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; announce?: boolean; as?: string }): Promise<AppManifest> {
     if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const from = this.#releaseLine(project, input);
+    // Its texts are checked against the manifest once the provider has read it; that an agent may publish them, now.
+    if (Array.isArray(input.texts) && input.texts.length && input.as) this.#agentMay(input.as, KIND_APP_TEXTS);
     const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), ...(input.assets && Object.keys(input.assets).length ? { assets: input.assets } : {}), ...(from.previous ? { previous: from.previous as unknown as Json } : {}) }, input.as, from.provider)) as { id?: string; manifest?: unknown };
     const manifest = parseManifest(data.manifest);
+    if (data.id) await this.#publishTexts(project, data.id, this.#checkedTexts(manifest, input.texts, input.as), input.as);
     // Offered: said in the project's chat, as a card to get it from (unless announce is false).
     if (input.announce !== false && data.id) await this.#announce(project.id, { kind: 'release', id: data.id }, `${manifest.name} ${manifest.install?.tag ?? input.tag} is available`);
     return manifest;
@@ -4340,6 +4757,34 @@ export class WeaveNode implements Backend {
   /** The secret behind my private (self-sealed) data: my first encryption key, so it survives rotations. */
   #selfSecret(): Uint8Array {
     return this.#encryption[0].keys.secretKey;
+  }
+
+  /** My meeting point's secret, carried by my links: from my self secret, so the same on all my devices and for good. */
+  #doorSecret(): Uint8Array {
+    return new Uint8Array(createHash('sha256').update('weave/meet/door/v1').update(this.#selfSecret()).digest());
+  }
+
+  /** This node is a front door: an always-on node, unless its config says otherwise; any other only if it says so. */
+  #frontDoor(): boolean {
+    return this.config.frontDoor ?? this.#isLinkedNode;
+  }
+
+  #meetSecret(): Uint8Array {
+    return new Uint8Array(createHash('sha256').update('weave/meet/v1').update(this.#selfSecret()).digest());
+  }
+
+  /** The meeting points of others we were given links to: our contacts', the spaces' we were invited to, and those we knocked at. */
+  #theirMeets(): Uint8Array[] {
+    const secrets = new Map<string, Uint8Array>();
+    const add = (entry: { meet?: unknown } | undefined) => {
+      const secret = meetSecretOf(entry);
+      if (secret) secrets.set(b64u.encode(secret), secret);
+    };
+    for (const body of this.#selfBodies(KIND_CONTACT)) add(body);
+    for (const body of this.#selfBodies(KIND_KNOCK_PENDING)) add(body);
+    for (const space of this.#spaces.values()) add(space.entry);
+    secrets.delete(b64u.encode(this.#meetSecret()));
+    return [...secrets.values()];
   }
 
   /**
@@ -5774,7 +6219,7 @@ export class WeaveNode implements Backend {
     if (peer === this.identity.author) throw new Error('that is you');
     if (!this.#friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
     const space = this.#direct(peer);
-    await Promise.all(spaceTopics(space).map((topic) => this.#swarm?.join(topic)));
+    await Promise.all(spaceTopics(space, 0).map((topic) => this.#swarm?.join(topic)));
     return this.#spaceInfo(space);
   }
 
@@ -5792,19 +6237,29 @@ export class WeaveNode implements Backend {
     return (await this.channels(input.space)).find((c) => c.name === name)!;
   }
 
-  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number } = {}): Promise<MessageInfo[]> {
+  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number; since?: string; until?: string; people?: boolean } = {}): Promise<MessageInfo[]> {
     const chat = options.post ? await this.#chatOf(options.post) : undefined;
     const space = chat?.space ?? this.#space(ref ?? '');
     const entries = this.#entries(space);
     const maintainers = this.#state(space).maintainers;
     const byId = new Map(messagesOf(entries, {}, maintainers).concat(chat?.post ? messagesOf(entries, { post: chat.post }, maintainers) : []).map((m) => [m.id, m]));
     const channel = options.channel ? (channelName(options.channel) ?? DEFAULT_CHANNEL) : undefined;
+    const time = (what: string, value: string | undefined) => {
+      if (value === undefined) return undefined;
+      const at = Date.parse(value);
+      if (Number.isNaN(at)) throw new Error(`${what} is a time, like 2026-11-02T12:00:00Z`);
+      return new Date(at).toISOString();
+    };
+    const [since, until] = [time('since', options.since), time('until', options.until)];
     return messagesOf(entries, chat?.post ? { post: chat.post } : { channel }, maintainers)
-      .slice(-(options.limit ?? 200))
-      .map((m) => this.#messageInfo(m, byId));
+      .filter((m) => (!since || m.time >= since) && (!until || m.time <= until))
+      .map((m) => this.#messageInfo(m, byId))
+      // What people wrote themselves: not their agents (nor their services, which sign as agents too).
+      .filter((m) => !options.people || !m.by.agent)
+      .slice(-(options.limit ?? 200));
   }
 
-  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment }): Promise<MessageInfo> {
+  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo> {
     const text = input.text?.trim() ?? '';
     const file = input.file ? attachmentOf({ file: input.file }) : undefined;
     if (input.file && !file) throw new Error('a file goes with its wblob: reference, a name, its size in bytes and a media type (use putFile)');
@@ -5824,6 +6279,8 @@ export class WeaveNode implements Backend {
       if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
     }
     if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
+    const stamp = this.#sessionStamp(input.session, input.as);
+    if (stamp) body.session = stamp;
     const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
     return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
   }
@@ -6047,7 +6504,7 @@ export class WeaveNode implements Backend {
     const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string) : '');
     // What a message says: its text, or the file it brings.
     const said = () => text('text') || (attachmentOf(body) ? `📎 ${attachmentOf(body)!.name}` : '');
-    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/\s+/g, ' ').trim().slice(0, 140);
+    const snippet = (value: string) => value.replace(/!\[[^\]]*\]\([^)]*\)/g, '[image]').replace(/weave:(?:invite|knock):[A-Za-z0-9_-]+/g, '[invite link]').replace(/\s+/g, ' ').trim().slice(0, 140);
     const who = item.authorName ?? this.nameOf(item.author) ?? 'Someone';
     const space = item.space;
     const where = space ? `${{ project: 'p/', community: 'r/', group: 'g/', direct: '@' }[space.kind]}${space.name}` : '';
@@ -6217,7 +6674,7 @@ export class WeaveNode implements Backend {
 
   async #addSpace(space: StoredSpace): Promise<void> {
     this.#saveSpace(space);
-    if (this.#swarm) await Promise.all([...spaceTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t)));
+    if (this.#swarm) await Promise.all([...this.#meetingTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t, { announce: !this.#looksOnly(t) })));
   }
 
   #saveSpace(space: StoredSpace): void {
@@ -6232,9 +6689,11 @@ export class WeaveNode implements Backend {
 
   /**
    * The spaces this node holds, with the keys that prove it to peers (the
-   * current epoch's and the one before, so a member who hasn't got a new key
-   * yet still meets the others): its spaces, its direct chats, and its own
-   * private space, which only its other devices hold.
+   * current epoch's first, then every one before: a member who hasn't got a
+   * new key yet still meets the others and is handed the rekeys, however many
+   * rotations they missed; see docs/v2-stage2.md, "Closing the grace key"):
+   * its spaces, its direct chats, and its own private space, which only its
+   * other devices hold.
    */
   #heldSpaces(): HeldSpace[] {
     // Listing may derive new direct chats, which would announce again: not from inside.
@@ -6246,13 +6705,19 @@ export class WeaveNode implements Backend {
     }
     const held = (space: SpaceKeys): HeldSpace => ({
       space: spaceScope(space),
-      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).slice(0, 2).map((epoch) => b64u.decode(space.keys[String(epoch)])),
+      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).map((epoch) => b64u.decode(space.keys[String(epoch)])),
       ...(this.#spaces.has(space.id) && this.#pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
+    // Anyone whose log we hold can make our direct chat's key: only with those we chose to know does it let them in.
+    const chosen = new Set<Did>([...this.#contacts().keys(), ...(this.#graph().get(this.identity.author)?.following ?? [])]);
     return [
       ...[...this.#spaces.values()].map(held),
-      ...[...this.#directs.values()].map(({ space }) => held(space)),
+      ...[...this.#directs.values()].map(({ space, peer }) => ({ ...held(space), admits: chosen.has(peer) })),
       { space: SELF_SCOPE, keys: [selfKey(this.#selfSecret())] },
+      // Meeting points: ours, which whoever we gave a link holds, and theirs, from the links we were given.
+      ...[this.#meetSecret(), ...this.#theirMeets()].map((secret) => ({ space: meetTopic(secret), keys: [secret], proof: true as const })),
+      // The front door: whoever has the public contact link gets in, here only (never on a computer that isn't one).
+      ...(this.#frontDoor() ? [{ space: meetTopic(this.#doorSecret()), keys: [this.#doorSecret()], proof: true as const }] : []),
     ];
   }
 
@@ -6270,7 +6735,60 @@ export class WeaveNode implements Backend {
 
   /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
-    return { spaces: () => this.#heldSpaces(), offerKeys: (items) => this.#offeredKeys(items), wantsBody: (space, id) => this.#wantsBody(space, id), keep: this.#keepAccess, farewells: () => this.#farewells() };
+    const node = this;
+    return {
+      spaces: () => this.#heldSpaces(),
+      offerKeys: (items) => this.#offeredKeys(items),
+      wantsBody: (space, id) => this.#wantsBody(space, id),
+      keep: this.#keepAccess,
+      farewells: () => this.#farewells(),
+      // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
+      // Read for each new connection, so changing who reaches you (setReach) holds from the next one on.
+      get firewall() {
+        return node.config.firewall !== false;
+      },
+      fromBehind: (item) => this.#joinFromBehind(item),
+      // Behind the firewall, a peer learns the public side of us and of those it shares something with here, never
+      // of everyone we know (a newcomer through a contact link would otherwise get our family's names and faces).
+      publicFor: (shared: ReadonlySet<string>) => (this.config.firewall !== false ? this.#publicFor(shared) : undefined),
+    };
+  }
+
+  /** Whose public events a peer gets that shares these spaces with us (see SpaceAccess.publicFor). */
+  #publicFor(shared: ReadonlySet<string>): ((author: Did) => boolean) | undefined {
+    // One of our own devices: all of it.
+    if (shared.has(SELF_SCOPE)) return undefined;
+    const people = new Set<Did>([this.identity.author]);
+    for (const scope of shared) {
+      const parsed = parseScope(scope);
+      if (!parsed) continue;
+      const direct = this.#directs.get(parsed.id);
+      if (direct) {
+        people.add(direct.peer);
+        continue;
+      }
+      const space = this.#spaces.get(parsed.id);
+      if (!space) continue;
+      const state = this.#state(space);
+      people.add(space.founder);
+      for (const did of state.members.keys()) people.add(did);
+    }
+    return (author) => people.has(author);
+  }
+
+  /**
+   * A control event from a peer that holds only an older key of a space: taken only if it's a join with an invite this
+   * space made (a join that reached us after our newer key). Whoever's behind may also be someone removed: nothing
+   * else of theirs counts here, and control events aren't rate-limited.
+   */
+  #joinFromBehind(item: WireItemV2): boolean {
+    const scope = parseScope(item.e.space);
+    const space = scope && this.#spaces.get(scope.id);
+    if (!space) return false;
+    const d = this.#decode(recordOfV2(canonicalIdV2(item.e), item.e, item.b));
+    if (!d || canonicalKind(d.inner.kind) !== KIND_JOIN) return false;
+    const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
+    return typeof invite === 'string' && this.#decodedIn(space.id).some((x) => canonicalKind(x.inner.kind) === KIND_INVITE && (x.inner.body as { invite?: unknown } | null)?.invite === invite);
   }
 
   // ---------------------------------------------------------------- managed spaces (stage 6)
@@ -8274,12 +8792,14 @@ export class WeaveNode implements Backend {
     const swarm = this.#swarm;
     if (!swarm) return;
     const wanted = new Set(this.topics);
-    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic).catch(() => {});
+    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic, { announce: !this.#looksOnly(topic) }).catch(() => {});
     for (const topic of swarm.joined) if (!wanted.has(topic)) swarm.leave(topic).catch(() => {});
   }
 
+  /** Where our links say we're found: our meeting point, with its secret (holding it lets whoever has the link in). */
   #entryPoint(): Invite['entry'] {
-    return { topics: [this.identity.author], bootstrap: this.config.bootstrap };
+    const secret = this.#meetSecret();
+    return { topics: [meetTopic(secret)], bootstrap: this.config.bootstrap, meet: b64u.encode(secret) };
   }
 
   /** Someone on a private network (e.g. a local testnet) brings us onto it. */
@@ -8490,6 +9010,7 @@ export class WeaveNode implements Backend {
       members: state.members.size,
       epoch: currentEpoch(space),
       ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
+      ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
       ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
@@ -8497,6 +9018,47 @@ export class WeaveNode implements Backend {
       ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
     };
+  }
+
+  /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
+  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } {
+    if (space.kind === 'direct') return {};
+    const managers = this.#managers(state);
+    let out: { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } = { photoInList: space.kind !== 'project' };
+    for (const e of this.#entries(space)) {
+      if (e.kind !== KIND_SPACE_PHOTO || !managers.has(e.event.author)) continue;
+      const body = (e.body ?? {}) as Record<string, unknown>;
+      const banner = typeof body.banner === 'string' ? body.banner.trim().slice(0, 40) : '';
+      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}), ...(space.kind === 'project' && body.members === true ? { membersOnBanner: true as const } : {}), ...((order) => (order.length ? { photoOrder: order } : {}))(photoOrderOf(body.order)), ...((poses) => (Object.keys(poses).length ? { photoPoses: poses } : {}))(photoPosesOf(body.poses)), photoInList: typeof body.list === 'boolean' ? body.list : space.kind !== 'project' };
+    }
+    return out;
+  }
+
+  /**
+   * A space's photo: a picture of its own, or none for everyone's avatars together; the banner's text; and the
+   * background behind the group photo. Its founder, maintainers or moderators set it. Empty removes; left out stays.
+   */
+  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo> {
+    const space = this.#space(input.space);
+    if (space.kind === 'direct') throw new Error('a direct chat has no photo');
+    const state = this.#state(space);
+    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only those who run ${space.name} set its photo`);
+    if (input.as) this.#agentMay(input.as, KIND_SPACE_PHOTO);
+    for (const image of [input.photo, input.background]) if (image && !parseBlobRef(image)) throw new Error('a photo or background is an uploaded image (a wblob: reference)');
+    if (input.banner !== undefined && input.banner.trim().length > 40) throw tooLong('The banner', input.banner.trim().length, 40);
+    const before = this.#spacePhoto(space, state);
+    const photo = input.photo === undefined ? before.photo : input.photo || undefined;
+    const banner = input.banner === undefined ? before.bannerText : input.banner.trim() || undefined;
+    const background = input.background === undefined ? before.background : input.background || undefined;
+    if (input.members && space.kind !== 'project') throw new Error("members stand on a project's banner; only projects have one");
+    const members = input.members ?? !!before.membersOnBanner;
+    if (input.order && input.order.length !== photoOrderOf(input.order).length) throw new Error("the photo's order lists people by their keys (did:key:…), each once, at most 100");
+    const order = input.order ?? before.photoOrder ?? [];
+    if (input.poses && Object.keys(input.poses).length !== Object.keys(photoPosesOf(input.poses)).length) throw new Error("the photo's poses go by people's keys (did:key:…), each a pose's id like wave or idea, at most 100");
+    const poses = input.poses ? photoPosesOf(input.poses) : (before.photoPoses ?? {});
+    const list = input.list ?? before.photoInList ?? space.kind !== 'project';
+    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '', members, order, poses, list }, space: space.id, as: input.as });
+    return this.#spaceInfo(space);
   }
 
   /** A space's name; a direct chat is named after the other person. */
@@ -8909,7 +9471,7 @@ export class WeaveNode implements Backend {
       url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
       type: p.type,
       ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
-      by: this.#actor(p.author, p.signer),
+      by: this.#actor(p.author, p.signer, p.session),
       title: p.title,
       text: p.text,
       ...(p.link ? { link: p.link } : {}),
@@ -9302,6 +9864,14 @@ export class WeaveNode implements Backend {
     return this.#memo('graph', () => {
       const edges: EdgeEvent[] = this.#decodeAll()
         .filter((d) => (EDGE_KINDS as readonly string[]).includes(d.inner.kind))
+        // In a direct chat, only a follow of the other one of the two counts: it says nothing about anyone else.
+        .filter((d) => {
+          const direct = d.space && this.#directs.get(d.space.id);
+          if (!direct) return true;
+          const subject = (d.inner.body as { subject?: unknown } | null)?.subject;
+          const pair = [this.identity.author, direct.peer];
+          return pair.includes(d.event.author) && pair.includes(subject as Did);
+        })
         .map((d) => ({ author: d.event.author, kind: d.inner.kind, body: d.inner.body, time: d.event.time, signer: d.event.signer, seq: d.event.seq }));
       return socialGraph(edges);
     });
@@ -9470,12 +10040,13 @@ export class WeaveNode implements Backend {
     return (await this.issues(issue.space.id)).find((i) => i.id === issue.id)!;
   }
 
-  #actor(author: Did, signer: Did): Actor {
+  #actor(author: Did, signer: Did, session?: SessionStamp): Actor {
     const actor: Actor = { did: author };
     const name = this.nameOf(author);
     if (name) actor.name = name;
     const agent = this.#agentName(signer, author);
     if (agent) actor.agent = agent;
+    if (agent && session) actor.session = session;
     return actor;
   }
 
@@ -9494,7 +10065,7 @@ export class WeaveNode implements Backend {
     return {
       id: m.id,
       short: m.id.slice(0, 8),
-      by: this.#actor(m.author, m.signer),
+      by: this.#actor(m.author, m.signer, m.session),
       text: m.text,
       time: m.time,
       channel: m.channel,
@@ -9873,7 +10444,23 @@ export class WeaveNode implements Backend {
     const a = artifactsOf(this.#entries(project), this.#state(project).maintainers).find((x) => x.id === input.artifact);
     if (!a) throw new Error(`${project.name} has no such artifact`);
     if (a.kind !== 'file') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}: something to use, not a file to get`);
-    return this.#releases.getFile(joinPath(this.home.dir, 'files', project.id, `${a.manifest.app}-${a.tag.replace(/[^A-Za-z0-9._-]/g, '_')}`), { project: project.id, id: a.id, tag: a.tag, manifest: a.manifest });
+    // How far it got, for the app to show while it waits (artifactFileJob); gone once the file is here.
+    const job = `file:${project.id}:${a.id}`;
+    const size = fileAssetOf(a.manifest)?.size;
+    const progress = { state: 'downloading' as const, done: 0, ...(size ? { total: size } : {}) };
+    this.#releases.jobs.set(job, { progress });
+    try {
+      const got = await this.#releases.getFile(joinPath(this.home.dir, 'files', project.id, `${a.manifest.app}-${a.tag.replace(/[^A-Za-z0-9._-]/g, '_')}`), { project: project.id, id: a.id, tag: a.tag, manifest: a.manifest }, (n) => void (progress.done += n));
+      this.#releases.jobs.delete(job);
+      return got;
+    } catch (error) {
+      this.#releases.jobs.set(job, { error: (error as Error).message });
+      throw error;
+    }
+  }
+
+  async artifactFileJob(input: { project: string; artifact: string }): Promise<InstallJob | undefined> {
+    return this.#releases.jobs.get(`file:${this.#project(input.project).id}:${input.artifact}`);
   }
 
   /** My fetchers: client apps that fetch artifacts for me (fetchers.ts). */
@@ -10097,7 +10684,7 @@ const deviceName = (): string => hostname().slice(0, 40) || 'device';
 const FREE_TIER_MONTHS = 1200;
 
 /** Where new Weave versions are announced: release posts in the Weave project, and its repository. */
-const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martldennl/Weave', artifact: 'weave-desktop' };
+const UPDATE_SOURCE = { project: 'NqgQwm_P6I0gtnQDnZKURw', repo: 'martl-projects/Weave', artifact: 'weave-desktop' };
 /** Where the farewell to v0.3 peers sends them. */
 const RELEASES_URL = `https://github.com/${UPDATE_SOURCE.repo}/releases/latest`;
 

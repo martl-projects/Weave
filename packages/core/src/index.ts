@@ -59,6 +59,8 @@ export {
   canonicalKind,
   currentEpoch,
   decodeInvite,
+  isInviteLink,
+  peekInvite,
   directSpace,
   encodeInvite,
   gift,
@@ -404,7 +406,7 @@ export {
   recoveryRoot,
   type RecoveryWords,
 } from './recovery.ts';
-export { TEXT_LIMITS, tooLong, checkTextFields } from './limits.ts';
+export { TEXT_LIMITS, tooLong, checkTextFields, timeGiven } from './limits.ts';
 export { compareVersions, formatVersion, parseVersion, type Version } from './version.ts';
 export {
   bodyHash,
@@ -427,7 +429,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, artifactKindOf, artifactSourceOf, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, unrunnableRelease, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { attachmentOf, BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, FILE_NAME_LIMIT, fileName, formatBlobRef, isImageType, isMediaType, MAX_BLOB, parseBlobRef, type Attachment, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -453,8 +455,8 @@ export {
   type BoardRules,
   type Grantee,
 } from './access.ts';
-export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, type KnockLink } from './knock.ts';
-export { KIND_SESSION, MAX_ABOUT, MAX_DESCRIPTION, MAX_NAME, MAX_STACK, nameProblem, pushOnto, reorder, sameName, SESSION_NAME, SESSION_ROLES, sessionKey, sessionsOf, sessionTitle, takeOff, type SessionRecord, type SessionRole, type StackItem } from './sessions.ts';
+export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, peekKnock, type KnockLink } from './knock.ts';
+export { KIND_SESSION, MAX_ABOUT, MAX_DESCRIPTION, MAX_NAME, MAX_STACK, nameProblem, pushOnto, reorder, sameName, SESSION_NAME, SESSION_ROLES, sessionKey, sessionsOf, sessionTitle, takeOff, sessionStampOf, type SessionRecord, type SessionRole, type SessionStamp, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
 export {
   KIND_SERVICE_PROFILE,
@@ -491,3 +493,36 @@ export { isBox, KIND_SERVICE_SETTING, SETTING_VALUE_MAX, serviceSettingsOf, type
 export { KIND_SERVICE_POLICY, KIND_ARTIFACT_ACCESS, artifactAccessOf, mayAct, parseActions, parseWho, policiesOf, tightens, whoWords, type ActionWho, type ServiceAction, type ServiceActionField } from './serviceactions.ts';
 export { KIND_ACCOUNT, accountProofText, accountClaimsOf, isPlatform, type AccountClaim } from './accounts.ts';
 export { parsePack, type Pack, type PackStep } from './packs.ts';
+export {
+  checkPackage,
+  formatParts,
+  GLOSSARY_PREFIX,
+  isLanguage,
+  isLanguageSetting,
+  LANGUAGES,
+  missingNames,
+  parseText,
+  partsToString,
+  pickLanguage,
+  pickLocale,
+  placeholdersOf,
+  TEXT_NAME,
+  texts,
+  TextSyntaxError,
+  checkServicePackage,
+  fieldName,
+  FIELD_PREFIXES,
+  isTextRecord,
+  manifestTextFields,
+  RECORD_LIMIT,
+  type TextRecord,
+  type Language,
+  type LanguageSetting,
+  type TextNode,
+  type TextPackage,
+  type TextPart,
+  type TextProblem,
+  type Texts,
+  type TextsOptions,
+  type TextValues,
+} from './texts.ts';

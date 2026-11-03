@@ -15,7 +15,7 @@ trap 'echo "failed at line $LINENO: $BASH_COMMAND"' ERR
 # Somewhere every user can enter: the commands run as runner start from here.
 cd /
 TOKEN=${1:?registration token}
-URL=${URL:-https://github.com/martldennl/Weave}
+URL=${URL:-https://github.com/martl-projects/Weave}
 RUNNER_NAME=${RUNNER_NAME:-weave-runner-mac}
 LABELS=${LABELS:-macos-mini}
 LABEL=com.github.actions.runner.weave

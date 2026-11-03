@@ -2,8 +2,11 @@ import { useState } from 'react';
 import type { AccountInfo, AppOpen, MyAccountInfo, PlatformInfo, Profile, SpaceInfo } from '@weave/node/client';
 import { Icon, isIconName, type IconName } from './icons.tsx';
 import { api, bridge, bump, navigate, onItem, useApi } from './lib.ts';
+import { openKeyvault } from './keyvaults.tsx';
 import { copy, spaceHref } from './posts.tsx';
+import { openServices } from './websites.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
+import { T, useTexts } from './texts.tsx';
 
 /*
  * Accounts elsewhere (GitHub, X…): you prove one is yours once, with a proof that names your Weave id there, and say
@@ -11,7 +14,6 @@ import { attempt, AsyncButton, Modal } from './ui.tsx';
  * access by it). Weave knows no platform: each has a verifier, a client app every Weave runs to check the proof itself.
  */
 
-/** Where an account can show besides your hub: the projects and groups you're in. */
 /** A platform's icon, as its verifier names it (Weave knows no platform's look); a plain link where none does. */
 function usePlatformIcon(): (platform: string) => IconName {
   const { data: platforms } = useApi(() => api<PlatformInfo[]>('platforms').catch(() => [] as PlatformInfo[]), []);
@@ -21,6 +23,7 @@ function usePlatformIcon(): (platform: string) => IconName {
   };
 }
 
+/** Where an account can show besides your hub: the projects and groups you're in. */
 function usePlaces(): SpaceInfo[] {
   const { data } = useApi(() => api<SpaceInfo[]>('spaces').catch(() => [] as SpaceInfo[]), []);
   return (data ?? []).filter((s) => s.kind === 'project' || s.kind === 'group');
@@ -37,6 +40,7 @@ const showIn = (a: { platform: string; handle: string; proof: string }, space: s
  * wants it): shown there, and if you proved it already, that's all it takes.
  */
 export function AccountProofDialog({ space, platform: asked, onClose }: { space?: SpaceInfo; platform?: string; onClose(): void }) {
+  const { t } = useTexts();
   const { data: platforms } = useApi(() => api<PlatformInfo[]>('platforms'), []);
   const { data: mine } = useApi(() => api<MyAccountInfo[]>('myAccounts').catch(() => [] as MyAccountInfo[]), []);
   const places = usePlaces();
@@ -65,16 +69,16 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
   // Proven already, asked from a project: shown there with one click.
   if (space && proven && !proven.spaces.some((x) => x.id === space.id))
     return (
-      <Modal title={`Your ${title} account, in ${placeName(space)}`} onClose={onClose}>
+      <Modal title={t('account.in.place.title', { platform: title, place: placeName(space) })} onClose={onClose}>
         <p className="small">
-          You proved <b>{proven.handle}</b> on {title} already. Shared with {placeName(space)}, its members see it, and its services may give you access by it.
+          <T name="account.proved.already" values={{ handle: <b>{proven.handle}</b>, platform: title, place: placeName(space) }} />
         </p>
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
-          <AsyncButton className="default" onClick={() => attempt(() => showIn(proven, space.id, true).then(done), `${proven.handle} is shared with ${placeName(space)}`)}>
-            Share {proven.handle}
+          <AsyncButton className="default" onClick={() => attempt(() => showIn(proven, space.id, true).then(done), t('account.shared.with', { handle: proven.handle, place: placeName(space) }))}>
+            {t('account.share', { handle: proven.handle })}
           </AsyncButton>
         </div>
       </Modal>
@@ -82,10 +86,10 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
 
   const where = (
     <fieldset>
-      <legend>Where it shows</legend>
+      <legend>{t('account.where.shows')}</legend>
       <div className="field-row">
         <input type="checkbox" id="show-hub" checked={hub} onChange={(e) => setHub(e.target.checked)} />
-        <label htmlFor="show-hub">Your hub: everyone sees it</label>
+        <label htmlFor="show-hub">{t('account.your.hub.everyone')}</label>
       </div>
       {places.map((p) => (
         <div className="field-row" key={p.id}>
@@ -93,7 +97,7 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
           <label htmlFor={`show-${p.id}`}>{placeName(p)}</label>
         </div>
       ))}
-      <p className="small muted">In a project, its members see it, and its services may give you access by it (to a repository, say).</p>
+      <p className="small muted">{t('account.in.project.note')}</p>
     </fieldset>
   );
 
@@ -111,50 +115,57 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
       } finally {
         setSigning(undefined);
       }
-    }, `Your ${title} account is proven yours`);
+    }, t('account.proven', { platform: title }));
 
   if (about?.prove && !byHand)
     return (
-      <Modal title="Prove an account elsewhere" onClose={onClose}>
+      <Modal title={t('account.prove.title')} onClose={onClose}>
         {signing ? (
           <div className="notice">
-            Enter this code on{' '}
-            <a href={signing.url} target="_blank" rel="noopener noreferrer">
-              {new URL(signing.url).hostname}
-            </a>{' '}
-            (it's copied): <b className="user-code">{signing.code}</b>. Then {title} makes the proof, a secret note naming you, and Weave forgets the sign-in. Only ever enter a code Weave shows you, here.
+            <T
+              name="account.enter.code"
+              values={{
+                site: (
+                  <a href={signing.url} target="_blank" rel="noopener noreferrer">
+                    {new URL(signing.url).hostname}
+                  </a>
+                ),
+                code: <b className="user-code">{signing.code}</b>,
+                platform: title,
+              }}
+            />
           </div>
         ) : (
-          <p className="small muted">You allow it once on {title}: it makes a proof naming you there (on GitHub, a secret gist), and Weave forgets the sign-in right away. Delete the proof there, and the account is no longer yours here.</p>
+          <p className="small muted">{t('account.prove.once', { platform: title })}</p>
         )}
         {where}
         <div className="buttons">
           <button type="button" onClick={() => setByHand(true)}>
-            Make the proof myself…
+            {t('account.make.proof.myself')}
           </button>
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <AsyncButton className="default" disabled={!!signing || nowhere} onClick={proveWith}>
-            Prove with {title}…
+            {t('account.prove.with', { platform: title })}
           </AsyncButton>
         </div>
       </Modal>
     );
   return (
-    <Modal title="Prove an account elsewhere" onClose={onClose}>
+    <Modal title={t('account.prove.title')} onClose={onClose}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
           const claim = { platform: chosen, handle, proof: address };
-          const ok = await attempt(() => showIn(claim, first, true).then(() => showRest(claim)).then(() => true), `${handle} on ${title} is proven yours`);
+          const ok = await attempt(() => showIn(claim, first, true).then(() => showRest(claim)).then(() => true), t('account.handle.proven', { handle, platform: title }));
           if (ok !== undefined) done();
         }}
       >
-        {platforms && platforms.length === 0 && <p className="small">This Weave checks accounts on no platform yet.</p>}
+        {platforms && platforms.length === 0 && <p className="small">{t('account.no.platforms')}</p>}
         {!asked && platforms && platforms.length > 1 && (
           <div className="field-row-stacked">
-            <label htmlFor="account-platform">Where</label>
+            <label htmlFor="account-platform">{t('account.where')}</label>
             <select id="account-platform" value={chosen} onChange={(e) => setPlatform(e.target.value)}>
               {platforms.map((p) => (
                 <option key={p.platform} value={p.platform}>
@@ -165,32 +176,32 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
           </div>
         )}
         <div className="field-row-stacked">
-          <label htmlFor="account-handle">Your account on {title}</label>
+          <label htmlFor="account-handle">{t('account.your.account.on', { platform: title })}</label>
           <input id="account-handle" required autoFocus value={handle} onChange={(e) => setHandle(e.target.value.trim())} />
         </div>
         {proof && (
           <ol className="steps small">
             <li>
-              {proof.howto ?? 'Make a proof there, as that account, holding this line:'}
-              <div className="user-code sunken small" title="Click to copy" onClick={() => copy(proof.text, 'Copied')}>
+              {proof.howto ?? t('account.make.proof.howto')}
+              <div className="user-code sunken small" title={t('account.click.copy')} onClick={() => copy(proof.text)}>
                 {proof.text}
               </div>
             </li>
-            <li>Paste its address here:</li>
+            <li>{t('account.paste.address')}</li>
           </ol>
         )}
         <div className="field-row-stacked">
-          <label htmlFor="account-proof">Its proof</label>
+          <label htmlFor="account-proof">{t('account.its.proof')}</label>
           <input id="account-proof" required value={address} onChange={(e) => setAddress(e.target.value)} />
         </div>
         {where}
-        <p className="small muted">Weave checks it now, and everyone's Weave checks it again. Delete the proof there, and the account is no longer yours here.</p>
+        <p className="small muted">{t('account.checks.note')}</p>
         <div className="buttons">
           <button type="button" onClick={onClose}>
-            Cancel
+            {t('button.cancel')}
           </button>
           <button className="default" disabled={!chosen || !handle || !address || nowhere}>
-            Prove it
+            {t('account.prove.it')}
           </button>
         </div>
       </form>
@@ -200,14 +211,15 @@ export function AccountProofDialog({ space, platform: asked, onClose }: { space?
 
 /** In Keys & devices: your accounts elsewhere, proven once, and where each shows (your hub, the projects you pick). */
 export function LinkedAccountsBox() {
+  const { t } = useTexts();
   const { data: mine, reload } = useApi(() => api<MyAccountInfo[]>('myAccounts').catch(() => [] as MyAccountInfo[]), []);
   const places = usePlaces();
   const iconOf = usePlatformIcon();
   const [adding, setAdding] = useState(false);
-  const toggle = (a: MyAccountInfo, space: string | undefined, on: boolean, where: string) => attempt(() => showIn(a, space, on).then(() => (reload(), bump())), on ? `${a.handle} shows ${where} now` : `${a.handle} no longer shows ${where}`);
+  const toggle = (a: MyAccountInfo, space: string | undefined, on: boolean, where: string) => attempt(() => showIn(a, space, on).then(() => (reload(), bump())), t(on ? 'account.shows.now' : 'account.shows.no.more', { handle: a.handle, where }));
   return (
     <fieldset>
-      <legend>Accounts elsewhere</legend>
+      <legend>{t('accounts.legend')}</legend>
       {(mine ?? []).map((a) => (
         <div className="linked-account" key={`${a.platform} ${a.handle}`}>
           <div className="field-row">
@@ -222,26 +234,26 @@ export function LinkedAccountsBox() {
                 ) : (
                   a.handle
                 )}
-                {a.verified ? ' ✓' : a.verified === false ? " (its proof doesn't hold any more)" : " (couldn't be checked yet)"}
+                {a.verified ? ' ✓' : a.verified === false ? t('account.proof.broken') : t('account.not.checked')}
               </span>
             </span>
           </div>
           <div className="linked-account-places small">
-            Shows:
+            {t('account.shows')}
             <label>
-              <input type="checkbox" checked={a.hub} onChange={(e) => void toggle(a, undefined, e.target.checked, 'on your hub')} /> your hub
+              <input type="checkbox" checked={a.hub} onChange={(e) => void toggle(a, undefined, e.target.checked, t('account.on.your.hub'))} /> {t('account.your.hub')}
             </label>
             {places.map((p) => (
               <label key={p.id}>
-                <input type="checkbox" checked={a.spaces.some((x) => x.id === p.id)} onChange={(e) => void toggle(a, p.id, e.target.checked, `in ${placeName(p)}`)} /> {placeName(p)}
+                <input type="checkbox" checked={a.spaces.some((x) => x.id === p.id)} onChange={(e) => void toggle(a, p.id, e.target.checked, t('account.in.place', { place: placeName(p) }))} /> {placeName(p)}
               </label>
             ))}
           </div>
         </div>
       ))}
       <div className="field-row">
-        <span className="grow small">Prove an account on another platform once (each Weave checks it itself), then say where it shows: your hub for everyone, a project for its members and its services (access to its repositories, say).</span>
-        <button onClick={() => setAdding(true)}>Prove an account…</button>
+        <span className="grow small">{t('accounts.about')}</span>
+        <button onClick={() => setAdding(true)}>{t('account.prove.button')}</button>
       </div>
       {adding && <AccountProofDialog onClose={() => (setAdding(false), reload())} />}
     </fieldset>
@@ -250,12 +262,13 @@ export function LinkedAccountsBox() {
 
 /** Under a hub's name: the accounts elsewhere they show, each opening its page; ✓ when its proof holds. */
 export function HubAccounts({ profile }: { profile: Profile }) {
+  const { t } = useTexts();
   const iconOf = usePlatformIcon();
   if (!profile.accounts?.length) return null;
   return (
     <>
       {profile.accounts.map((a) => (
-        <a key={a.platform} className="hub-github" href={a.url} target="_blank" rel="noopener noreferrer" title={a.verified ? `A proof on ${a.platform} names this identity` : `Not checked: ${a.platform} couldn't be reached`}>
+        <a key={a.platform} className="hub-github" href={a.url} target="_blank" rel="noopener noreferrer" title={a.verified ? t('account.proof.names', { platform: a.platform }) : t('account.unreached', { platform: a.platform })}>
           <Icon name={iconOf(a.platform)} /> {a.handle}
           {a.verified && ' ✓'}
         </a>
@@ -286,6 +299,16 @@ export function startAppOpens(): void {
     void bridge.show();
     // A post (Open in Weave on its page): PublicPost takes it to where it lives.
     if (open.what === 'post' && open.post) return navigate(`#/post/${open.post.id}`);
+    // A keyvault: Keys & devices, with its dialog open (the person's app to make, or a repository to hand the project).
+    if (open.what === 'keyvault' && open.keyvault) {
+      openKeyvault({ name: open.keyvault.name, ...(open.space ? { project: { id: open.space.id, name: open.space.name } } : {}) });
+      return navigate('#/keys');
+    }
+    // A project's services: one it runs, or the Add a service catalog with something picked.
+    if (open.what === 'service' && open.space) {
+      openServices({ project: open.space.id, ...(open.service ? { service: open.service } : {}), ...(open.askedBy ? { askedBy: open.askedBy } : {}) });
+      return navigate(`${spaceHref(open.space)}/services`);
+    }
     if (open.what === 'person' && open.person) return navigate(`#/space/${open.person.did}`);
     if (open.what === 'inbox' || !open.space) return navigate('#/inbox');
     navigate(spaceHref(open.space));

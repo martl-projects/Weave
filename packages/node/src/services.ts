@@ -1,3 +1,4 @@
+import { releaseTextsOf, type TextPackage } from '@weave/core';
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
@@ -11,7 +12,7 @@ import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
 import { imageDigest, imageLabels } from './registry.ts';
-import { type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
+import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -39,7 +40,7 @@ export const NODE_PREFIX = 'node:';
  */
 const BUILTIN: Partial<Record<Builtin, { contract: ServiceContract; description: string; settings?: AppSetting[] }>> = {
   // Reads nothing and writes its websites.
-  website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: a way to join in with the project’s participants' },
+  website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: runs websites for the project, open to everyone in it' },
 };
 
 /** What replaced Weave's own GitHub service. */
@@ -191,11 +192,15 @@ export class Services {
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
       const runs = this.h.runtime.runs(a.manifest);
       const who = access.get(a.id) ?? 'members';
+      const texts = releaseTextsOf(this.h.entries(project), this.h.state(project).maintainers, a.id, a.manifest);
+      const file = a.kind === 'file' ? fileAssetOf(a.manifest) : a.manifest.install?.assets?.file;
       return {
+        ...(texts.length ? { texts } : {}),
         kind: a.kind,
         ...(a.source ? { source: a.source } : {}),
         ...(a.manifest.file?.type ? { type: a.manifest.file.type } : {}),
-        ...(a.manifest.install?.assets?.file ? { file: { name: a.manifest.install.assets.file.file, ...(a.manifest.install.assets.file.size ? { size: a.manifest.install.assets.file.size } : {}) } } : {}),
+        // Its one file, or (an installer) the one for this computer: what Get would fetch.
+        ...(file ? { file: { name: file.file, ...(file.size ? { size: file.size } : {}) } } : {}),
         who,
         mine: !this.artifactRefusal(project, a.id, this.h.identity.author),
         id: a.id,
@@ -751,8 +756,21 @@ export class Services {
       contract: p.contract,
       origin: p.shipped ? this.shippedOrigin(p.shipped) : this.originInfo(p.builtin, p.origin),
       ...(p.settings ? { settings: p.settings } : {}),
+      ...this.#textsOf(p.shipped ? this.shippedOrigin(p.shipped) : this.originInfo(p.builtin, p.origin)),
       time: p.time,
     }));
+  }
+
+  /** A service's own packages (docs/localization.md), from a verified release of a project here: nothing from an unchecked one. */
+  #textsOf(origin: ServiceOriginInfo): { texts?: TextPackage[] } {
+    if (origin.kind !== 'release' || origin.checked !== 'verified') return {};
+    const project = this.h.spaces.get(origin.project.id);
+    if (!project) return {};
+    const maintainers = this.h.state(project).maintainers;
+    const found = releaseById(this.h.entries(project), maintainers, origin.release)?.artifact;
+    if (!found) return {};
+    const texts = releaseTextsOf(this.h.entries(project), maintainers, found.id, found.manifest);
+    return texts.length ? { texts } : {};
   }
 
   /**

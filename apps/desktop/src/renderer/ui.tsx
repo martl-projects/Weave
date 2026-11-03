@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
-import { FigureHead, useFigure } from './avatar.tsx';
+import { FigureHead, picture, postScene, useFigure, useSeen, type Figure } from './avatar.tsx';
+import { loadInviteEmbeds } from './invites.tsx';
+import { t, useTexts } from './texts.tsx';
 
 // ---------------------------------------------------------------- pixel art
 
@@ -17,7 +19,7 @@ function seeded(seed: string): () => number {
 }
 
 /** A mirrored pixel sprite (like an identicon) as an SVG string: people get faces, posts get patterns. */
-function sprite(seed: string, size: number, face: boolean): string {
+export function sprite(seed: string, size: number, face: boolean): string {
   const rand = seeded(seed);
   const h = hue(seed);
   const fg = `hsl(${h} 60% 42%)`;
@@ -58,13 +60,14 @@ export function ProjectIcon({ id, icon, size = 40, className = '' }: { id: strin
   );
 }
 
-/** Someone's picture: their avatar (Weave avatar), or else their pixel sprite. */
+/** Someone's picture: their avatar (Weave avatar), or the one their key makes; their pixel sprite until it's drawn. */
 export function Avatar({ did, size = 32, status }: { did: string; name?: string; size?: number; status?: 'online' | 'offline' }) {
+  const [ref, seen] = useSeen<HTMLSpanElement>();
   const figure = useFigure(did);
   const sprite = <Sprite seed={did} size={size} face />;
   return (
-    <span className="avatar" style={{ width: size, height: size }}>
-      {figure ? <FigureHead figure={figure} fallback={sprite} /> : sprite}
+    <span ref={ref} className="avatar" style={{ width: size, height: size }}>
+      {figure === undefined || !seen ? sprite : <FigureHead figure={figure} seed={did} fallback={sprite} />}
       {status && <i className={`presence ${status}`} />}
     </span>
   );
@@ -93,6 +96,7 @@ const PREFIX: Record<string, string> = { project: 'p/', community: 'r/', group: 
 
 /** Fill in the post embeds renderMarkdown left (.post-embed[data-post]) with a card of each post. */
 export function loadEmbeds(root: HTMLElement): void {
+  loadInviteEmbeds(root);
   for (const box of root.querySelectorAll<HTMLElement>('.post-embed[data-post]:not([data-ready])')) {
     const id = box.dataset.post!;
     box.dataset.ready = 'loading';
@@ -128,7 +132,20 @@ function embedCard(p: PostInfo): HTMLElement {
   card.setAttribute('href', `weave:post:${p.id}`);
   card.dataset.post = p.id;
   const thumb = el('span', 'post-embed-thumb');
-  if (p.image) {
+  const scene = postScene(p);
+  if (scene) {
+    // Its author's avatar in its scene, like on the post's card.
+    const img = document.createElement('img');
+    img.alt = '';
+    thumb.innerHTML = sprite(p.id, 10, false);
+    void api<Record<string, Figure>>('avatars', [p.by.did])
+      .catch(() => ({}) as Record<string, Figure>)
+      .then((found) => picture(`scene:${scene}:128:close:${JSON.stringify(found[p.by.did] ?? p.by.did)}`, (l) => l.sceneSnapshot(found[p.by.did] ?? l.Avatar.fromSeed(p.by.did), scene, 128, 'close')))
+      .then((url) => {
+        img.src = url;
+        thumb.replaceChildren(img);
+      }, () => {});
+  } else if (p.image) {
     const img = document.createElement('img');
     img.alt = '';
     blobUrl(p.image).then((url) => (img.src = url), () => {});
@@ -167,10 +184,27 @@ export function BlobImage({ src, alt = '', className }: { src: string; alt?: str
   return url ? <img src={url} alt={alt} className={className} /> : <span className={`${className ?? ''} blob-loading`} aria-label={alt} />;
 }
 
+/** Where a mark or hint service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
+export function ServiceOrigin({ shipped, project, tag }: { shipped?: boolean; project?: string; tag?: string }) {
+  const { t } = useTexts();
+  if (shipped)
+    return (
+      <span className="tag origin-weave" title={t('origin.weave.title')}>
+        {t('origin.weave')}
+      </span>
+    );
+  return (
+    <span className="tag" title={t('origin.release.title', { project: project ? `p/${project}` : t('origin.project.unknown'), tag })}>
+      {project ? `p/${project}` : t('origin.other.project')}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------- windows
 
 /** A Win95 dialog window over a dimmed screen. */
 export function Modal({ title, onClose, children, wide }: { title: string; onClose(): void; children: ReactNode; wide?: boolean }) {
+  const { t } = useTexts();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -183,7 +217,7 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
         <div className="title-bar">
           <div className="title-bar-text">{title}</div>
           <div className="title-bar-controls">
-            <button aria-label="Close" onClick={onClose} />
+            <button aria-label={t('window.close')} onClick={onClose} />
           </div>
         </div>
         <div className="window-body">{children}</div>
@@ -293,8 +327,8 @@ let showQuestion: ((q: Question) => void) | undefined;
  * Ask the person to confirm, in a Win95 message box. Used instead of the
  * browser's confirm(), which some windows (like a preview pane) never show.
  */
-export function ask(text: string, yes = 'OK'): Promise<boolean> {
-  return new Promise((answer) => (showQuestion ? showQuestion({ text, yes, answer }) : answer(window.confirm(text))));
+export function ask(text: string, yes?: string): Promise<boolean> {
+  return new Promise((answer) => (showQuestion ? showQuestion({ text, yes: yes ?? t('button.ok'), answer }) : answer(window.confirm(text))));
 }
 
 /** Where ask() shows its box; mounted once, with the toasts. */
@@ -315,7 +349,7 @@ function Questions() {
     <Modal title="Weave" onClose={() => done(false)}>
       <p className="question-text">{question.text}</p>
       <div className="buttons">
-        <button onClick={() => done(false)}>Cancel</button>
+        <button onClick={() => done(false)}>{t('button.cancel')}</button>
         <button className="default" autoFocus onClick={() => done(true)}>
           {question.yes}
         </button>
@@ -355,5 +389,18 @@ export function AsyncButton({ onClick, className = '', children, title, disabled
     >
       {children}
     </button>
+  );
+}
+
+/** A quiet ⓘ that unfolds an explanation: a screen's long words, out of the way until asked for. */
+export function Info({ children }: { children: ReactNode }) {
+  const { t } = useTexts();
+  return (
+    <details className="info">
+      <summary title={t('info.more')} aria-label={t('info.more')}>
+        ⓘ
+      </summary>
+      <div className="info-body small">{children}</div>
+    </details>
   );
 }

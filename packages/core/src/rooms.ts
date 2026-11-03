@@ -5,6 +5,7 @@ import { isNetHost, lowerHost, parseContract, type ServiceContract } from './ser
 import { parseAppMarks, type AppMarks } from './marks.ts';
 import { parseAppHints, type AppHints } from './hints.ts';
 import { parseWho, type ActionWho } from './serviceactions.ts';
+import { checkServicePackage, type TextPackage } from './texts.ts';
 
 /*
  * Rooms and shared apps. A project can declare an app (its manifest); a host
@@ -726,7 +727,7 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
     else hints = parsed.hints;
   }
-  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: its releases need a container image (start.image) or WebAssembly (wasm); without, whoever wants it runs it themselves and opens a website by its port');
+  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: a release of it is refused until it has a container image (start.image) or WebAssembly (wasm); as a description alone, whoever wants it runs it themselves and opens a website by its port');
   const start = hint || command || image ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(image ? { image } : {}) } : undefined;
 
   let install: AppInstall | undefined;
@@ -867,6 +868,20 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   return 'website';
 }
 
+/**
+ * Why a release of a website or service can't be published: it brings files (a tag, assets) but nothing Weave runs.
+ * Weave never runs a program from a release, only its container image or its WebAssembly; a release of programs per
+ * platform would sit in the project with nobody able to start it (Phil's MycrobiontaFinder, 2.11.2026). A description
+ * without a release (start.command for a checkout, run by hand) is still fine. Undefined: nothing in the way.
+ */
+export function unrunnableRelease(m: AppManifest): string | undefined {
+  const kind = artifactKindOf(m);
+  if (kind !== 'website' && kind !== 'service') return undefined;
+  const released = !!m.install && (!!m.install.tag || !!m.install.assets);
+  if (!released || m.wasm || m.start?.image || m.install?.image) return undefined;
+  return `${m.name} ${m.install?.tag ?? ''}`.trim() + ` isn't released: a ${kind} release needs a container image ("start.image") or WebAssembly ("wasm"), and Weave never runs programs from a release (${Object.keys(m.install?.assets ?? {}).join(', ') || 'its files'} would sit there with nobody able to start them). Build an image and set start.image, or a WebAssembly component (wasm), then release again; a description with start.command alone (no release) stays possible for running it by hand`;
+}
+
 /** Where an artifact's files are: its source, or its image (pulled by Weave itself). */
 export function artifactSourceOf(m: AppManifest): ArtifactSource | undefined {
   if (m.install?.source && m.install.assets) return m.install.source;
@@ -901,6 +916,24 @@ export const KIND_ARTIFACT = 'weave.artifact';
  * Signed events stay (who got it keeps what they have); a new release of the same tag counts again.
  */
 export const KIND_ARTIFACT_WITHDRAWN = 'weave.artifact.withdrawn';
+
+/**
+ * The packages that translate a release's texts (docs/localization.md): {release: its event, packages: [weave.texts.<lang>.json…]},
+ * published by a maintainer with the release, or later. Nothing is added to the manifest for it.
+ */
+export const KIND_APP_TEXTS = 'weave.app.texts';
+
+/** A release's packages, the latest per language published by a maintainer, only those that pass the check against its manifest. */
+export function releaseTextsOf(entries: ReleaseEntry[], maintainers: Set<Did>, release: string, manifest: AppManifest): TextPackage[] {
+  const byLang = new Map<string, TextPackage>();
+  for (const e of [...entries].filter((x) => x.kind === KIND_APP_TEXTS).sort((a, b) => a.event.time.localeCompare(b.event.time))) {
+    if (!maintainers.has(e.event.author)) continue;
+    const b = (e.body && typeof e.body === 'object' ? e.body : {}) as { release?: unknown; packages?: unknown };
+    if (b.release !== release || !Array.isArray(b.packages)) continue;
+    for (const p of b.packages) if (checkServicePackage(p, manifest).length === 0) byLang.set((p as TextPackage).lang, p as TextPackage);
+  }
+  return [...byLang.values()];
+}
 
 /** A project's artifacts, newest first: each one's tag once (its latest release), only by maintainers, only with something to get, never one withdrawn. */
 export function artifactsOf(entries: ReleaseEntry[], maintainers: Set<Did>): Artifact[] {

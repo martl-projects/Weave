@@ -6,6 +6,7 @@ import { copy } from './posts.tsx';
 import { SafeProposals } from './shows.tsx';
 import { WalletNeeded } from './wallet.tsx';
 import { attempt, AsyncButton, toast } from './ui.tsx';
+import { currentTexts, t, useTexts } from './texts.tsx';
 
 /*
  * A project's treasury: a Safe its maintainers' own wallets own, and how its
@@ -14,17 +15,20 @@ import { attempt, AsyncButton, toast } from './ui.tsx';
  */
 
 type Shares = TreasuryInfo['presets'][string];
-const PARTS: Array<{ key: keyof Shares; label: string; color: string }> = [
-  { key: 'makers', label: 'Makers', color: '#008080' },
-  { key: 'treasury', label: 'Project treasury', color: '#000080' },
-  { key: 'community', label: 'Community', color: '#d4a000' },
-  { key: 'foundation', label: 'Weave Foundation', color: '#c00000' },
+/** The parts of a split, in order; their texts are split.part.<key>. */
+const PARTS: Array<{ key: keyof Shares; color: string }> = [
+  { key: 'makers', color: '#008080' },
+  { key: 'treasury', color: '#000080' },
+  { key: 'community', color: '#d4a000' },
+  { key: 'foundation', color: '#c00000' },
 ];
-const PRESET_LABELS: Record<string, string> = { standard: 'Standard', community: 'Community first', solo: 'Solo', free: 'All free' };
-const pct = (bp: number) => `${(bp / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+const PRESETS = ['standard', 'community', 'solo', 'free'];
+const presetLabel = (name: string) => (PRESETS.includes(name) ? t(`split.preset.${name}`) : name);
+const pct = (bp: number) => `${(bp / 100).toLocaleString(currentTexts().locale, { maximumFractionDigits: 2 })}%`;
 
 function SplitBar({ shares, community }: { shares: Shares; community?: string }) {
-  const label = (p: (typeof PARTS)[number]) => (p.key === 'community' && community ? community : p.label);
+  const { t } = useTexts();
+  const label = (p: (typeof PARTS)[number]) => (p.key === 'community' && community ? community : t(`split.part.${p.key}`));
   return (
     <div>
       <div style={{ display: 'flex', height: 14, borderRadius: 4, overflow: 'hidden', border: '1px solid var(--border, #8884)' }}>
@@ -44,8 +48,8 @@ function SplitBar({ shares, community }: { shares: Shares; community?: string })
   );
 }
 
-
 function SplitEditor({ project, treasury, communities, onDone }: { project: SpaceInfo; treasury: TreasuryInfo; communities: SpaceInfo[]; onDone(): void }) {
+  const { t } = useTexts();
   const start = treasury.pending ?? treasury.split;
   const [shares, setShares] = useState<Shares>(start?.shares ?? treasury.presets.standard);
   const [community, setCommunity] = useState(start?.community ?? '');
@@ -60,7 +64,7 @@ function SplitEditor({ project, treasury, communities, onDone }: { project: Spac
       <div className="field-row">
         {Object.entries(treasury.presets).map(([name, s]) => (
           <button key={name} className={highlighted === name ? 'default' : ''} onClick={() => setShares(s)}>
-            {PRESET_LABELS[name] ?? name}
+            {presetLabel(name)}
           </button>
         ))}
       </div>
@@ -69,8 +73,8 @@ function SplitEditor({ project, treasury, communities, onDone }: { project: Spac
           {p.key === 'community' ? (
             <span className="grow">
               {communities.length ? (
-                <select value={community} onChange={(e) => setCommunity(e.target.value)} aria-label="The community that gets this part">
-                  <option value="">A community you name…</option>
+                <select value={community} onChange={(e) => setCommunity(e.target.value)} aria-label={t('split.community.gets')}>
+                  <option value="">{t('split.community.name')}</option>
                   {communities.map((c) => (
                     <option key={c.id} value={c.id}>
                       r/{c.name}
@@ -78,14 +82,14 @@ function SplitEditor({ project, treasury, communities, onDone }: { project: Spac
                   ))}
                 </select>
               ) : (
-                <label htmlFor="share-community">A community</label>
+                <label htmlFor="share-community">{t('split.a.community')}</label>
               )}
-              <span className="small muted"> · {named ? `to r/${named.name}'s treasury` : communities.length ? 'name one, or it stays with the treasury' : "you're in none: it stays with the treasury"}</span>
+              <span className="small muted"> · {named ? t('split.to.community', { name: named.name }) : communities.length ? t('split.name.one') : t('split.in.none')}</span>
             </span>
           ) : (
             <label className="grow" htmlFor={`share-${p.key}`}>
-              {p.label}
-              {p.key === 'foundation' && <span className="small"> · funds interesting projects; a suggestion, 0 is fine</span>}
+              {t(`split.part.${p.key}`)}
+              {p.key === 'foundation' && <span className="small"> {t('split.foundation.note')}</span>}
             </label>
           )}
           <input
@@ -104,19 +108,19 @@ function SplitEditor({ project, treasury, communities, onDone }: { project: Spac
       ))}
       <SplitBar shares={saved} community={named && `r/${named.name}`} />
       <div className="field-row">
-        <span className="grow small">{total === 10000 ? (treasury.split ? 'A change counts after 7 days, so nobody is surprised by it.' : 'The first split counts right away.') : `Adds up to ${pct(total)}: it has to be 100%.`}</span>
-        <button onClick={onDone}>Cancel</button>
+        <span className="grow small">{total === 10000 ? t(treasury.split ? 'split.change.counts' : 'split.first.counts') : t('split.adds.up', { total: pct(total) })}</span>
+        <button onClick={onDone}>{t('button.cancel')}</button>
         <AsyncButton
           className="default"
           onClick={async () => {
             const done = await attempt(
               () => api('setSplit', { project: project.id, ...(preset ? { preset } : { shares: saved }), ...(named && saved.community ? { community: named.id } : {}) }).then(bump),
-              treasury.split ? 'Split changed: it counts in 7 days' : 'Split set',
+              t(treasury.split ? 'split.changed' : 'split.set'),
             );
             if (done !== undefined) onDone();
           }}
         >
-          Save split
+          {t('split.save')}
         </AsyncButton>
       </div>
     </>
@@ -137,16 +141,15 @@ export function usePayments(project: SpaceInfo) {
 
 /** In a project's settings: payments, off until someone turns them on; then its treasury. */
 export function PaymentsSettings({ project, spaces }: { project: SpaceInfo; spaces: SpaceInfo[] }) {
+  const { t } = useTexts();
   const payments = usePayments(project);
   if (!payments.on)
     return (
       <fieldset>
-        <legend>Payments</legend>
-        <p className="small">
-          Off. Turned on, the project gets a treasury (a Safe its maintainers' wallets own), a split of what it earns, and ticketed shows in Live. On a test network: no real money yet.
-        </p>
+        <legend>{t('payments.legend')}</legend>
+        <p className="small">{t('payments.off')}</p>
         <div className="buttons">
-          <button onClick={() => payments.turn(true)}>Turn on payments</button>
+          <button onClick={() => payments.turn(true)}>{t('payments.turn.on')}</button>
         </div>
       </fieldset>
     );
@@ -155,43 +158,45 @@ export function PaymentsSettings({ project, spaces }: { project: SpaceInfo; spac
 
 /** Its treasury's address, owners and split. */
 function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; spaces: SpaceInfo[]; onTurnOff?(): void }) {
+  const { t, locale } = useTexts();
   const { data: treasury } = useApi(() => api<TreasuryInfo>('treasury', project.id), [project.id]);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);
   const [editing, setEditing] = useState(false);
   if (!treasury) return null;
   const name = (p: { did: string; name?: string }) => p.name ?? shortDid(p.did);
-  const communityName = (id?: string) => (id ? `r/${spaces.find((x) => x.id === id)?.name ?? 'a community'}` : undefined);
+  const communityName = (id?: string) => (id ? `r/${spaces.find((x) => x.id === id)?.name ?? t('split.a.community.lc')}` : undefined);
   return (
     <fieldset>
-      <legend>Payments</legend>
+      <legend>{t('payments.legend')}</legend>
       <div className="field-row">
-        <b className="grow">Treasury</b>
-        <span className="small muted">{treasury.chain.name}, a test network</span>
+        <b className="grow">{t('treasury.legend')}</b>
+        <span className="small muted">{t('treasury.test.network', { chain: treasury.chain.name })}</span>
       </div>
       {treasury.address ? (
         <div className="field-row">
           <Icon name="lock" />
           <code className="grow">{treasury.address}</code>
-          <button onClick={() => copy(treasury.address!, 'Address copied')}>Copy</button>
+          <button onClick={() => copy(treasury.address!, t('address.copied'))}>{t('button.copy')}</button>
           <a href={`${treasury.chain.explorer}/address/${treasury.address}`} target="_blank" rel="noopener noreferrer">
-            Explorer
+            {t('treasury.explorer')}
           </a>
         </div>
       ) : (
-        <p className="small">No address yet: the treasury is a Safe made from its maintainers' wallets, and none is linked.</p>
+        <p className="small">{t('treasury.no.address')}</p>
       )}
       <p className="small">
-        Owned by {treasury.owners.length ? treasury.owners.map((o) => name(o.person)).join(', ') : 'nobody yet'}
-        {treasury.owners.length > 1 && ` (${treasury.threshold} of ${treasury.owners.length} sign)`}
-        {treasury.missing.length > 0 && <span className="muted"> · no wallet yet: {treasury.missing.map(name).join(', ')}</span>}. Weave holds no keys or money.
+        {t('treasury.owned.by', { owners: treasury.owners.length ? treasury.owners.map((o) => name(o.person)).join(', ') : t('treasury.nobody.yet') })}
+        {treasury.owners.length > 1 && t('treasury.threshold', { threshold: treasury.threshold, n: treasury.owners.length })}
+        {treasury.missing.length > 0 && <span className="muted"> {t('treasury.no.wallet', { names: treasury.missing.map(name).join(', ') })}</span>}
+        {t('treasury.no.keys')}
       </p>
-      {treasury.maintainer && !wallet && <WalletNeeded why="Your wallet makes you an owner, with the other maintainers." />}
+      {treasury.maintainer && !wallet && <WalletNeeded why={t('treasury.wallet.why')} />}
       {treasury.address && <SafeProposals safe={treasury.address} />}
       {treasury.retired.map((r) => (
         <div key={r.address}>
           <div className="field-row small">
             <span className="grow">
-              Retired: <code>{r.address}</code> (a wallet changed). People paying it are told to pay the new address.
+              {t('treasury.retired')} <code>{r.address}</code> {t('treasury.retired.note')}
             </span>
             {treasury.maintainer && (
               <AsyncButton
@@ -199,10 +204,10 @@ function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; 
                   const swept = await attempt(() => api<Array<{ balance: string }>>('sweepRetired', treasury.project.id));
                   if (!swept) return;
                   bump();
-                  toast(swept.some((x) => x.balance !== '0') ? 'Proposed: its old owners sign the move below' : 'Nothing left there');
+                  toast(t(swept.some((x) => x.balance !== '0') ? 'treasury.sweep.proposed' : 'treasury.sweep.nothing'));
                 }}
               >
-                Move what's left…
+                {t('treasury.move.left')}
               </AsyncButton>
             )}
           </div>
@@ -210,13 +215,13 @@ function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; 
         </div>
       ))}
       <div className="field-row" style={{ marginTop: 10 }}>
-        <b className="grow">Split of what it earns</b>
-        {treasury.maintainer && !editing && <button onClick={() => setEditing(true)}>{treasury.split ? 'Change…' : 'Set a split…'}</button>}
+        <b className="grow">{t('split.legend')}</b>
+        {treasury.maintainer && !editing && <button onClick={() => setEditing(true)}>{t(treasury.split ? 'split.change' : 'split.set.one')}</button>}
       </div>
-      {treasury.split ? <SplitBar shares={treasury.split.shares} community={communityName(treasury.split.community)} /> : !editing && <p className="small">None yet: income stays in the treasury.</p>}
+      {treasury.split ? <SplitBar shares={treasury.split.shares} community={communityName(treasury.split.community)} /> : !editing && <p className="small">{t('split.none')}</p>}
       {treasury.pending && (
         <>
-          <p className="small">From {new Date(treasury.pending.from).toLocaleDateString()}:</p>
+          <p className="small">{t('split.from', { date: new Date(treasury.pending.from).toLocaleDateString(locale) })}</p>
           <SplitBar shares={treasury.pending.shares} community={communityName(treasury.pending.community)} />
         </>
       )}
@@ -224,7 +229,7 @@ function TreasurySettings({ project, spaces, onTurnOff }: { project: SpaceInfo; 
       {onTurnOff && (
         <div className="buttons">
           <button className="link" onClick={onTurnOff}>
-            Turn off payments
+            {t('payments.turn.off')}
           </button>
         </div>
       )}

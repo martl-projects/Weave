@@ -3,6 +3,7 @@ import { boxTo, openBox, type Box } from './crypto.ts';
 import type { EventFields } from './events.ts';
 import type { EventView } from './records.ts';
 import { isDid, type Did, type KeyPair } from './keys.ts';
+import type { Invite } from './spaces.ts';
 
 /*
  * Memberships, Patreon-style. A creator offers tiers; a tier is a group the
@@ -166,7 +167,7 @@ export interface MembershipRequest {
   /** The hash of the transaction that paid an onchain tier. */
   payment?: string;
   /** Where the supporter's node can be reached. */
-  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  entry: Invite['entry'];
 }
 
 /** A request to join a tier, readable only by the creator (encrypted to their encryption key). */

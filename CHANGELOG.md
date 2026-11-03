@@ -2,6 +2,122 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.30.1 · 2026-11-02
+
+- Agents and sessions are martl's own robot again: small and squat, painted by hand (Weave avatar v1.18)
+
+## v0.30.0 · 2026-11-02
+
+- Agents read a chat in slices: since and until (a time, or how long ago), and people only, in weave_chat and weave chat
+
+## v0.28.1 · 2026-11-02
+
+- The MCP test of opening a keyvault brings its own shipped list: CI never builds packages/shipped/dist
+- martl in the app's bundle again, through his front door: a new install knows him and reaches his always-on node, never his computer; weave-server join reads a long answer from a file or stdin
+- An always-on node gets its person's public side whole: each key's events form a chain, and the identity events alone left gaps the delegations waited behind
+- An always-on node links for someone whose history is from before v0.4: the answer brings the v1 originals its v2 identity events restate
+- Who reaches your Weave and your front door, in the app: "People you know" or "Anyone" in Keys & devices, the front door with its link beside your always-on node, and My contact link giving the front-door link once you have one
+- An agent guides its person to the one dialog: weave_open_in_app opens a keyvault (make the GitHub App, hand a project a repository) or a project's services, "Add github-access" saying which agent asks
+- Getting a file artifact shows its size and how far the download got, instead of a greyed button for a minute
+- Open link in the toolbar: paste any link someone sent, or the whole message, and Weave does the right thing (an invite asks to join, a contact link adds them, a post or space opens)
+- Your contact link is one click away: My link in the toolbar, next to Invite (it was only on People)
+
+## v0.28.0 · 2026-11-02
+
+- A node shares only its person's public side and that of whom the peer shares something with, and an always-on node is a front door: found at a public meeting point that only front doors announce
+- Ctrl+V with a file or picture on the clipboard attaches it to a chat message: a screenshot gets a name for when it was taken, text on the clipboard still pastes
+- A release of a website or service that Weave couldn't run is refused when it's published: it needs a container image or WebAssembly
+- A post's group picture is kept under who's in it: people without an avatar no longer share one picture (Julian's post showed Phil's)
+- On Windows, pages open in the default browser: through explorer, not rundll32's url.dll, which read the old association and often opened Edge
+- A node new to Weave learns the names of people from before v0.4: v1 logs travel also for keys that signed their v1 events again as v2, whose v2 versions it takes only with the v1 originals
+- udx-native 1.22.0 (libudx: a stream isn't destroyed again while its destroy packet is queued), hyperdht 6.35.0, dht-rpc 6.28.0, and the MCP SDK's body-parser and fast-uri past their advisories
+
+## v0.27.4 · 2026-11-02
+
+- A space set to everything after it let newcomers read only from when they came: those already in get the keys from before their invite too, once
+
+## v0.27.3 · 2026-11-01
+
+- The founder's node looks for old carries once per space and run, not on every pass; what a founder's word for an envelope from before protocol 3 can't prove is written down
+- A newcomer to a space that lets them read only from when they come learns what came before protocol 3 again: the founder's carry vouches for envelopes without an inner hash, and the founder's node restates it all once in today's shape
+- Pull requests from forks run on GitHub's runners, never on ours: on a public repository their code is anyone's
+- From a peer behind in a space, only a join with an invite the space made is taken, and at most 16 per connection: someone behind may be someone removed, and control events aren't rate-limited
+
+## v0.27.2 · 2026-11-01
+
+- A join that reaches the maintainer only after the next new key still gets in: its join is taken in, and the keys it missed are handed over
+
+## v0.27.1 · 2026-11-01
+
+- A node is found at every key of a space that only those still in it hold, so a member who missed several new keys (offline a while, an older Weave) finds the others again
+- A chat message you send shows at once, also when the daemon's event stream is down (it was saved but not shown, so it got sent twice)
+- Weave lives at martl-projects/Weave: downloads, the server image, the runners' scripts and the console's link point there
+- A daemon without the services Weave ships says so: in its status, as a banner in the app, and in its log at start
+
+## v0.27.0 · 2026-11-01
+
+- Trust starts before the first packet: a node is found at a meeting point only its links carry (never at its DID), turns away peers that share nothing with it and hold none of its links, and adding a contact tells only the two of them instead of following publicly; the app connects newcomers to no one
+- A node announces every key it holds of a space, so a member who missed more than one rotation still gets the rekeys
+- A post's picture sits beside its title only; the text below runs the post's whole width
+
+## v0.26.0 · 2026-11-01
+
+- A post's group picture beside its title is as big as a scene alone, not the post's whole width (it squeezed the text)
+- A post by an agent pictures it as it's credited: the person and their agent's robot together, the robot in the scene
+- A robot's screen can be dark with its face glowing in the screen's colour, a choice in its editor (Weave avatar v1.17)
+- Keys & devices reads in order: identity first, the long words behind an ⓘ, keepers by name, the node with its steps; maintainers remove people and uninvite groups in a project's People settings
+- The avatar editor frames the agents' robot (Weave avatar v1.16)
+- Agents and sessions are Rob13, painted like the people (Weave avatar v1.15)
+- Agents and sessions are robots (Weave avatar v1.14): their editor picks the screen's and the robot's colours, eyes and mouth
+- The overlay's backdrop further down and out to the edges (and the work item's picture drawn even while its half is still empty)
+- The overlay: behind its content, faded and pinned to the bottom, the session's whole figure on the left and its work item's picture on the right
+- A service's own texts: packages next to its manifest travel with its release, checked, resolved in the reader's language
+- Agents and sessions get avatars with a screen for a head: agents' (public, set by their person in Keys & devices) on their posts, messages and scenes; sessions' (private, in the Sessions view and the overlay) so you know them again. An agent's post or message names the session it was written in. (Weave avatar v1.13: screen heads, a curved CRT screen)
+- The admin console on names, in the browser's language; nothing hard-coded is left
+- The main process on names: tray, titles, dialogs and the weave command follow the language
+- Avatar pictures are drawn only once (nearly) on screen and kept on disk (IndexedDB, per renderer release, the 1500 most recently used): the next start shows them without loading the renderer (Weave avatar v1.12: bounded memory)
+- Hub, people, inbox cards, project home and settings, boards, communities, New and Invite on names
+- Groups in the sidebar show their photo, or their people's faces (two overlapping, or one), not a pixel sprite
+- Chats in the sidebar show the other person's avatar, not a pixel sprite
+- Websites, releases, artifacts, launching and installing on names; code shown as code is no text
+- Project banners: a veil in the banner's own colour over the members and background together (white on a light banner), instead of see-through figures
+- Project banners: the members faded (softer, fading out toward the top) so the text over them stays readable
+- Project banners for big projects: up to 36 members in tight rows from edge to edge, a row behind when one is full, in a slight V (Weave avatar v1.11)
+- Services, fetchers, kept settings, who may and actions on names
+- Project banners: members from the navel up over the bottom edge, the same size however many, wider for more (Weave avatar v1.10)
+- A project's members peek over its banner's bottom edge (one row, heads and shoulders, sized to the banner, behind its text); a post written together shows all its confirmed co-authors in its picture (Weave avatar v1.9)
+- Keyvaults, their apps and handing, Safe proposals and ticketed shows on names
+- Paying from a wallet, setup packs, visitors, lists, attachments, badges, lenses and announcements on names
+- Add a service, the editor, the side panel, the wallet and a hub's projects on names
+- A post's picture: its author's avatar in a scene (the default; chosen nothing, like every post from before, a calm one picked by its id), an image, or none; embedded post cards show it too
+- The catalog, a project's treasury and split, the avatar editor on names
+- Agent apps, phones and accounts elsewhere on names
+- Everyone has an avatar: without one of their own, the figure their key makes (the pixel sprite only while it's drawn); agents give a post without an image a scene that fits
+- Group photos: those who run a space give each one a pose, a photo pose or any scene with its things (Weave avatar v1.8)
+- Routines and the desk on names: the editor, the list, the Routines page, Set up your desk
+- Sessions on names: the session map, naming a session, a new Claude Code session, who takes an item
+- Memberships on names: tiers, joining by Gumroad or on chain, the tier dialog, requests in the Inbox
+- Space photos: a project's members can stand in the middle of its banner, those who run it choose who stands where, and the photo above the member list is a choice (on for groups and communities, off for projects)
+- Keys & devices on names: onboarding, the company account, keystores, keepers, devices and agents, always-on nodes
+- The settings dialogs on names: Notifications with its rules and hint services, Marks, Updates
+- A space's photo: everyone's avatars (the default) or a picture of its own, the banner's text, and a background behind the group photo that's a project's banner too (weave.space.photo, set by those who run it)
+- Times in the reader's language: ago, the clock and day labels go through the texts layer and its locale
+- Better invites, part 1: an invite link in a chat is a card that asks "Join?" (ye1AFnk1)
+- Posts and chat on names: rows, actions, dialogs, issues, votes, the composer
+- The shell, Home and the shared dialogs on names: menus, tree, status bar, Follow
+- Group photos above every space's members (groups, projects, communities, tier lounges), holding a banner with its name; tiers show their creator's avatar and their members' faces (Weave avatar v1.7)
+- A localization layer: texts by name, English and German packages, the language a device setting
+- Avatar editor: heads centered in their tiles, fine adjustments in a tidy grid, the figure above its parts in narrow windows (Weave avatar v1.6)
+- Avatars: your hub shows a new one right away, the editor zooms to the face (per tab, and the wheel), beards that look like beards (Weave avatar v1.5)
+- The server image clears Podman's state from before a restart: a gone pause process failed every build
+- Weave avatar v1.4: scenes reworked (faces that fit, a shadow, props in the hand, nothing in front of or inside the head)
+- Avatars close to the face: small heads and small scene pictures zoom in (Weave avatar v1.2)
+- Files and images in chat: a message carries one, shown inline or as a card to save (Phil's f9IjggSI)
+- Weave avatar v1.1: books, a laptop, animals and pixel pictures, and eight scenes made of them
+- Avatars: the editor's pictures square (the skins pad buttons), and no backgrounds behind avatars and scenes
+- Weave avatars: everyone's own 3D figure, and scenes (their avatar in a pose, with things around it) decorate posts
+- No npm cache upload after the jobs: the self-hosted runners keep ~/.npm, and the upload stalled
+
 ## v0.25.0 · 2026-11-01
 
 - Pinned services unpack side by side: each process into a part of its own, the first one done stays

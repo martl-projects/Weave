@@ -6,6 +6,7 @@ import type { EventFields } from './events.ts';
 import { isDid, type Did, type KeyPair } from './keys.ts';
 import { parseOnchainPrice, type OnchainPrice } from './memberships.ts';
 import type { EventView } from './records.ts';
+import type { Invite } from './spaces.ts';
 import { checksumAddress, isAddress } from './treasury.ts';
 
 /*
@@ -124,7 +125,7 @@ export interface TicketRequest {
   show: string;
   /** The transaction that paid for it. */
   payment: string;
-  entry: { topics: string[]; bootstrap: Array<{ host: string; port: number }> };
+  entry: Invite['entry'];
 }
 
 export function ticketRequest(hostEncryptionKey: Did, request: TicketRequest): EventFields {

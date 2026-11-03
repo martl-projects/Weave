@@ -7,6 +7,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WeaveNode } from '@weave/node';
 import { createWeaveMcp, sessionFromEnv } from '../src/index.ts';
+import { pinnedRelease } from '../../shipped/pinned.ts';
+
+/** The services Weave ships, as a list holding these ones (CI never builds packages/shipped/dist). */
+async function shippedNamed(...names: string[]): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-shipped-'));
+  dirs.push(dir);
+  const listed: Record<string, unknown> = {};
+  for (const name of names) {
+    const manifest = JSON.parse(readFileSync(join(await pinnedRelease(name), 'weave.app.json'), 'utf8')) as unknown;
+    writeFileSync(join(dir, name + '.wasm'), name);
+    listed[name] = { component: name + '.wasm', digest: 'sha256:' + '0'.repeat(64), manifest };
+  }
+  writeFileSync(join(dir, 'shipped.json'), JSON.stringify(listed));
+  return dir;
+}
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -116,6 +131,25 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it("checks the texts next to a manifest with it, and publishes them with the app (the Pferderennen's German)", async () => {
+    const { node, call, close } = await setup(['weave.app', 'weave.app.texts']);
+    const derby = join(import.meta.dirname, '..', '..', 'core', 'test', 'fixtures', 'derby');
+    const checked = (await call('weave_app_manifest', { file: join(derby, 'weave.app.json') })).data;
+    expect(checked).toMatchObject({ ok: true, problems: [], texts: [{ file: 'weave.texts.de.json', problems: [] }] });
+    // A broken package next to a manifest: said by file and name, and the check fails.
+    const dir = node.home.dir;
+    const manifest = JSON.parse(readFileSync(join(derby, 'weave.app.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(join(dir, 'weave.app.json'), JSON.stringify({ ...manifest, install: { tag: 'v1.4.0', source: { provider: 'github', ref: 'martl/derby' }, assets: { 'linux-x64': { file: 'derby.tar.gz', sha256: 'a'.repeat(64), size: 10 } }, access: 'direct', fetcher: 'github-checkout' } }));
+    writeFileSync(join(dir, 'weave.texts.de.json'), JSON.stringify({ texts: 'derby', lang: 'de', names: { 'actions.gallop.label': 'Galopp' } }));
+    expect((await call('weave_app_manifest', { file: join(dir, 'weave.app.json') })).data).toMatchObject({ ok: false, problems: [], texts: [{ file: 'weave.texts.de.json', problems: ['actions.gallop.label: not a text field of this manifest'] }] });
+    expect((await call('weave_app_publish', { project: 'Weave', file: join(dir, 'weave.app.json') })).error).toMatch(/weave\.texts\.de\.json: actions\.gallop\.label/);
+    // The right one: published with the app, and there with the artifact.
+    writeFileSync(join(dir, 'weave.texts.de.json'), readFileSync(join(derby, 'weave.texts.de.json')));
+    expect((await call('weave_app_publish', { project: 'Weave', file: join(dir, 'weave.app.json') })).data).toMatchObject({ app: 'derby' });
+    expect((await node.artifacts('Weave'))[0].texts?.map((p) => p.lang)).toEqual(['de']);
+    close();
+  });
+
   it('lets an agent ask for a permission, which its person allows from the Inbox', async () => {
     const { node, call, close } = await setup();
     // Refused, and told how to ask.
@@ -155,6 +189,24 @@ describe('Weave over MCP', () => {
     expect(seen.find((i) => i.kind === 'weave.open')?.body).toMatchObject({ what: 'space' });
     expect((await call('weave_inbox', {})).data.items ?? []).toEqual([]);
     expect((await call('weave_open_in_app', { what: 'space' })).error).toMatch(/say which space/);
+    close();
+  });
+
+  it('brings the app to the front at a keyvault, ready to hand a project a repository (Codex, 2.11.2026)', async () => {
+    const { node, call, close } = await setup();
+    node.wasmSetup.shippedDir = await shippedNamed('github-keyvault');
+    // Keys & devices at the GitHub keyvault Weave ships; with a project, its hand dialog.
+    const opened = await call('weave_open_in_app', { what: 'keyvault', space: 'Weave' });
+    expect(opened.data).toMatchObject({ what: 'keyvault', keyvault: { name: 'github-keyvault' }, space: { kind: 'project', name: 'Weave' } });
+    expect((await call('weave_open_in_app', { what: 'keyvault', keyvault: 'acme' })).error).toMatch(/no keyvault acme here/);
+    close();
+  });
+
+  it("brings the app to the front at a project's services, with something to add picked in its catalog", async () => {
+    const { call, close } = await setup();
+    const opened = await call('weave_open_in_app', { what: 'service', space: 'Weave', service: 'github-releases' });
+    expect(opened.data).toMatchObject({ what: 'service', space: { kind: 'project', name: 'Weave' }, service: 'github-releases', askedBy: 'forge' });
+    expect((await call('weave_open_in_app', { what: 'service' })).error).toMatch(/say which project/);
     close();
   });
 
@@ -203,6 +255,20 @@ describe('Weave over MCP', () => {
     const to = join(node.home.dir, 'got.log');
     expect((await call('weave_get_file', { ref: message.file.ref, to })).data).toMatchObject({ path: to, type: 'text/plain', size: 10 });
     expect(readFileSync(to, 'utf8')).toBe('all green\n');
+    close();
+  });
+
+  it('reads a chat by range and by people only, so an agent takes in less (martl, 2.11.2026)', async () => {
+    const { node, call, close } = await setup();
+    await node.say({ space: 'Weave', text: 'from the person' });
+    await call('weave_say', { space: 'Weave', text: 'from the agent' });
+    const texts = async (args: Record<string, unknown>) => ((await call('weave_chat', { space: 'Weave', ...args })).data as Array<{ text: string }>).map((m) => m.text);
+    expect(await texts({})).toEqual(['from the person', 'from the agent']);
+    expect(await texts({ people_only: true })).toEqual(['from the person']);
+    expect(await texts({ since: '1h' })).toEqual(['from the person', 'from the agent']);
+    expect(await texts({ until: '1h' })).toEqual([]);
+    expect(await texts({ since: new Date(Date.now() + 60_000).toISOString() })).toEqual([]);
+    expect((await call('weave_chat', { space: 'Weave', since: 'yesterday' })).error).toMatch(/since is a time/);
     close();
   });
 

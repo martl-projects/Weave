@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { UpdateInfo } from '@weave/node/client';
-import { whyNotText, type UpdateView } from '../updatestate.ts';
+import type { UpdateView, WhyNot } from '../updatestate.ts';
 import { ago, api, bridge, navigate } from './lib.ts';
 import { Markdown, Modal, toast } from './ui.tsx';
+import { t, T, useTexts } from './texts.tsx';
+
+/** How the window says why a build doesn't update itself. */
+const whyNot = (why: WhyNot) => t(`update.why.${why}`);
 
 /*
  * New Weave versions. In the desktop app the main process does the work (src/update.ts): it asks the daemon shortly
@@ -58,8 +62,8 @@ function DesktopUpdate() {
     let last: UpdateView | undefined;
     const show = (next: UpdateView) => {
       // Said once each: the answer to Check for updates…, and a refusal.
-      if (next.asked && next.state === 'idle' && last?.state !== 'idle') toast(`Weave ${next.current} is the newest version`);
-      if (next.state === 'failed' && (last?.state !== 'failed' || last.error !== next.error)) toast(next.error ?? "Couldn't update", 'error');
+      if (next.asked && next.state === 'idle' && last?.state !== 'idle') toast(t('update.newest', { version: next.current }));
+      if (next.state === 'failed' && (last?.state !== 'failed' || last.error !== next.error)) toast(next.error ?? t('update.failed'), 'error');
       if (next.state !== last?.state || next.version !== last?.version) setHidden(undefined);
       last = next;
       setView(next);
@@ -89,7 +93,7 @@ function DesktopUpdate() {
       <div className="window update-bar">
         <div className="window-body">
           <span className="update-text">
-            Getting Weave {view.version}…{view.total ? ` ${Math.min(100, Math.round(((view.done ?? 0) / view.total) * 100))} %` : ''}
+            {view.total ? t('update.getting.pct', { version: view.version, pct: Math.min(100, Math.round(((view.done ?? 0) / view.total) * 100)) }) : t('update.getting', { version: view.version })}
           </span>
           <progress max={view.total ?? 1} value={view.total ? view.done ?? 0 : undefined} />
         </div>
@@ -101,21 +105,21 @@ function DesktopUpdate() {
       <div className="window update-bar">
         <div className="window-body">
           <span className="update-text">
-            Weave {view.version} is ready to install. Restarting ends the Weave daemon and any <code>weave</code> commands or agents using it; they start again with the new version.
+            <T name="update.ready" values={{ version: view.version }} />
           </span>
           <div className="buttons">
             <button type="button" className="default" onClick={() => act('restart')}>
-              Restart to update
+              {t('update.restart')}
             </button>
             <button type="button" onClick={later}>
-              Later
+              {t('update.later')}
             </button>
             <button type="button" onClick={skip}>
-              Skip this version
+              {t('update.skip')}
             </button>
             {view.latest?.post && (
               <button type="button" onClick={() => navigate(`#/post/${view.latest!.post!.replace('weave:post:', '')}`)}>
-                What's new
+                {t('update.whats.new')}
               </button>
             )}
           </div>
@@ -125,7 +129,7 @@ function DesktopUpdate() {
 
   if (view.state === 'available' && view.latest)
     return (
-      <Prompt current={view.current} latest={view.latest} why={view.why ? whyNotText(view.why) : undefined} install={view.self ? () => act('download') : undefined} onLater={later} onSkip={skip} />
+      <Prompt current={view.current} latest={view.latest} why={view.why ? whyNot(view.why) : undefined} install={view.self ? () => act('download') : undefined} onLater={later} onSkip={skip} />
     );
   return null;
 }
@@ -139,13 +143,13 @@ function CheckOnly() {
         const result = await api<UpdateInfo>('updateCheck', { current: WEAVE_VERSION });
         const version = result.latest?.version;
         if (!result.newer || !version) {
-          if (asked) toast(`Weave ${result.current} is the newest version`);
+          if (asked) toast(t('update.newest', { version: result.current }));
           return;
         }
         if (!asked && putOff(version)) return;
         setInfo(result);
       } catch (error) {
-        if (asked) toast(`Couldn't check for updates: ${(error as Error).message}`, 'error');
+        if (asked) toast(t('update.check.failed', { error: (error as Error).message }), 'error');
       }
     };
     checkNow = () => void check(true);
@@ -172,18 +176,16 @@ function CheckOnly() {
 
 /** A newer version this build doesn't install by itself (why), or only when asked (install): the notes and the download. */
 function Prompt({ current, latest, why, install, onLater, onSkip }: { current: string; latest: NonNullable<UpdateInfo['latest']>; why?: string; install?: () => void; onLater(): void; onSkip(): void }) {
+  const { t } = useTexts();
   const download = () => {
     if (latest.url && /^https:\/\//.test(latest.url)) window.open(latest.url, '_blank', 'noopener');
     else if (latest.post) navigate(`#/post/${latest.post.replace('weave:post:', '')}`);
     onLater();
   };
   return (
-    <Modal title={`Weave ${latest.version} is available`} onClose={onLater}>
+    <Modal title={t('update.available.title', { version: latest.version })} onClose={onLater}>
       <div className="update-prompt">
-        <p>
-          You have Weave {current}. Weave {latest.version} came out{latest.published ? ` ${ago(latest.published)}` : ''}
-          {latest.source === 'weave' ? ', announced in the Weave project by its maintainers' : ''}. Weave is still 0.x: please update, so everyone speaks the same version.
-        </p>
+        <p>{t('update.available.text', { current, version: latest.version, when: latest.published ? ` ${ago(latest.published)}` : '', announced: latest.source === 'weave' ? t('update.announced') : '' })}</p>
         {why && <p className="small">{why}</p>}
         {latest.notes && (
           <div className="update-notes sunken">
@@ -192,23 +194,23 @@ function Prompt({ current, latest, why, install, onLater, onSkip }: { current: s
         )}
         <div className="buttons">
           <button type="button" onClick={onSkip}>
-            Skip this version
+            {t('update.skip')}
           </button>
           <button type="button" onClick={onLater}>
-            Later
+            {t('update.later')}
           </button>
           {latest.post && latest.url && (
             <button type="button" onClick={() => (navigate(`#/post/${latest.post!.replace('weave:post:', '')}`), onLater())}>
-              Read the release post
+              {t('update.read.post')}
             </button>
           )}
           {install ? (
             <button type="button" className="default" onClick={install}>
-              Download and install
+              {t('update.download.install')}
             </button>
           ) : (
             <button type="button" className="default" onClick={download}>
-              {latest.url ? 'Download' : 'Open the release'}
+              {t(latest.url ? 'update.download' : 'update.open.release')}
             </button>
           )}
         </div>
@@ -231,39 +233,38 @@ export function UpdateSettings({ onClose }: { onClose(): void }) {
     setView((v) => (v ? { ...v, auto: on } : v));
     void update?.setAuto(on).catch((error: Error) => toast(error.message, 'error'));
   };
+  const { t } = useTexts();
   const standing = !view
     ? ''
     : view.state === 'ready'
-      ? `Weave ${view.version} is downloaded and checked: restart to install it.`
+      ? t('update.standing.ready', { version: view.version })
       : view.state === 'downloading'
-        ? `Getting Weave ${view.version}…`
+        ? t('update.getting', { version: view.version })
         : view.state === 'available' && view.why
-          ? `Weave ${view.version} is available. ${whyNotText(view.why)}`
+          ? t('update.standing.available.why', { version: view.version, why: whyNot(view.why) })
           : view.state === 'available'
-            ? `Weave ${view.version} is available.`
+            ? t('update.standing.available', { version: view.version })
             : view.state === 'failed'
-              ? `Couldn't get Weave ${view.version ?? ''}: ${view.error ?? ''}`
-              : `You have Weave ${view.current}.`;
+              ? t('update.standing.failed', { version: view.version ?? '', error: view.error ?? '' })
+              : t('update.standing.current', { current: view.current });
   return (
-    <Modal title="Updates" onClose={onClose}>
+    <Modal title={t('update.title')} onClose={onClose}>
       {!update ? (
-        <p>New versions are installed by the desktop app; the browser preview only says when there is one.</p>
+        <p>{t('update.browser.note')}</p>
       ) : (
         <>
           <p>{standing}</p>
           <div className="field-row">
             <input type="checkbox" id="update-auto" checked={auto} disabled={!view || view.why === 'managed'} onChange={(e) => setAuto(e.target.checked)} />
-            <label htmlFor="update-auto">Download new versions in the background, then offer a restart</label>
+            <label htmlFor="update-auto">{t('update.auto')}</label>
           </div>
-          <p className="small">
-            Weave installs only a file whose SHA-256 is the one a maintainer of the Weave project signed with the release, and installs it when you click Restart to update, never behind your back. Off: Weave says when a new version is out, and gets it when you ask.
-          </p>
+          <p className="small">{t('update.auto.note')}</p>
           <div className="buttons">
             <button type="button" onClick={() => void update.action('check').catch((error: Error) => toast(error.message, 'error'))}>
-              Check now
+              {t('update.check.now')}
             </button>
             <button type="button" className="default" onClick={onClose}>
-              Done
+              {t('button.done')}
             </button>
           </div>
         </>

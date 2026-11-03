@@ -18,6 +18,8 @@ export interface Contact {
   did: Did;
   name?: string;
   entry: Invite['entry'];
+  /** It leads to its person's front door (their always-on node), not to their computer: theirs to give anyone. */
+  door?: true;
 }
 
 const CONTACT_PREFIX = 'weave:contact:';
@@ -36,5 +38,5 @@ export function decodeContact(text: string): Contact {
     throw new Error('contact link is damaged');
   }
   if (contact?.v !== 1 || !isDid(contact.did) || !Array.isArray(contact.entry?.topics) || !Array.isArray(contact.entry?.bootstrap)) throw new Error('contact link is damaged');
-  return { v: 1, did: contact.did, ...(typeof contact.name === 'string' ? { name: contact.name.slice(0, 40) } : {}), entry: contact.entry };
+  return { v: 1, did: contact.did, ...(typeof contact.name === 'string' ? { name: contact.name.slice(0, 40) } : {}), entry: contact.entry, ...(contact.door === true ? { door: true as const } : {}) };
 }

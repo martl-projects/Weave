@@ -7,6 +7,7 @@ import { Markdown } from '@tiptap/markdown';
 import { Icon, type IconName } from './icons.tsx';
 import { uploadImage } from './lib.ts';
 import { ask, attempt, BlobImage } from './ui.tsx';
+import { t, useTexts } from './texts.tsx';
 
 /*
  * The editor for posts and project pages: what you see is what you get, with
@@ -22,7 +23,7 @@ function ImageView({ node, selected }: NodeViewProps) {
   const alt = String(node.attrs.alt ?? '');
   return (
     <NodeViewWrapper as="span" className={`editor-image${selected ? ' selected' : ''}`}>
-      {src.startsWith('wblob:') ? <BlobImage src={src} alt={alt} /> : <span className="blob-missing">{alt || 'image'}</span>}
+      {src.startsWith('wblob:') ? <BlobImage src={src} alt={alt} /> : <span className="blob-missing">{alt || t('editor.image')}</span>}
     </NodeViewWrapper>
   );
 }
@@ -51,6 +52,7 @@ function ToolButton({ icon, label, text, active, disabled, onClick }: { icon?: I
 }
 
 function Toolbar({ editor, source, onSource, onImage }: { editor: Editor; source: boolean; onSource(): void; onImage(): void }) {
+  const { t } = useTexts();
   const state = useEditorState({
     editor,
     selector: ({ editor: e }) => ({
@@ -72,31 +74,31 @@ function Toolbar({ editor, source, onSource, onImage }: { editor: Editor; source
   const chain = () => editor.chain().focus();
   const link = () => {
     if (state.link) return void chain().unsetLink().run();
-    const href = prompt('Link address (https://…)')?.trim();
+    const href = prompt(t('editor.link.address'))?.trim();
     if (href && /^https?:\/\//.test(href)) chain().extendMarkRange('link').setLink({ href }).run();
   };
   const off = source;
   return (
-    <div className="editor-toolbar" role="toolbar" aria-label="Formatting">
-      <ToolButton text="B" label="Bold (Ctrl+B)" active={state.bold} disabled={off} onClick={() => chain().toggleBold().run()} />
-      <ToolButton text="I" label="Italic (Ctrl+I)" active={state.italic} disabled={off} onClick={() => chain().toggleItalic().run()} />
-      <ToolButton text="S" label="Strikethrough" active={state.strike} disabled={off} onClick={() => chain().toggleStrike().run()} />
-      <ToolButton icon="code" label="Code" active={state.code} disabled={off} onClick={() => chain().toggleCode().run()} />
+    <div className="editor-toolbar" role="toolbar" aria-label={t('editor.formatting')}>
+      <ToolButton text="B" label={t('editor.bold')} active={state.bold} disabled={off} onClick={() => chain().toggleBold().run()} />
+      <ToolButton text="I" label={t('editor.italic')} active={state.italic} disabled={off} onClick={() => chain().toggleItalic().run()} />
+      <ToolButton text="S" label={t('editor.strike')} active={state.strike} disabled={off} onClick={() => chain().toggleStrike().run()} />
+      <ToolButton icon="code" label={t('editor.code')} active={state.code} disabled={off} onClick={() => chain().toggleCode().run()} />
       <span className="tool-sep" />
-      <ToolButton icon="heading2" label="Heading" active={state.h2} disabled={off} onClick={() => chain().toggleHeading({ level: 2 }).run()} />
-      <ToolButton icon="heading3" label="Subheading" active={state.h3} disabled={off} onClick={() => chain().toggleHeading({ level: 3 }).run()} />
-      <ToolButton icon="bulletList" label="Bulleted list" active={state.bullet} disabled={off} onClick={() => chain().toggleBulletList().run()} />
-      <ToolButton text="1." label="Numbered list" active={state.ordered} disabled={off} onClick={() => chain().toggleOrderedList().run()} />
-      <ToolButton icon="quote" label="Quote" active={state.quote} disabled={off} onClick={() => chain().toggleBlockquote().run()} />
-      <ToolButton text="{ }" label="Code block" active={state.codeBlock} disabled={off} onClick={() => chain().toggleCodeBlock().run()} />
+      <ToolButton icon="heading2" label={t('editor.heading')} active={state.h2} disabled={off} onClick={() => chain().toggleHeading({ level: 2 }).run()} />
+      <ToolButton icon="heading3" label={t('editor.subheading')} active={state.h3} disabled={off} onClick={() => chain().toggleHeading({ level: 3 }).run()} />
+      <ToolButton icon="bulletList" label={t('editor.bullets')} active={state.bullet} disabled={off} onClick={() => chain().toggleBulletList().run()} />
+      <ToolButton text="1." label={t('editor.numbered')} active={state.ordered} disabled={off} onClick={() => chain().toggleOrderedList().run()} />
+      <ToolButton icon="quote" label={t('editor.quote')} active={state.quote} disabled={off} onClick={() => chain().toggleBlockquote().run()} />
+      <ToolButton text="{ }" label={t('editor.code.block')} active={state.codeBlock} disabled={off} onClick={() => chain().toggleCodeBlock().run()} />
       <span className="tool-sep" />
-      <ToolButton icon="link" label={state.link ? 'Remove link' : 'Link'} active={state.link} disabled={off} onClick={link} />
-      <ToolButton icon="image" label="Insert image" disabled={off} onClick={onImage} />
+      <ToolButton icon="link" label={t(state.link ? 'editor.link.remove' : 'editor.link')} active={state.link} disabled={off} onClick={link} />
+      <ToolButton icon="image" label={t('editor.insert.image')} disabled={off} onClick={onImage} />
       <span className="tool-sep" />
-      <ToolButton icon="undo" label="Undo (Ctrl+Z)" disabled={off || !state.undo} onClick={() => chain().undo().run()} />
-      <ToolButton icon="redo" label="Redo (Ctrl+Y)" disabled={off || !state.redo} onClick={() => chain().redo().run()} />
+      <ToolButton icon="undo" label={t('editor.undo')} disabled={off || !state.undo} onClick={() => chain().undo().run()} />
+      <ToolButton icon="redo" label={t('editor.redo')} disabled={off || !state.redo} onClick={() => chain().redo().run()} />
       <span className="grow" />
-      <ToolButton icon="eye" text="Source" label={source ? 'Back to visual editing' : 'Edit the Markdown/HTML source'} active={source} onClick={onSource} />
+      <ToolButton icon="eye" text={t('editor.source')} label={t(source ? 'editor.visual' : 'editor.source.edit')} active={source} onClick={onSource} />
     </div>
   );
 }
@@ -117,6 +119,7 @@ export function RichEditor({
   /** The most characters Weave keeps (Markdown, as stored): shows a counter. */
   max?: number;
 }) {
+  const { t } = useTexts();
   // Text with HTML opens in the source view, so nothing is lost by accident.
   const [source, setSource] = useState(() => hasHtml(value));
   const fileInput = useRef<HTMLInputElement>(null);
@@ -153,7 +156,7 @@ export function RichEditor({
 
   if (!editor) return null;
   const toggleSource = async () => {
-    if (source && hasHtml(value) && !(await ask('This text contains HTML. The visual editor keeps only what it knows (text, headings, lists, links, images) and drops the rest. Switch anyway?', 'Switch'))) return;
+    if (source && hasHtml(value) && !(await ask(t('editor.html.ask'), t('editor.switch')))) return;
     if (source) editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
     setSource(!source);
   };
@@ -161,7 +164,7 @@ export function RichEditor({
     <div className="rich-editor sunken">
       <Toolbar editor={editor} source={source} onSource={() => void toggleSource()} onImage={() => fileInput.current?.click()} />
       {source ? (
-        <textarea className="editor-source" style={{ minHeight }} value={value} spellCheck={false} onChange={(e) => onChange(e.target.value)} aria-label="Markdown source" />
+        <textarea className="editor-source" style={{ minHeight }} value={value} spellCheck={false} onChange={(e) => onChange(e.target.value)} aria-label={t('editor.markdown.source')} />
       ) : (
         <EditorContent editor={editor} className="editor-body md" style={{ minHeight }} />
       )}
@@ -183,31 +186,32 @@ export function RichEditor({
 
 /** "1,234 / 10,000", warning near the limit and saying what to do past it. */
 export function CharCount({ length, max, onlyNear }: { length: number; max: number; onlyNear?: boolean }) {
+  const { t } = useTexts();
   const near = length > max * 0.9;
   if (onlyNear && !near) return null;
-  const n = (x: number) => x.toLocaleString('en');
   const over = length > max;
   return (
     <div className={`char-count${over ? ' over' : near ? ' near' : ''}`} aria-live="polite">
-      {over ? `${n(length - max)} characters too many: ${n(length)} / ${n(max)}. Shorten it or split it.` : `${n(length)} / ${n(max)}`}
+      {over ? t('editor.too.many', { over: length - max, length, max }) : t('editor.count', { length, max })}
     </div>
   );
 }
 
 /** Pick, show and replace one image (a project's icon or banner). */
 export function ImagePicker({ value, onChange, label, wide }: { value?: string; onChange(ref: string): void; label: string; wide?: boolean }) {
+  const { t } = useTexts();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   return (
     <div className={`image-picker${wide ? ' wide' : ''}`}>
-      <div className="image-picker-frame sunken">{value ? <BlobImage src={value} alt={label} /> : <span className="small muted">no {label.toLowerCase()}</span>}</div>
+      <div className="image-picker-frame sunken">{value ? <BlobImage src={value} alt={label} /> : <span className="small muted">{t('image.none', { what: label.toLowerCase() })}</span>}</div>
       <div className="image-picker-buttons">
         <button type="button" disabled={busy} onClick={() => input.current?.click()}>
-          {value ? 'Change…' : `Add ${label.toLowerCase()}…`}
+          {value ? t('image.change') : t('image.add', { what: label.toLowerCase() })}
         </button>
         {value && (
           <button type="button" onClick={() => onChange('')}>
-            Remove
+            {t('button.remove')}
           </button>
         )}
       </div>

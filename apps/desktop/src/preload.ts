@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('weave', {
   reveal: (path: string) => ipcRenderer.invoke('weave:reveal', path),
   show: () => ipcRenderer.invoke('weave:show'),
   mentions: (action: 'show' | 'hide') => ipcRenderer.invoke('weave:mentions', action),
+  overlay: (on?: boolean) => ipcRenderer.invoke('weave:overlay', on),
   route: (hash: string) => ipcRenderer.invoke('weave:route', hash),
   workOn: (post: string, choice?: unknown) => ipcRenderer.invoke('weave:work-on', post, choice),
   newSession: (input: unknown) => ipcRenderer.invoke('weave:new-session', input),
@@ -38,6 +39,7 @@ contextBridge.exposeInMainWorld('weave', {
     ipcRenderer.on('weave:window-state', (_event, state) => listener(state));
   },
   attention: () => ipcRenderer.invoke('weave:attention'),
+  language: (setting: string) => ipcRenderer.invoke('weave:language', setting),
   // New versions (src/update.ts): where one stands, what to do about it, and the setting.
   update: {
     state: () => ipcRenderer.invoke('weave:update'),

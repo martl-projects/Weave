@@ -65,7 +65,8 @@ describe('contact links', () => {
     expect(link).not.toContain(ada.identity.author.slice(8)); // encoded, holds no keys either
     const added = await martin.addContact(`Add me on Weave: ${link} see you!`);
     expect(added).toMatchObject({ did: ada.identity.author, name: 'Ada', contact: true, following: true });
-    expect(martin.config.topics).toContain(ada.identity.author);
+    // Ada's meeting point, never her DID (that would tell anyone who looks there where Martin is).
+    expect(martin.config.topics).toEqual([expect.stringMatching(/^meet:/)]);
     expect((await martin.directory('ad')).map((p) => p.name)).toEqual(['Ada']);
     expect(await martin.directory('zz')).toEqual([]);
     await expect(ada.addContact(link)).rejects.toThrow(/your own/);
@@ -79,7 +80,8 @@ describe('contact links', () => {
     expect(martin.config.bootstrap).toEqual([]);
     await tester.createGroup('Testers');
     await expect(martin.joinSpace(await tester.invite('Testers'))).rejects.toThrow(/weave bootstrap 127.0.0.1:49737/);
-    expect(martin.replica.events().filter((e) => e.author === martin.identity.author && e.scope === 'self').length).toBe(1);
+    // Ada as a contact and Martin following her, both sealed to himself; nothing for Tester.
+    expect(martin.replica.events().filter((e) => e.author === martin.identity.author && e.scope === 'self').length).toBe(2);
   });
 });
 
