@@ -324,6 +324,10 @@ export function SessionsView() {
   const [all, setAll] = useState(false);
   const { data: follow } = useApi(() => api<ClaudeCodeFollow>('claudeCode'), []);
   const toggleFollow = () => attempt(() => api<ClaudeCodeFollow>('followClaudeCode', { on: !follow?.on }).then(bump));
+  // Show the overlay: whether the side panel comes up beside Claude Code, on this device (only in the app).
+  const [overlay, setOverlay] = useState<boolean>();
+  useEffect(() => void bridge.overlay?.().then(setOverlay, () => {}), []);
+  const toggleOverlay = () => attempt(() => bridge.overlay!(!overlay).then(setOverlay));
   // The New session dialog, for a project or any.
   const [starting, setStarting] = useState<{ project?: string }>();
   // Sessions with a job first; the others only from the last day, unless you ask for all.
@@ -349,6 +353,14 @@ export function SessionsView() {
             {t('sessions.follow')}
             {follow && !follow.found ? t('sessions.follow.not.found') : ''}
           </label>
+          {bridge.overlay && (
+            <>
+              <input type="checkbox" id="show-overlay" checked={!!overlay} disabled={overlay === undefined} onChange={() => void toggleOverlay()} />
+              <label htmlFor="show-overlay" title={t('sessions.overlay.title')}>
+                {t('sessions.overlay')}
+              </label>
+            </>
+          )}
           <input type="checkbox" id="sessions-all" checked={all} onChange={() => setAll((a) => !a)} />
           <label htmlFor="sessions-all">{t('sessions.last.days')}</label>
         </>

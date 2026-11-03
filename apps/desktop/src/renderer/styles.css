@@ -790,6 +790,12 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mentions-scroll > .empty, .mentions-scroll > .panel-toggles, .mentions-scroll > .panel-lines, .mentions-scroll > .panel-sessions { margin-left: 8px; margin-right: 8px; }
 .mentions-scroll > .panel-sessions { margin-top: 8px; }
 .mentions-scroll > * { flex-shrink: 0; }
+/* The overlay introducing itself, the first time on a device. */
+.panel-intro { margin: 8px 8px 0; display: flex; flex-direction: column; gap: 4px; font-family: var(--content-font); font-size: 13px; }
+.panel-intro-title { font-size: 15px; }
+.panel-intro p, .panel-intro ul { margin: 0; }
+.panel-intro ul { padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.panel-intro button { align-self: flex-start; margin-top: 4px; }
 .panel-session-head { display: flex; flex-direction: column; margin-bottom: 6px; font-family: var(--content-font); font-size: 13px; }
 .panel-heading { margin: 6px 0 2px; font-family: var(--content-font); font-size: 12px; }
 .stack-item { display: flex; flex-direction: column; gap: 3px; }
