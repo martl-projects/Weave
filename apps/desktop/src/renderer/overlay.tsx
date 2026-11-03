@@ -153,7 +153,7 @@ function SessionsPane({ focused, me, onPick }: { focused?: string; me?: string; 
   const { t } = useTexts();
   const [sessions, setSessions] = useState<SessionInfo[]>();
   useEffect(() => {
-    const load = () => void api<SessionInfo[]>('activeSessions', { hours: 12 }).then(setSessions, () => {});
+    const load = () => void api<SessionInfo[]>('activeSessions', { hours: 12 }).then((all) => setSessions(all.filter((s) => !s.archived && !s.hidden)), () => {});
     load();
     const timer = setInterval(load, 15_000);
     const off = onItem((item) => {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -134,5 +134,65 @@ describe('sessions with permanent names', () => {
     expect(await martin.doneWith({ session: { id: 'Skala II' } })).toMatchObject({ id: 's1', name: 'Skala II', stack: [] });
     // A fresh id that happens to be nobody's name is a new session, as before.
     expect((await martin.session({ id: 'Heddle' })).name).toBeUndefined();
+  });
+});
+
+describe('archived and hidden sessions', () => {
+  it('leaves sessions archived in the Claude app or hidden in Weave out of the workers, and brings them back', async () => {
+    // The Claude app's session files, as it writes them: <account>/<org>/local_<id>.json
+    const app = mkdtempSync(join(tmpdir(), 'weave-claude-app-'));
+    dirs.push(app);
+    const org = join(app, 'account', 'org');
+    mkdirSync(org, { recursive: true });
+    let tick = Date.now();
+    const appSession = (cli: string, isArchived: boolean) => {
+      const file = join(org, `local_${cli}.json`);
+      writeFileSync(file, JSON.stringify({ sessionId: `local_${cli}`, cliSessionId: cli, isArchived, title: cli }));
+      tick += 1000;
+      utimesSync(file, new Date(tick), new Date(tick)); // a new mtime, as a real write gives
+    };
+    const before = process.env.WEAVE_CLAUDE_APP_SESSIONS;
+    process.env.WEAVE_CLAUDE_APP_SESSIONS = app;
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1100)); // the app's files are looked at once a second
+    try {
+      const martin = person('Martin');
+      await martin.createProject({ name: 'Weave' });
+      const fix = await martin.submit({ space: 'Weave', board: 'issues', title: 'Fix the login' });
+      for (const id of ['w1', 'w2']) await martin.setSessionRole({ session: { id }, role: 'worker' });
+      await martin.nameSession({ session: { id: 'w1' }, name: 'Skala' });
+      const workers = async () => (await martin.workers({ post: fix.id })).map((w) => w.id).sort();
+      expect(await workers()).toEqual(['w1', 'w2']);
+
+      // Archived in the Claude app: still a session of yours, marked so, but no worker; unarchived, it's back.
+      appSession('w1', true);
+      appSession('w2', false);
+      await settle();
+      expect(await workers()).toEqual(['w2']);
+      expect((await martin.sessions()).find((s) => s.id === 'w1')).toMatchObject({ archived: true, name: 'Skala' });
+      expect((await martin.sessions()).find((s) => s.id === 'w2')?.archived).toBeUndefined();
+      await expect(martin.assign({ post: fix.id, session: { id: 'w1' } })).rejects.toThrow(/doesn't take/);
+      await expect(martin.nameSession({ session: { id: 'w3' }, name: 'skala' })).rejects.toThrow(/"Skala" is taken/); // its name stays taken
+      appSession('w1', false);
+      await settle();
+      expect(await workers()).toEqual(['w1', 'w2']);
+
+      // Hidden in Weave: the same, kept in the record through whatever else changes it, until unhidden.
+      expect(await martin.hideSession({ session: { id: 'w2' }, hidden: true })).toMatchObject({ id: 'w2', hidden: true, role: 'worker' });
+      await martin.workOn({ session: { id: 'w2' }, post: fix.id });
+      expect((await martin.session({ id: 'w2' })).hidden).toBe(true);
+      expect(await workers()).toEqual(['w1']);
+      expect(await martin.hideSession({ session: { id: 'w2' }, hidden: false })).not.toHaveProperty('hidden');
+      expect(await workers()).toEqual(['w1', 'w2']);
+
+      // Unhide all brings back every hidden one, and only those.
+      await martin.hideSession({ session: { id: 'w1' }, hidden: true });
+      await martin.hideSession({ session: { id: 'w2' }, hidden: true });
+      expect((await martin.unhideSessions()).map((s) => s.id).sort()).toEqual(['w1', 'w2']);
+      expect((await martin.sessions()).filter((s) => s.hidden)).toEqual([]);
+      expect(await martin.unhideSessions()).toEqual([]);
+    } finally {
+      if (before === undefined) delete process.env.WEAVE_CLAUDE_APP_SESSIONS;
+      else process.env.WEAVE_CLAUDE_APP_SESSIONS = before;
+    }
   });
 });

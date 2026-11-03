@@ -224,6 +224,18 @@ so they survive restarts and resumed sessions, and shows the session as
 Agent tools: `weave_whoami` says whether the session has a name,
 `weave_name_session` names it (once) and changes about and description.
 
+### Archived and hidden sessions
+
+A session you archive in the Claude app leaves Weave's Sessions view, the
+overlay and your workers (so `weave_workers` and assigning skip it), and comes
+back when you unarchive it. Weave reads that from the app's own file per
+session (`claude-code-sessions/…/local_….json`: `cliSessionId`, `isArchived`),
+never writes it; plain Claude Code has no archive. You can also hide any
+session in the Sessions view: the same, kept in its record (sealed to you, so
+on all your devices), changing nothing in the session. Both wait folded under
+the map, "Hidden and archived (n)", with Unhide and Unhide all. Their names
+stay taken.
+
 ### Starting sessions automatically
 
 Routines and Work on this start sessions through the provider. Two kinds:

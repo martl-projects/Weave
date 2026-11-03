@@ -526,7 +526,7 @@ import {
   noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
-import { AppLogFollower, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
+import { AppLogFollower, ArchivedSessions, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
@@ -1008,6 +1008,8 @@ export class WeaveNode implements Backend {
   #follower?: TranscriptFollower;
   /** The Claude app's log, for the session you're looking at, while that's on too. */
   #appLog?: AppLogFollower;
+  /** The sessions you archived in the Claude app (read from its files, never written). */
+  readonly #archived = new ArchivedSessions();
   readonly #focusListeners = new Set<(session: SessionInfo | null) => void>();
   /** A session Ctrl+click or the Sessions page is opening: its item, its job (see expectSession). */
   #expected?: { post?: string; folder?: string; role?: SessionRole; projects?: string[]; until: number };
@@ -2998,7 +3000,17 @@ export class WeaveNode implements Backend {
     return [...this.#sessionRecords().values()]
       .filter(takes)
       .map((r) => this.#sessionInfo(r, posts))
+      .filter((s) => !s.archived && !s.hidden)
       .sort((a, b) => Number(a.stack.length > 0) - Number(b.stack.length > 0) || when(b).localeCompare(when(a)));
+  }
+
+  async hideSession(input: { session: SessionRef; hidden: boolean }): Promise<SessionInfo> {
+    const { hidden: _, ...record } = this.#sessionRecord(input.session);
+    return this.#saveSession({ ...record, ...(input.hidden ? { hidden: true as const } : {}) });
+  }
+
+  async unhideSessions(): Promise<SessionInfo[]> {
+    return [...this.#sessionRecords().values()].filter((r) => r.hidden).map(({ hidden: _, ...r }) => this.#saveSession(r));
   }
 
   async assign(input: { post: string; session: SessionRef; as?: string }): Promise<SessionInfo> {
@@ -3283,6 +3295,7 @@ export class WeaveNode implements Backend {
       ...(known?.available ? { available: true } : {}),
       ...(known?.avatar ? { avatar: known.avatar } : {}),
       ...(known?.last ? { last: known.last } : {}),
+      ...(known?.hidden ? { hidden: true as const } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
   }
@@ -3304,6 +3317,7 @@ export class WeaveNode implements Backend {
       ...(record.available ? { available: true } : {}),
       ...(record.avatar ? { avatar: record.avatar as unknown as Json } : {}),
       ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
+      ...(record.hidden ? { hidden: true } : {}),
     };
     const event = this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SESSION, body }));
     return this.#sessionInfo({ ...record, ...(title ? { title } : {}), time: event.time }, new Map(this.#allPosts().map((p) => [p.id, p])));
@@ -3337,6 +3351,8 @@ export class WeaveNode implements Backend {
       ...(record.available ? { available: true } : {}),
       ...(record.avatar ? { avatar: record.avatar } : {}),
       ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
+      ...(record.provider === 'claude-code' && this.#archived.ids.has(record.id) ? { archived: true as const } : {}),
+      ...(record.hidden ? { hidden: true as const } : {}),
       time: record.time,
     };
   }

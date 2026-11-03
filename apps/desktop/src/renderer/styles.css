@@ -876,13 +876,19 @@ button.session-title { all: unset; overflow: hidden; text-overflow: ellipsis; wh
 button.session-title:hover { text-decoration: underline; }
 .session-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; opacity: .7; }
 .session-row select { flex: none; font-size: 12px; }
-.session-row .session-name { flex: none; opacity: .5; padding: 2px; }
-.session-row .session-name:hover { opacity: 1; }
+.session-row :is(.session-name, .session-hide) { flex: none; opacity: .5; padding: 2px; }
+.session-row :is(.session-name, .session-hide):hover { opacity: 1; }
 .session-row input[type=checkbox]:disabled + label { visibility: hidden; }
 .session-row.is-driver .session-title { color: var(--cl-accent, var(--accent)); }
 .map-new { margin-top: 6px; cursor: pointer; }
 .map-new .session-row { border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); opacity: .75; }
 .map-new:hover .session-row { opacity: 1; }
+/* Sessions out of sight: archived in the Claude app or hidden here, folded under the map. */
+.sessions-away { margin-top: 16px; font-family: var(--content-font); }
+.sessions-away summary { cursor: pointer; font-size: 12px; opacity: .8; }
+.sessions-away .buttons { margin: 6px 0; }
+.sessions-away-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.sessions-away-list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
 .session-plus { flex: none; width: 8px; text-align: center; font-weight: 700; }
 .map-side + .map-side .map-head { padding-left: 12px; }
 .map-project { position: relative; display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 6px 3px 12px; font-size: 13px; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); }

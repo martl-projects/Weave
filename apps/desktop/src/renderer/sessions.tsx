@@ -34,6 +34,9 @@ const status = (s: SessionInfo) => (running(s) ? t('session.running.lc') : s.act
 
 type RoleChange = { role?: 'driver' | 'worker' | null; projects?: string[]; available?: boolean };
 const setRole = (session: SessionInfo, change: RoleChange) => attempt(() => api('setSessionRole', { session: ref(session), ...change }).then(bump));
+const hide = (session: SessionInfo, hidden: boolean) => attempt(() => api('hideSession', { session: ref(session), hidden }).then(bump));
+/** Out of sight: archived in its harness (the Claude app), or hidden here. */
+const away = (s: SessionInfo) => !!(s.archived || s.hidden);
 const sessionKey = (s: SessionInfo) => `${s.provider}:${s.id}`;
 /** The project of the item a session is on. */
 const doingIn = (s: SessionInfo) => {
@@ -80,6 +83,9 @@ function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode 
         <Icon name="pencil" />
       </button>
       {naming && <NameSession session={session} onClose={() => setNaming(false)} />}
+      <button className="link session-hide" onClick={() => void hide(session, true)} title={t('session.hide.title')} aria-label={t('session.hide')}>
+        <Icon name="eyeOff" />
+      </button>
       <select aria-label={t('session.job')} value={session.role ?? ''} onChange={(e) => void setRole(session, { role: (e.target.value || null) as RoleChange['role'] })}>
         <option value="">{t('session.job.none')}</option>
         <option value="worker">{t('session.job.worker')}</option>
@@ -330,8 +336,9 @@ export function SessionsView() {
   const toggleOverlay = () => attempt(() => bridge.overlay!(!overlay).then(setOverlay));
   // The New session dialog, for a project or any.
   const [starting, setStarting] = useState<{ project?: string }>();
-  // Sessions with a job first; the others only from the last day, unless you ask for all.
-  const list = (sessions ?? []).filter((s) => all || s.role || Date.now() - Date.parse(s.active ?? s.time) < 24 * 3600 * 1000);
+  // Sessions with a job first; the others only from the last day, unless you ask for all. Archived and hidden ones wait folded at the bottom.
+  const list = (sessions ?? []).filter((s) => !away(s) && (all || s.role || Date.now() - Date.parse(s.active ?? s.time) < 24 * 3600 * 1000));
+  const gone = (sessions ?? []).filter(away);
   const ordered = [...list.filter((s) => s.role === 'driver'), ...list.filter((s) => s.role === 'worker'), ...list.filter((s) => !s.role)];
   return (
     <Page
@@ -368,8 +375,36 @@ export function SessionsView() {
     >
       {sessions && !ordered.length && <p className="empty">{t('sessions.none')}</p>}
       {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
+      {gone.length > 0 && <AwaySessions sessions={gone} />}
       {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
     </Page>
+  );
+}
+
+/** Sessions out of sight, folded: those you archived in the Claude app (unarchive them there) and those you hid here. */
+function AwaySessions({ sessions }: { sessions: SessionInfo[] }) {
+  const { t } = useTexts();
+  const hidden = sessions.filter((s) => s.hidden);
+  return (
+    <details className="sessions-away">
+      <summary>{t('sessions.away', { n: sessions.length })}</summary>
+      {hidden.length > 1 && (
+        <div className="buttons">
+          <button onClick={() => void attempt(() => api('unhideSessions').then(bump))}>{t('sessions.unhide.all')}</button>
+        </div>
+      )}
+      <ul className="sessions-away-list">
+        {sessions.map((s) => (
+          <li key={sessionKey(s)}>
+            <span className="grow">
+              <b>{s.title ?? t('session.untitled')}</b>{' '}
+              <span className="small muted">{[folderName(s.folder), s.hidden && t('session.hidden'), s.archived && t('session.archived')].filter(Boolean).join(' · ')}</span>
+            </span>
+            {s.hidden && <button onClick={() => void hide(s, false)}>{t('session.unhide')}</button>}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

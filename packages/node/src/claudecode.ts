@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -202,6 +202,90 @@ export function transcriptTitle(session: string, dir = claudeProjectsDir()): str
 export const claudeAppLog = (): string =>
   process.env.WEAVE_CLAUDE_APP_LOG ??
   (process.platform === 'darwin' ? join(homedir(), 'Library', 'Logs', 'Claude', 'main.log') : join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Claude', 'logs', 'main.log'));
+
+/**
+ * Where the Claude desktop app keeps a file per Code session (claude-code-sessions/<account>/<org>/local_….json):
+ * on Windows under %LOCALAPPDATA%\Claude-Data\<install>\ (newer) or %APPDATA%\Claude\, on macOS in Application
+ * Support, on Linux in ~/.config. Only the folders that exist.
+ */
+export function claudeAppSessionDirs(): string[] {
+  if (process.env.WEAVE_CLAUDE_APP_SESSIONS) return [process.env.WEAVE_CLAUDE_APP_SESSIONS];
+  const home = homedir();
+  const dirs: string[] = [];
+  if (process.platform === 'win32') {
+    const local = join(process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'), 'Claude-Data');
+    try {
+      for (const install of readdirSync(local, { withFileTypes: true })) if (install.isDirectory()) dirs.push(join(local, install.name, 'claude-code-sessions'));
+    } catch {
+      // no newer install
+    }
+    dirs.push(join(process.env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Claude', 'claude-code-sessions'));
+  } else if (process.platform === 'darwin') dirs.push(join(home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions'));
+  else dirs.push(join(process.env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Claude', 'claude-code-sessions'));
+  return dirs.filter((d) => existsSync(d));
+}
+
+/**
+ * Which Claude Code sessions you archived in the Claude app, read from its session files (`cliSessionId`,
+ * `isArchived`; the app's own, undocumented format: files it can't read count as not archived). Read only, never
+ * written. A file is read again only when it changed. Plain Claude Code has no archive, so its sessions never are.
+ */
+export class ArchivedSessions {
+  readonly #dirs: () => string[];
+  /** File → when it was read, and the session it says is archived (if it does). */
+  readonly #files = new Map<string, { mtime: number; archived?: string }>();
+  #at = 0;
+  #set = new Set<string>();
+
+  constructor(dirs: () => string[] = claudeAppSessionDirs) {
+    this.#dirs = dirs;
+  }
+
+  /** The archived sessions' Claude Code ids; looked at again at most once a second. */
+  get ids(): Set<string> {
+    if (Date.now() - this.#at < 1000) return this.#set;
+    this.#at = Date.now();
+    const seen = new Set<string>();
+    const walk = (dir: string, depth: number) => {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const file = join(dir, e.name);
+        if (e.isDirectory() && depth < 3) walk(file, depth + 1);
+        else if (e.isFile() && e.name.startsWith('local_') && e.name.endsWith('.json')) {
+          seen.add(file);
+          this.#read(file);
+        }
+      }
+    };
+    for (const dir of this.#dirs()) walk(dir, 0);
+    for (const file of this.#files.keys()) if (!seen.has(file)) this.#files.delete(file);
+    this.#set = new Set([...this.#files.values()].map((f) => f.archived).filter((id): id is string => !!id));
+    return this.#set;
+  }
+
+  #read(file: string): void {
+    let mtime: number;
+    try {
+      mtime = statSync(file).mtimeMs;
+    } catch {
+      return;
+    }
+    if (this.#files.get(file)?.mtime === mtime) return;
+    let archived: string | undefined;
+    try {
+      const json = JSON.parse(readFileSync(file, 'utf8')) as { cliSessionId?: unknown; isArchived?: unknown };
+      if (json.isArchived === true && typeof json.cliSessionId === 'string') archived = json.cliSessionId;
+    } catch {
+      // being written, or not the format we know
+    }
+    this.#files.set(file, { mtime, ...(archived ? { archived } : {}) });
+  }
+}
 
 /** The session the Claude app shows: its own id, and the Claude Code session (transcript) it is, once known. */
 export interface FocusedSession {

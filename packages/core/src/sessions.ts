@@ -11,7 +11,8 @@ import type { Entry } from './collab.ts';
  *
  *   weave.session  {provider, id, host?, folder?, title?, stack,   sealed to yourself; the latest per
  *                   name?, about?, description?,                     provider and id counts
- *                   role?, projects?, available?, last?, avatar?}
+ *                   role?, projects?, available?, last?, avatar?,
+ *                   hidden?}
  *     name: chosen once by the session, permanent, unique among your sessions ("Skala")
  *     about: one line on what it specializes in; description: its job at length
  *     stack: [{post, since}], top first
@@ -19,6 +20,7 @@ import type { Entry } from './collab.ts';
  *     projects: the spaces whose items it takes (none: any); available: it takes new items
  *     last: {post, time}, the item it last finished
  *     avatar: its figure (Weave avatar: parts and numbers; a screen for a head), so you know it again
+ *     hidden: you put it out of sight (the Sessions view, workers); nothing changes in the session itself
  *
  * Kept sealed to the person: a stack is their own scratch board, on all their
  * devices. An item's team only sees what the sessions posted into its chat.
@@ -58,6 +60,8 @@ export interface SessionRecord {
   avatar?: Record<string, number>;
   /** The item it last finished. */
   last?: { post: string; time: string };
+  /** You hid it: left out of your sessions and workers like an archived one, until you unhide it. */
+  hidden?: true;
   /** When it last changed. */
   time: string;
 }
@@ -127,6 +131,7 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       ...(b?.available === true ? { available: true } : {}),
       ...((avatar) => (avatar ? { avatar } : {}))(figureOf(b?.avatar)),
       ...(str(last?.post, 100) ? { last: { post: str(last?.post, 100), time: str(last?.time, 40) || e.event.time } } : {}),
+      ...(b?.hidden === true ? { hidden: true as const } : {}),
       time: e.event.time,
     });
   }

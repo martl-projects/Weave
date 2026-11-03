@@ -1309,6 +1309,10 @@ export interface SessionInfo {
   available?: boolean;
   /** The item it last finished. */
   last?: { post: StackPost | { id: string; missing: true }; time: string };
+  /** You archived it in its harness (the Claude app): left out of your sessions and workers until you unarchive it. */
+  archived?: true;
+  /** You hid it in Weave: left out the same way, until you unhide it. */
+  hidden?: true;
 }
 
 /** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */
@@ -2252,6 +2256,13 @@ export interface Backend {
    * driver; those with nothing on their stack first, then the most recently active.
    */
   workers(input?: { post?: string; space?: string }): Promise<SessionInfo[]>;
+  /**
+   * Hide a session from your sessions and workers (or show it again): your own setting, on all your devices; nothing
+   * changes in the session, and its name stays taken.
+   */
+  hideSession(input: { session: SessionRef; hidden: boolean }): Promise<SessionInfo>;
+  /** Show every session you hid again. */
+  unhideSessions(): Promise<SessionInfo[]>;
   /** Hand an item to one of your workers (or the driver): it goes on top of that session's stack. */
   assign(input: { post: string; session: SessionRef; as?: string }): Promise<SessionInfo>;
   /**
@@ -2578,7 +2589,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
-  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'assign', 'nameSession',
+  'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'hideSession', 'unhideSessions', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
   'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'reach', 'setReach', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
