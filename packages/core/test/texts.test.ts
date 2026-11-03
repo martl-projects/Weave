@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkPackage, formatParts, missingNames, parseText, partsToString, pickLanguage, pickLocale, placeholdersOf, texts, type TextPackage } from '../src/texts.ts';
+import { checkPackage, formatParts, missingNames, parseText, partsToString, pickLanguage, pickLocale, placeholdersOf, textRecordOf, texts, WeaveError, type TextPackage } from '../src/texts.ts';
 
 const en: TextPackage = {
   texts: 'weave',
@@ -173,5 +173,29 @@ describe('the language of a device', () => {
     expect(pickLanguage('en', ['de-DE'])).toBe('en');
     expect(pickLocale('de', ['fr-CH', 'de-AT'])).toBe('de-AT');
     expect(pickLocale('de', ['en-US'])).toBe('de');
+  });
+});
+
+describe('a named error', () => {
+  it('keeps the English message for terminals and a text record for screens, and is told from a plain error', () => {
+    const error = new WeaveError('daemon.post.not.found', { id: 'ab12' }, 'no post found with id ab12');
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe('no post found with id ab12');
+    expect(error.text).toEqual({ name: 'daemon.post.not.found', values: { id: 'ab12' } });
+    expect(new WeaveError('daemon.post.title', undefined, 'a post needs a title').text).toEqual({ name: 'daemon.post.title' });
+    expect(textRecordOf(error)).toEqual({ name: 'daemon.post.not.found', values: { id: 'ab12' } });
+    expect(textRecordOf(new Error('plain'))).toBeUndefined();
+    // Rebuilt on the other side of a wire without the class: the record is what counts.
+    expect(textRecordOf(Object.assign(new Error('x'), { text: { name: 'daemon.post.title' } }))).toEqual({ name: 'daemon.post.title' });
+    expect(textRecordOf(Object.assign(new Error('x'), { text: 'not a record' }))).toBeUndefined();
+  });
+
+  it('resolves in the reader\'s language with the English as fallback, like any name', () => {
+    const t = texts({ lang: 'de', packages: [{ texts: 'weave', lang: 'de', names: { 'daemon.post.not.found': 'Kein Beitrag mit der Id {id}.' } }] });
+    const error = new WeaveError('daemon.post.not.found', { id: 'ab12' }, 'no post found with id ab12');
+    const shown = t.has(error.text.name) ? t.t(error.text.name, error.text.values) : error.message;
+    expect(shown).toBe('Kein Beitrag mit der Id ab12.');
+    const other = new WeaveError('daemon.post.title', undefined, 'a post needs a title');
+    expect(t.has(other.text.name) ? t.t(other.text.name) : other.message).toBe('a post needs a title');
   });
 });

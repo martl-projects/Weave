@@ -1,3 +1,4 @@
+import { errorFromWire, type ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
 import type { RendererMethod } from '../methods.ts';
 import type { UpdateAction, UpdateView } from '../updatestate.ts';
@@ -131,7 +132,7 @@ const webBridge: Bridge = {
   call: async (method, ...args) => {
     const res = await fetch('/rpc', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method, args }) });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? `request failed: ${res.status}`);
+    if (!res.ok) throw errorFromWire(data, `request failed: ${res.status}`);
     return data;
   },
   onEvent: (listener) => {
@@ -141,7 +142,20 @@ const webBridge: Bridge = {
   onLink: () => {},
 };
 
-export const bridge: Bridge = window.weave ?? webBridge;
+/**
+ * Electron's preload answers a call with {result} or {error, name?, values?} instead of throwing: an error thrown in the
+ * main process would arrive as "Error invoking remote method…" without its name. Thrown here, as the daemon threw it.
+ */
+const electronBridge = (w: Bridge): Bridge => ({
+  ...w,
+  call: async (method, ...args) => {
+    const answer = (await w.call(method, ...args)) as { result?: unknown } | ErrorAnswer;
+    if (answer && typeof answer === 'object' && 'error' in answer) throw errorFromWire(answer, 'the call failed');
+    return (answer as { result?: unknown })?.result;
+  },
+});
+
+export const bridge: Bridge = window.weave ? (window.weave.phone ? window.weave : electronBridge(window.weave)) : webBridge;
 
 /** Typed shorthand for backend calls. */
 export const api = <T>(method: RendererMethod, ...args: unknown[]): Promise<T> => bridge.call(method, ...args) as Promise<T>;

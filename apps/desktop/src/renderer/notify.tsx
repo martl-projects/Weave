@@ -3,7 +3,7 @@ import type { BoardInfo, ChatInfo, HintServiceInfo, HintsAnswer, MemberInfo, Not
 import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
 import { ask, AsyncButton, attempt, Modal, ServiceOrigin } from './ui.tsx';
-import { t, useTexts } from './texts.tsx';
+import { has, t, useTexts } from './texts.tsx';
 
 /*
  * System notifications for live events the node marked as a notice (see
@@ -73,6 +73,15 @@ function show(title: string, text: string, open: Notice['open']): void {
   };
 }
 
+/** A notice's two lines in the reader's language: by its name when the package has it (and `<name>.text` for the second), else the node's English. */
+export function noticeLines(notice: Notice): { title: string; text: string } {
+  const name = notice.name;
+  return {
+    title: name && has(name) ? t(name, notice.values) : notice.title,
+    text: name && has(`${name}.text`) ? t(`${name}.text`, notice.values).trim() : notice.text,
+  };
+}
+
 let pending: Notice[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -82,9 +91,12 @@ function flush(): void {
   pending = [];
   if (!notices.length) return;
   void bridge.attention();
-  if (notices.length === 1) return show(notices[0].title, notices[0].text, notices[0].open);
+  if (notices.length === 1) {
+    const { title, text } = noticeLines(notices[0]);
+    return show(title, text, notices[0].open);
+  }
   const requests = notices.every((n) => n.category === 'requests');
-  show(t('notify.summary', { n: notices.length }), notices.slice(0, 3).map((n) => n.title).join('\n') + (notices.length > 3 ? '\n…' : ''), requests ? { inbox: true } : {});
+  show(t('notify.summary', { n: notices.length }), notices.slice(0, 3).map((n) => noticeLines(n).title).join('\n') + (notices.length > 3 ? '\n…' : ''), requests ? { inbox: true } : {});
 }
 
 let started = false;

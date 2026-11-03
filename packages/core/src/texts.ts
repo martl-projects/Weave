@@ -590,6 +590,45 @@ export interface TextRecord {
   values?: Record<string, string | number>;
 }
 
+/**
+ * An error with a name (docs/localization.md, "Texts the daemon writes"): `message` is the English sentence, for terminals
+ * and agents; `text` names it for screens, which resolve the name in the reader's language and fall back to the message.
+ * It crosses the daemon's API as `{ error, name, values }` and is rebuilt on the other side.
+ */
+export class WeaveError extends Error {
+  readonly text: TextRecord;
+
+  constructor(name: string, values: TextRecord['values'] | undefined, message: string) {
+    super(message);
+    this.text = values && Object.keys(values).length ? { name, values } : { name };
+  }
+}
+
+/** The name and values of an error, when it has them: a WeaveError, or an error rebuilt from the wire with a `text` record. */
+export function textRecordOf(error: unknown): TextRecord | undefined {
+  const text = (error as { text?: unknown } | null)?.text;
+  return isTextRecord(text) ? text : undefined;
+}
+
+/** An error as it crosses the daemon's API: the English message, and a WeaveError's name and values for screens to resolve. */
+export interface ErrorAnswer {
+  error: string;
+  name?: string;
+  values?: TextRecord['values'];
+}
+
+export function errorToWire(error: unknown): ErrorAnswer {
+  const message = error instanceof Error ? error.message : String(error);
+  const text = textRecordOf(error);
+  return text ? { error: message, name: text.name, ...(text.values ? { values: text.values } : {}) } : { error: message };
+}
+
+/** The error an API answer carries, thrown again on this side: a WeaveError when it was named, else a plain Error (`fallback` when the answer has no message). */
+export function errorFromWire(data: Partial<ErrorAnswer> | null | undefined, fallback: string): Error {
+  const message = data?.error ?? fallback;
+  return data?.name ? new WeaveError(data.name, data.values, message) : new Error(message);
+}
+
 export function isTextRecord(value: unknown): value is TextRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const r = value as TextRecord;

@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import type { TextRecord } from '@weave/core';
 
 /*
  * Agent harnesses on this computer (Claude Code, Claude Desktop, Codex,
@@ -28,18 +29,22 @@ export interface Harness {
   format: 'json' | 'toml';
   /** For JSON: entries need "type": "stdio". */
   typed?: boolean;
-  /** What to do so it notices. */
+  /** What to do so it notices: in English, and by name for screens (daemon.harness.restart.*). */
   restart: string;
+  restartText: TextRecord;
 }
+
+const newSessions = (name: string) => ({ restart: `New ${name} sessions see it.`, restartText: { name: 'daemon.harness.restart.sessions', values: { name } } });
+const restartApp = (name: string) => ({ restart: `Restart ${name}.`, restartText: { name: 'daemon.harness.restart.app', values: { name } } });
 
 export function harnessesIn(home: string, platform: string = process.platform, appData = process.env.APPDATA): Harness[] {
   const desktopDir =
     platform === 'win32' ? join(appData ?? join(home, 'AppData', 'Roaming'), 'Claude') : platform === 'darwin' ? join(home, 'Library', 'Application Support', 'Claude') : join(home, '.config', 'Claude');
   return [
-    { id: 'claude-code', name: 'Claude Code', agent: 'claude', file: join(home, '.claude.json'), found: existsSync(join(home, '.claude.json')), format: 'json', typed: true, restart: 'New Claude Code sessions see it.' },
-    { id: 'claude-desktop', name: 'Claude Desktop', agent: 'claude', file: join(desktopDir, 'claude_desktop_config.json'), found: existsSync(desktopDir), format: 'json', restart: 'Restart Claude Desktop.' },
-    { id: 'codex', name: 'Codex', agent: 'codex', file: join(home, '.codex', 'config.toml'), found: existsSync(join(home, '.codex')), format: 'toml', restart: 'New Codex sessions see it.' },
-    { id: 'cursor', name: 'Cursor', agent: 'cursor', file: join(home, '.cursor', 'mcp.json'), found: existsSync(join(home, '.cursor')), format: 'json', restart: 'Restart Cursor.' },
+    { id: 'claude-code', name: 'Claude Code', agent: 'claude', file: join(home, '.claude.json'), found: existsSync(join(home, '.claude.json')), format: 'json', typed: true, ...newSessions('Claude Code') },
+    { id: 'claude-desktop', name: 'Claude Desktop', agent: 'claude', file: join(desktopDir, 'claude_desktop_config.json'), found: existsSync(desktopDir), format: 'json', ...restartApp('Claude Desktop') },
+    { id: 'codex', name: 'Codex', agent: 'codex', file: join(home, '.codex', 'config.toml'), found: existsSync(join(home, '.codex')), format: 'toml', ...newSessions('Codex') },
+    { id: 'cursor', name: 'Cursor', agent: 'cursor', file: join(home, '.cursor', 'mcp.json'), found: existsSync(join(home, '.cursor')), format: 'json', ...restartApp('Cursor') },
   ];
 }
 

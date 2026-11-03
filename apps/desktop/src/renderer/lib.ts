@@ -3,7 +3,8 @@ import { marked } from 'marked';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { FeedItem, Theme } from '@weave/node/client';
 import { api, bridge } from './bridge.ts';
-import { currentTexts, t } from './texts.tsx';
+import { textRecordOf } from '@weave/core';
+import { currentTexts, errorText, t } from './texts.tsx';
 
 export { api, bridge, type AppState } from './bridge.ts';
 
@@ -48,7 +49,10 @@ export const useTick = () => useSyncExternalStore(subscribe, () => tick);
 
 export interface Loaded<T> {
   data?: T;
+  /** What went wrong, in the reader's language when the daemon named it (texts.tsx errorText), else in English. */
   error?: string;
+  /** The error's name, when the daemon gave it one (daemon.*): for a screen that shows something of its own for it. */
+  errorName?: string;
   reload(): void;
 }
 
@@ -59,32 +63,32 @@ export interface Loaded<T> {
  */
 export function useAction<T>(action: () => Promise<T>, deps: unknown[]): Omit<Loaded<T>, 'reload'> {
   const key = JSON.stringify(deps);
-  const [state, setState] = useState<{ key: string; data?: T; error?: string }>({ key });
+  const [state, setState] = useState<{ key: string; data?: T; error?: string; errorName?: string }>({ key });
   useEffect(() => {
     let alive = true;
     action().then(
       (data) => alive && setState({ key, data }),
-      (error: Error) => alive && setState({ key, error: error.message }),
+      (error: Error) => alive && setState({ key, error: errorText(error), errorName: textRecordOf(error)?.name }),
     );
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return state.key === key ? { data: state.data, error: state.error } : {};
+  return state.key === key ? { data: state.data, error: state.error, errorName: state.errorName } : {};
 }
 
 /** Fetch something from the node; refetches on live events and when `deps` change (clearing stale data). Only for reads: see useAction. */
 export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): Loaded<T> {
   const t = useTick();
   const key = JSON.stringify(deps);
-  const [state, setState] = useState<{ key: string; data?: T; error?: string }>({ key });
+  const [state, setState] = useState<{ key: string; data?: T; error?: string; errorName?: string }>({ key });
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let alive = true;
     fetcher().then(
       (data) => alive && setState({ key, data }),
-      (error: Error) => alive && setState((s) => ({ ...s, key, error: error.message })),
+      (error: Error) => alive && setState((s) => ({ ...s, key, error: errorText(error), errorName: textRecordOf(error)?.name })),
     );
     return () => {
       alive = false;
@@ -92,7 +96,7 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): Loaded<T>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t, nonce, key]);
   const current = state.key === key ? state : { key };
-  return { data: current.data, error: current.error, reload: () => setNonce((n) => n + 1) };
+  return { data: current.data, error: current.error, errorName: current.errorName, reload: () => setNonce((n) => n + 1) };
 }
 
 // ---------------------------------------------------------------- routing

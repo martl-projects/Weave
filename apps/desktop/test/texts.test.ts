@@ -25,6 +25,12 @@ describe('the texts check', () => {
     expect([...used.candidates]).toEqual(['a.b', 'c.d', 'e.f', 'g.h', 'i.j', 'k.l', 'weave.skin']);
   });
 
+  it("collects the daemon's names: a WeaveError's first argument, and a notice's name as a candidate", () => {
+    const used = namesUsed('node.ts', "throw new WeaveError('daemon.post.title', undefined, 'a post needs a title'); throw tag ? new WeaveError('daemon.release.none', { tag }, 'x') : new WeaveError('daemon.release.nothing', undefined, 'y'); return { title: 'New post', name: 'daemon.notice.new', values: { who } };");
+    expect([...used.names]).toEqual(['daemon.post.title', 'daemon.release.none', 'daemon.release.nothing']);
+    expect([...used.candidates]).toContain('daemon.notice.new');
+  });
+
   it("lets the product's name, a toast's kind and code shown as code through", () => {
     expect(findHardcoded('a.tsx', "toast(t('x.y'), 'error'); const b = <b>Weave</b>; const c = <p><code>weave app publish -p \"{name}\"</code> <pre>npm start</pre></p>;")).toEqual([]);
   });

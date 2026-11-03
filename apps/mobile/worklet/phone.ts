@@ -1,3 +1,4 @@
+import { errorToWire } from '@weave/core';
 import { connectTo, decodePhoneLink, LENS_CSP, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
 
 /*
@@ -13,7 +14,7 @@ import { connectTo, decodePhoneLink, LENS_CSP, openTunnel, pairWith, type Dialer
  *                    {id, op: 'openRoom', room, url}      → the room's app on this phone (a local address)
  *                    {id, op: 'lensBase', release}        → where a board's client service's view is served here
  *                    {op: 'wake'}                         the app is in front again
- *   worker → screen  {id, result} | {id, error}
+ *   worker → screen  {id, result} | {id, error, name?, values?}   a named error's name and values too (docs/localization.md)
  *                    {event}                              the node's live events
  *                    {connected}                          the connection came or went
  *
@@ -97,7 +98,8 @@ export class Phone {
       const result = await this.#do(op, message);
       if (id !== undefined) this.#deps.send({ id, result: result ?? null });
     } catch (error) {
-      if (id !== undefined) this.#deps.send({ id, error: error instanceof Error ? error.message : String(error) });
+      // A named error keeps its name and values, for the screen to show it in the reader's language.
+      if (id !== undefined) this.#deps.send({ id, ...errorToWire(error) });
     }
   }
 

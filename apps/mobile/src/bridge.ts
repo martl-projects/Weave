@@ -2,6 +2,7 @@ import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Device } from '@capacitor/device';
+import { errorFromWire, type ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
 
 /*
@@ -30,7 +31,8 @@ void Worker.addListener('message', ({ message }) => {
   if (typeof m.id === 'number') {
     const call = pending.get(m.id);
     pending.delete(m.id);
-    if (typeof m.error === 'string') call?.reject(new Error(m.error));
+    // A named error is a WeaveError again, so the screens show it in the reader's language (errorText).
+    if (typeof m.error === 'string') call?.reject(errorFromWire(m as Partial<ErrorAnswer>, m.error));
     else call?.resolve(m.result);
   } else if ('event' in m) {
     for (const listener of listeners) listener(m.event as FeedItem);

@@ -9,6 +9,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { errorToWire } from '@weave/core';
 import { connectDaemon, LENS_CSP, machinePolicy, resolveHome } from '@weave/node/client';
 import { RENDERER_METHODS, type RendererMethod } from './src/methods.ts';
 
@@ -81,6 +82,6 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
     createReadStream(file).pipe(res);
   } catch (error) {
-    json(res, 500, { error: (error as Error).message });
+    json(res, 500, errorToWire(error)); // a WeaveError's name and values go with it (docs/localization.md)
   }
 }).listen(port, '127.0.0.1', () => console.log(`weave web preview for ${home.dir} on http://127.0.0.1:${port}`));
