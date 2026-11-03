@@ -133,6 +133,8 @@ import {
   type AccountClaim,
   accountProofText,
   isPlatform,
+  KIND_IMPRINT,
+  imprintOf,
   KIND_SERVICE_REQUEST,
   artifactsOf,
   type Artifact,
@@ -483,6 +485,7 @@ import {
   type Profile,
   type Found,
   type FoundKind,
+  type ImprintInfo,
   type ProfileInput,
   type ProjectInfo,
   type ProjectPage,
@@ -592,7 +595,7 @@ import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 import { KIND_AVATAR, sanitizeFigure, type AvatarFigure } from './avatar.ts';
 
 /** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
-const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_AVATAR, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
+const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_AVATAR, KIND_IMPRINT, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
 /** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
 interface Sso {
   idToken: string;
@@ -4092,6 +4095,21 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null, ...(Object.keys(agents).length ? { agents: agents as unknown as Json } : {}) } });
     }
     return this.profile();
+  }
+
+  async imprint(who?: string): Promise<ImprintInfo | null> {
+    const did = who ? this.resolve(who) : this.identity.author;
+    const found = imprintOf(this.#eventsOf(did));
+    return found ? { did, ...found } : null;
+  }
+
+  async setImprint(input: { text: string }): Promise<ImprintInfo | null> {
+    if (typeof input?.text !== 'string') throw new Error('an imprint is text (Markdown); an empty text takes it back');
+    const text = input.text.trim();
+    if (text.length > TEXT_LIMITS.imprint) throw tooLong('The imprint', text.length, TEXT_LIMITS.imprint);
+    const current = imprintOf(this.#eventsOf(this.identity.author))?.text ?? '';
+    if (text !== current) this.replica.write(this.identity, { kind: KIND_IMPRINT, body: { text } });
+    return this.imprint();
   }
 
   async directory(query?: string): Promise<Profile[]> {

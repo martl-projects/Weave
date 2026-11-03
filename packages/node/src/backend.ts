@@ -1575,6 +1575,18 @@ export interface Profile {
   links: LinkInfo[];
 }
 
+/**
+ * Someone's imprint (Impressum): who is behind their hub, as the law where they live asks them to say it. Kept by the
+ * person themself, public like their profile; the latest version counts.
+ */
+export interface ImprintInfo {
+  did: Did;
+  /** The imprint's text (Markdown). */
+  text: string;
+  /** When this version was set. */
+  time: string;
+}
+
 /** What the address book picker found: a person, or a post (projects and issues are posts too). */
 export type Found = { person: Profile; post?: undefined } | { post: PostInfo; person?: undefined };
 
@@ -2355,6 +2367,10 @@ export interface Backend {
   profile(who?: string): Promise<Profile>;
   /** Update your name and/or theme. */
   setProfile(input: ProfileInput): Promise<Profile>;
+  /** A person's imprint (Impressum), none when they have none; defaults to your own. */
+  imprint(who?: string): Promise<ImprintInfo | null>;
+  /** Set your imprint (Markdown, at most TEXT_LIMITS.imprint characters); an empty text takes it back. */
+  setImprint(input: { text: string }): Promise<ImprintInfo | null>;
   /** A space's photo (a picture of its own, or '' for everyone's avatars), its banner's text ('' for its name) and the background behind it. */
   setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo>;
   /** The avatars of these people (did) and agents ("did·agent"): those who have one. */
@@ -2587,7 +2603,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
-  'setEdge', 'social', 'profile', 'setProfile', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
+  'setEdge', 'social', 'profile', 'setProfile', 'imprint', 'setImprint', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'hideSession', 'unhideSessions', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',

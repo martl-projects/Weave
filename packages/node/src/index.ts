@@ -75,6 +75,7 @@ export type {
   Profile,
   Found,
   FoundKind,
+  ImprintInfo,
   ProfileInput,
   ProjectInfo,
   ProjectPage,

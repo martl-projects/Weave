@@ -287,6 +287,17 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_imprint',
+    {
+      title: 'Imprint',
+      description: "A person's imprint (Impressum): who is behind their hub, as the law where they live asks them to say it (name, address, contact), kept by them on their hub. Defaults to your person's own. People set it themselves in the Weave app (their hub, Impressum); there is no tool to write it.",
+      inputSchema: { who: z.string().optional().describe('Name, did:key or person url; left out, your person') },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ who }: { who?: string }) => (await backend.imprint(who)) ?? { imprint: null, note: who ? 'They have no imprint on their hub.' : 'Your person has no imprint on their hub yet.' }),
+  );
+
+  server.registerTool(
     'weave_people',
     {
       title: 'Find people',
