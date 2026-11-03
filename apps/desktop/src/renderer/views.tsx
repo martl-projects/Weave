@@ -12,6 +12,7 @@ import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, u
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubAccounts } from './accounts.tsx';
+import { ImprintButton } from './imprint.tsx';
 import { VisitorsSettings } from './visitors.tsx';
 import { PaymentsSettings } from './treasury.tsx';
 import { HubBadges } from './badges.tsx';
@@ -169,6 +170,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
               <a className="button-link" href="#/keys">
                 <Icon name="lock" /> {t('nav.keys')}
               </a>
+              <ImprintButton did={p.did} me name={name} />
             </div>
           )}
           {!p.me && (
@@ -181,6 +183,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
               {edge('follow', !p.following, t(p.following ? 'people.unfollow' : 'people.follow'))}
               {edge('mute', !p.muted, t(p.muted ? 'hub.unmute' : 'hub.mute'))}
               {edge('block', !p.blocked, t(p.blocked ? 'hub.unblock' : 'hub.block'))}
+              <ImprintButton did={p.did} me={false} name={name} />
             </div>
           )}
         </header>

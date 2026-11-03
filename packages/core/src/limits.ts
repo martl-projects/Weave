@@ -15,6 +15,8 @@ export const TEXT_LIMITS = {
   page: 100_000,
   pageTitle: 100,
   pageSubtitle: 300,
+  /** A person's imprint (Impressum) on their hub (Markdown). */
+  imprint: 4_000,
 } as const;
 
 /** The error for text over a limit: how long it is, what's allowed, and what to do. */
