@@ -107,8 +107,11 @@ function SessionCard({ session, port }: { session: SessionInfo; port: ReactNode 
 }
 
 const ANY = 'any';
-/** The groups of a harness's sessions, in order; their headings are session.group.<role>. */
-const GROUPS = ['driver', 'worker', ''] as const;
+/** Inside a group: the driver first, then the workers, then the rest. */
+const ROLES = ['driver', 'worker', ''] as const;
+/** Groups that aren't a project of the Weave column. */
+const SEVERAL = 'several';
+const NONE = 'none';
 /** The harnesses sessions come from, by provider; Claude Code is one of them (others, like Codex or a local model, can follow). */
 const HARNESSES: Record<string, string> = { 'claude-code': 'Claude Code' };
 const harnessName = (provider: string) => HARNESSES[provider] ?? provider;
@@ -132,8 +135,54 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
   // A link being drawn: from a port, to where the pointer is.
   const [hold, setHold] = useState<{ from: string; x: number; y: number; moved: boolean }>();
 
+  // Sessions grouped by the project they take: exactly one (shown on the right), any, several, or none.
+  const shown = new Set(projects.map((p) => p.id));
+  const groupOf = (s: SessionInfo): string => {
+    if (!s.role) return NONE;
+    const takes = s.projects ?? [];
+    if (!takes.length) return ANY;
+    return takes.length === 1 ? (shown.has(takes[0]!.id) ? takes[0]!.id : NONE) : SEVERAL;
+  };
+  const column = [ANY, ...projects.map((p) => p.id)];
+  const used = new Set(sessions.map(groupOf));
+  // Projects with sessions first, in the column's order, each beside its group; the others after them, packed.
+  const rows = [...column.filter((id) => used.has(id)), ...column.filter((id) => !used.has(id))];
+  // The groups on the left in the same order; several and none at the end, or first when the driver is in one of them.
+  const driverGroup = sessions.find((s) => s.role === 'driver');
+  const lead = driverGroup && [SEVERAL, NONE].includes(groupOf(driverGroup)) ? [groupOf(driverGroup)] : [];
+  const groups = [...new Set([...lead, ...column, SEVERAL, NONE])].filter((g) => used.has(g));
+  const groupName = (g: string) => (g === ANY ? t('session.any.project') : g === SEVERAL ? t('session.group.several') : g === NONE ? t('session.group.none') : projects.find((p) => p.id === g)?.name);
+
+  // How far down each project on the right goes so it sits centred beside its group of sessions.
+  const [push, setPush] = useState<Record<string, number>>({});
+  const arrange = () => {
+    const root = box.current;
+    const side = root?.querySelectorAll<HTMLElement>('.map-side')[1];
+    if (!root || !side) return;
+    const top = root.getBoundingClientRect().top;
+    const spans = new Map<string, { top: number; bottom: number }>();
+    for (const el of root.querySelectorAll<HTMLElement>('[data-group]')) {
+      const r = el.getBoundingClientRect();
+      const was = spans.get(el.dataset.group!);
+      spans.set(el.dataset.group!, { top: Math.min(was?.top ?? Infinity, r.top - top), bottom: Math.max(was?.bottom ?? -Infinity, r.bottom - top) });
+    }
+    const gap = parseFloat(getComputedStyle(side).rowGap) || 0;
+    const head = side.querySelector('.map-head')!.getBoundingClientRect();
+    let cursor = head.bottom - top + gap;
+    const next: Record<string, number> = {};
+    for (const el of side.querySelectorAll<HTMLElement>('[data-row]')) {
+      const h = el.getBoundingClientRect().height;
+      const span = spans.get(el.dataset.row!);
+      const at = span ? Math.max(cursor, (span.top + span.bottom) / 2 - h / 2) : cursor;
+      if (at > cursor + 0.5) next[el.dataset.row!] = Math.round(at - cursor);
+      cursor = at + h + gap;
+    }
+    setPush((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
+  };
+
   // Where every port is, relative to the map; again whenever anything moves.
   const measure = () => {
+    arrange();
     const root = box.current;
     if (!root) return;
     const origin = root.getBoundingClientRect();
@@ -248,12 +297,12 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
                 <span className="grow">{harnessName(provider)}</span>
                 {mine.length > 0 && <span className="small">{mine.length}</span>}
               </div>
-              {GROUPS.map((role) => {
-                const group = mine.filter((s) => (s.role ?? '') === role);
+              {groups.map((g) => {
+                const group = ROLES.flatMap((role) => mine.filter((s) => groupOf(s) === g && (s.role ?? '') === role));
                 return (
                   group.length > 0 && (
-                    <div key={role} className="map-group">
-                      <div className="map-group-head">{t(`session.group.${role || 'other'}`)}</div>
+                    <div key={g} className="map-group" data-group={g}>
+                      <div className="map-group-head">{groupName(g)}</div>
                       {group.map((s) => {
                         const id = `s:${sessionKey(s)}`;
                         return (
@@ -283,11 +332,12 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
       </div>
       <div className="map-side">
         <div className="map-head">{t('sessions.weave.projects')}</div>
-        {[{ id: ANY, name: t('session.any.project') } as SpaceInfo, ...projects].map((p) => {
+        {rows.map((row) => {
+          const p = row === ANY ? ({ id: ANY, name: t('session.any.project') } as SpaceInfo) : projects.find((x) => x.id === row)!;
           const id = `p:${p.id}`;
           const n = count(p.id);
           return (
-            <div key={id} className={`map-project${p.id === ANY ? ' any' : ''}`} {...ends(id)}>
+            <div key={id} className={`map-project${p.id === ANY ? ' any' : ''}`} data-row={p.id} style={push[p.id] ? { marginTop: push[p.id] } : undefined} {...ends(id)}>
               {port(id)}
               {p.icon ? <BlobImage className="map-icon" src={p.icon} /> : null}
               <span className="grow">{p.name}</span>
