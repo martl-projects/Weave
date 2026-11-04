@@ -169,25 +169,31 @@ describe('applets', { timeout: 60_000 }, () => {
     }
   });
 
-  it('never starts a program from a release: one built per platform runs nowhere, and says why', async () => {
+  it('never runs a program from a release as a service: one built per platform is a website to launch behind a warning, or nothing', async () => {
     const sha = 'ab'.repeat(32);
     const martl = person('martl');
     const lena = person('Lena');
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
-    // As Weave released them before: a program per platform, no image, no WebAssembly.
+    // An applet (a contract, no web page) as a program per platform, no image, no WebAssembly: it's released (4.11.2026),
+    // but a program runs only as a website its person launched, with their rights and after a warning, never under a
+    // key of its own as a service.
     const manifest = { app: 'old-bot', name: 'Old bot', version: 1, service: { reads: 'addressed', writes: [], version: '1.0' }, start: { release: { [`${process.platform}-${process.arch}`]: ['./old-bot'] } } };
     const release = { ...manifest, install: { source: { provider: 'github', ref: 'martl/bot' }, tag: 'v0.9', assets: { [`${process.platform}-${process.arch}`]: { file: 'old-bot.tar.gz', sha256: sha, size: 10 } } } };
-    // Released now: refused, whoever publishes it, before it sits in the project with nobody able to start it.
-    await expect(publishRelease(martl, { project: 'Bots', tag: 'v0.9', repo: 'martl/bot', manifest: { ...manifest, install: release.install } })).rejects.toThrow(/needs a container image \("start\.image"\) or WebAssembly/);
-    // Released before that rule: still there, and still never started.
-    const bots = loadSpaces(martl.home).find((s) => s.name === 'Bots')!;
-    martl.replica.write(martl.identity, sealFor(bots, { kind: 'weave.app', body: parseManifest(release) as unknown as Json }));
+    await publishRelease(martl, { project: 'Bots', tag: 'v0.9', repo: 'martl/bot', manifest: { ...manifest, install: release.install } });
     syncAll([martl, lena]);
     const [artifact] = await lena.artifacts('Bots');
-    expect(artifact.runs).toBeUndefined();
-    expect(artifact.command).toBeUndefined();
-    await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Bots'], approve: true })).rejects.toThrow(/Old bot v0\.9 has nothing Weave runs: no container image and no WebAssembly/);
+    expect(artifact).toMatchObject({ kind: 'service', runs: 'program', command: ['./old-bot'], program: { file: 'old-bot.tar.gz', sha256: sha } });
+    await expect(lena.addService({ artifact: { project: 'Bots' }, spaces: ['Bots'], approve: true })).rejects.toThrow(/Old bot v0\.9 is a program \(no container image, no WebAssembly\): it runs only as a website you launch in the app, after its warning, never as a service/);
+    await expect(lena.launchWebsite({ project: 'Bots', artifact: { project: 'Bots', id: artifact.id }, approve: true, consent: true })).rejects.toThrow(/is a service, not a website to launch/);
+    // One for another platform only: nothing runs here, and it says why.
+    const elsewhere = { ...manifest, install: { ...release.install, tag: 'v0.8', assets: { 'linux-arm': { file: 'old-bot.tar.gz', sha256: sha, size: 10 } } }, start: { release: { 'linux-arm': ['./old-bot'] } } };
+    const bots = loadSpaces(martl.home).find((s) => s.name === 'Bots')!;
+    martl.replica.write(martl.identity, sealFor(bots, { kind: 'weave.app', body: parseManifest(elsewhere) as unknown as Json }));
+    syncAll([martl, lena]);
+    const other = (await lena.artifacts('Bots')).find((a) => a.tag === 'v0.8')!;
+    expect(other.runs).toBeUndefined();
+    await expect(lena.addService({ artifact: { project: 'Bots', tag: 'v0.8' }, spaces: ['Bots'], approve: true })).rejects.toThrow(/Old bot v0\.8 brings a program for linux-arm, none for this computer/);
   });
 
   it('installs an applet on an always-on node: approved on the computer, fetched and run by the node, its secret sealed to it', async () => {

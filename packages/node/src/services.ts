@@ -1,6 +1,6 @@
 import { mayDo, releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
-import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
+import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo, type ProgramConsentInfo, type ProgramInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
@@ -10,12 +10,28 @@ import { signWith } from './register.ts';
 import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
-import { prepareWasm, publicHost, releaseApproval } from './runtime.ts';
+import { prepareWasm, programConsent, publicHost, releaseApproval } from './runtime.ts';
+import { readJson, writeJson } from './home.ts';
 import { imageDigest, imageLabels } from './registry.ts';
 import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
+
+/** A consent given on this computer: a release's program (this file, by its SHA-256) may run here, since `allowed`. */
+export interface StoredProgramConsent {
+  consent: string;
+  project: string;
+  release: string;
+  tag: string;
+  app: string;
+  name: string;
+  platform: string;
+  file: string;
+  sha256: string;
+  command: string[];
+  allowed: string;
+}
 
 /*
  * Services: code you run under keys of their own. A service has its own key ("martl · github"), a contract that
@@ -189,6 +205,8 @@ export class Services {
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.h.project(ref);
     const access = artifactAccessOf(this.h.entries(project), this.h.state(project).maintainers);
+    // The consents given here, read once for the list (artifacts() runs on every live event in the app).
+    let consents: Record<string, StoredProgramConsent> | undefined;
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
       const runs = this.h.runtime.runs(a.manifest);
       const who = access.get(a.id) ?? 'members';
@@ -217,9 +235,71 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
+        ...(runs === 'program' ? { program: this.programInfo(a, (consents ??= this.storedConsents())) } : {}),
         ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
+  }
+
+  // Programs from releases: a release that brings only a program for this computer runs as that program, with its
+  // person's rights, and Weave can't contain it. So it runs only after the person accepted a warning in the app for
+  // exactly that release and file (its SHA-256): a consent, kept here until withdrawn, never for another version, and
+  // never an agent's or a service's to give. It never starts by itself: not after Weave restarts, not after it exits.
+
+  get programsFile(): string {
+    return joinPath(this.h.home.dir, 'programs.json');
+  }
+
+  /** The consents given on this computer, by fingerprint. */
+  storedConsents(): Record<string, StoredProgramConsent> {
+    return readJson<Record<string, StoredProgramConsent>>(this.programsFile) ?? {};
+  }
+
+  saveConsents(consents: Record<string, StoredProgramConsent>): void {
+    writeJson(this.programsFile, consents);
+  }
+
+  /** A release's program for this computer, as the app shows it before asking: the file, its hash, what would run, and whether it was allowed before. */
+  programInfo(a: { id: string; manifest: AppManifest }, consents = this.storedConsents()): ProgramInfo | undefined {
+    const program = this.h.runtime.program(a.manifest);
+    if (!program) return undefined;
+    const consent = programConsent(a, program);
+    const allowed = consents[consent]?.allowed;
+    return { platform: program.platform, file: program.asset.file, sha256: program.asset.sha256, ...(program.asset.size ? { size: program.asset.size } : {}), command: program.command, consent, ...(allowed ? { allowed } : {}) };
+  }
+
+  /** The launched websites running a release's program under a consent. */
+  #underConsent(consent: string): StoredService[] {
+    return this.storedServices().filter((s) => s.launchedBy && s.artifact && (s.approved ?? []).includes(consent) && this.h.runtime.runs(s.artifact.manifest) === 'program');
+  }
+
+  async programConsents(): Promise<ProgramConsentInfo[]> {
+    return Object.values(this.storedConsents())
+      .sort((a, b) => b.allowed.localeCompare(a.allowed))
+      .map((c) => ({
+        consent: c.consent,
+        project: { id: c.project, kind: 'project' as const, name: this.h.spaces.get(c.project)?.name ?? '' },
+        release: c.release,
+        tag: c.tag,
+        app: c.app,
+        name: c.name,
+        file: c.file,
+        sha256: c.sha256,
+        allowed: c.allowed,
+        running: this.#underConsent(c.consent).filter((s) => this.h.runtime.running(`service:${s.name}`)).length,
+      }));
+  }
+
+  /**
+   * Take a consent back: it's as if the warning was never accepted, and what runs under it ends (its websites close).
+   * The consent goes first: should closing one fail midway, nothing runs under it again either way.
+   */
+  async withdrawProgramConsent(consent: string): Promise<void> {
+    const consents = this.storedConsents();
+    if (!consents[consent]) throw new WeaveError('daemon.program.consent.none', {}, 'no such consent: nothing to withdraw');
+    delete consents[consent];
+    this.saveConsents(consents);
+    for (const s of this.#underConsent(consent)) await this.removeService(s.name);
   }
 
   /** One release of a project: the one with this tag, or the latest. */
@@ -356,6 +436,9 @@ export class Services {
     const manifest = found?.artifact.manifest ?? shipped?.manifest;
     if (manifest && !manifest.service && !this.artifactWeb(manifest) && !manifest.wasm?.site) throw new Error(`${manifest.name} has neither a contract ("service") nor a web page ("services"): nothing to run as a service`);
     if (manifest && !shipped && !input.node && !this.h.runtime.command('weave', manifest)) throw new Error(this.h.runtime.whyNot(manifest));
+    // A release's program never runs as a service, with a key and rights in a project: only as a website its person
+    // launched in the app, behind the warning.
+    if (manifest && found && this.h.runtime.runs(manifest) === 'program') throw new WeaveError('daemon.program.no.service', { name: manifest.name, tag: found.artifact.tag }, `${manifest.name} ${found.artifact.tag} is a program (no container image, no WebAssembly): it runs only as a website you launch in the app, after its warning, never as a service`);
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
     const given = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
@@ -1053,7 +1136,7 @@ export class Services {
    * code from others) and hosts what it serves, and closing that website ends it. It's no service of its own: no key,
    * no name anyone sees, nothing listed but the running website.
    */
-  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
     const project = this.h.project(input.project);
     const from = this.h.project(input.artifact.project);
     const a = artifactsOf(this.h.entries(from), this.h.state(from).maintainers).find((x) => x.id === input.artifact.id);
@@ -1067,6 +1150,27 @@ export class Services {
     if (!this.h.runtime.runs(manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const found = this.artifact(from.id, a.id);
     if (!input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${from.name}, as a website in ${project.name} that reads nothing and writes nothing`);
+    // A program: only with the person's consent to exactly this release and file, given in the app's warning dialog
+    // (consent: true), every time: a program never starts without someone saying so right then, so a consent given
+    // before only spares the person a second reading (the dialog says they allowed it) and is what they withdraw.
+    // The flag separates the app's dialog from the tools agents get (no MCP tool, no CLI command, nothing on the
+    // phone passes it), not from a process on this computer that reads the home: daemon.json and programs.json are
+    // the user's files, and a process with their rights has them anyway, like everything in the home.
+    const program = this.h.runtime.runs(manifest) === 'program' ? this.h.runtime.program(manifest)! : undefined;
+    const consent = program ? programConsent(found.artifact, program) : undefined;
+    if (program && consent) {
+      const consents = this.storedConsents();
+      if (!input.consent)
+        throw new WeaveError(
+          'daemon.program.needs.consent',
+          { name: manifest.name, tag: found.artifact.tag, file: program.asset.file },
+          `${manifest.name} ${found.artifact.tag} brings no container image and no WebAssembly, only the program ${program.asset.file}: it would run on this computer with your rights, and Weave can't contain it. Only you can allow that, in the Weave app (Launch…), after its warning, for exactly this release and file; no agent or service can`,
+        );
+      if (!consents[consent]) {
+        consents[consent] = { consent, project: from.id, release: found.artifact.id, tag: found.artifact.tag, app: manifest.app, name: manifest.name, platform: program.platform, file: program.asset.file, sha256: program.asset.sha256, command: program.command, allowed: new Date(this.h.clock()).toISOString() };
+        this.saveConsents(consents);
+      }
+    }
     const settings = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
     this.checkSettings(manifest, settings);
     const missing = (manifest.env ?? []).filter((e) => !e.optional && !e.oauth && !e.choose && !e.register && !settings[e.name]);
@@ -1084,7 +1188,7 @@ export class Services {
       contract: this.artifactContract(manifest),
       spaces: [project.id],
       artifact: { project: from.id, id: found.artifact.id, tag: found.artifact.tag, manifest },
-      approved: [releaseApproval(found.artifact)],
+      approved: [releaseApproval(found.artifact), ...(consent ? [consent] : [])],
       settings,
       token: b64u.encode(randomBytes(24)),
       enabled: true,
@@ -1513,6 +1617,8 @@ export class Services {
     // Once: services' settings changing restart them.
     if (!this.#restarts) {
       this.#restarts = true;
+      // Before anything starts: programs from releases that ran when Weave last stopped stay stopped.
+      this.stopProgramsFromBefore();
       // A service's setting changed in one of its spaces: it starts again with it (a sign-in renewed here likewise).
       const restarting = new Set<string>();
       const restart = (name: string) => {
@@ -1552,6 +1658,17 @@ export class Services {
     });
   }
 
+  /**
+   * A launched website running a release's program doesn't come back by itself after Weave restarts: what was there
+   * when this run began is turned off, saying so (one launched after that is the person's own doing, and runs).
+   */
+  stopProgramsFromBefore(): void {
+    for (const stored of this.storedServices()) {
+      if (stored.launchedBy && stored.artifact && stored.enabled && this.h.runtime.runs(stored.artifact.manifest) === 'program')
+        this.programStopped(stored, `Weave restarted: ${stored.artifact.manifest.name} ${stored.artifact.tag} is a program, and isn't started again by itself. Stop it, and launch it again if you want it back`);
+    }
+  }
+
   startService(stored: StoredService): void {
     // Weave's own GitHub service from before: it runs no more, and says what replaced it.
     if (stored.builtin === 'github') return void this.h.releases.jobs.set(`service:${stored.name}`, { error: GITHUB_SERVICE_GONE });
@@ -1562,6 +1679,13 @@ export class Services {
     if (!a) return stored.command?.length ? this.spawnService(stored) : undefined;
     // An applet: only the release you approved, fetched and checked against its fingerprints first.
     if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
+    // A release's program: only a launched website runs one, and only under a consent given in the app for exactly
+    // this release and file, still standing. Nothing is fetched before that's sure.
+    if (this.h.runtime.runs(a.manifest) === 'program') {
+      const consent = programConsent(a, this.h.runtime.program(a.manifest)!);
+      if (!stored.launchedBy || !(stored.approved ?? []).includes(consent)) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} is a program: it runs only as a website you launched in the app, after its warning` });
+      if (!this.storedConsents()[consent]) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `you withdrew your consent to ${a.manifest.name} ${a.tag}'s program: it doesn't run until you launch it again and accept the warning` });
+    }
     this.h.releases.ensure(stored.name, a, `service:${stored.name}`, () => {
       const now = this.storedServices().find((s) => s.name === stored.name);
       if (now?.enabled && now.artifact?.id === a.id) this.spawnService(now);
@@ -1613,12 +1737,19 @@ export class Services {
       const folder = this.h.releases.folder(stored.name, a);
       return void this.spawnWasm(stored, joinPath(folder, a.manifest.wasm.component), a.manifest.wasm.site ? joinPath(folder, a.manifest.wasm.site) : undefined);
     }
-    const container = a && this.h.runtime.runs(a.manifest) === 'container' ? `weave-service-${stored.name}` : undefined;
+    const runs = a ? this.h.runtime.runs(a.manifest) : undefined;
+    const container = runs === 'container' ? `weave-service-${stored.name}` : undefined;
     let run: string[] | undefined = stored.command;
-    const cwd = dir;
+    let cwd = dir;
     if (a) {
       run = this.h.runtime.command(container ?? 'weave', a.manifest);
-      if (!run || !container) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: this.h.runtime.whyNot(a.manifest) });
+      if (!run || (!container && runs !== 'program')) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: this.h.runtime.whyNot(a.manifest) });
+      // A program: in the folder its release file was unpacked into, once it matched the release's SHA-256 (ensure);
+      // one that got here any other way doesn't run.
+      if (runs === 'program') {
+        if (!this.h.releases.has(stored.name, a)) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} isn't here yet, checked against the release's fingerprints` });
+        cwd = this.h.releases.folder(stored.name, a);
+      }
     }
     if (!run?.length) return;
     const project = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');
@@ -1651,10 +1782,21 @@ export class Services {
       },
       () => {
         const now = this.storedServices().find((s) => s.name === stored.name);
-        if (now) this.startService(now);
+        if (!now) return;
+        // A program never starts by itself: exited, it stays stopped (its website says so) until launched again.
+        if (runs === 'program') return this.programStopped(now, `${a!.manifest.name} ${a!.tag} exited: a program isn't started again by itself. Stop it, and launch it again if you want it back`);
+        this.startService(now);
       },
     );
     if (a) void this.serveWeb(stored);
+  }
+
+  /** A launched program's website, no longer running: turned off, saying why, until the person launches it again. */
+  programStopped(stored: StoredService, why: string): void {
+    this.h.runtime.stop(`service:${stored.name}`);
+    this.h.releases.jobs.set(`service:${stored.name}`, { error: why });
+    this.saveServices(this.storedServices().map((s) => (s.name === stored.name ? { ...s, enabled: false } : s)));
+    void this.web.unserve(stored.name).catch(() => {});
   }
 
   /**

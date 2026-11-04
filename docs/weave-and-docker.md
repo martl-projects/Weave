@@ -1,13 +1,13 @@
 # Weave and Docker: apps from a container image
 
-Weave runs no programs from releases. A release runs in one of two ways, both sealed off from the host's computer:
+A release runs in one of two ways sealed off from the host's computer, with no warning:
 
 | Field in `weave.app.json` | Runs from | Needs on the host |
 |---|---|---|
 | **`start.image`** | **a container image, pinned by its digest** | **Docker** |
 | `wasm` | a WebAssembly component (its image for wasi/wasm, or a release file for `wasm`) | nothing: Weave runs it |
 
-`start.command` only says how to start a checkout by hand, for people and agents. `start.release` (a program per platform) is ignored: a release that has only that runs nowhere, and Weave says why.
+`start.command` only says how to start a checkout by hand, for people and agents. A release that brings only a program per platform (its release files, with `start.release` naming the command, or a file that is the program itself) runs as that program, since 4.11.2026: on the host's computer with their rights, which Weave can't contain. So it runs only after a warning the host accepts in the app for exactly that release and file (its SHA-256, checked before it starts), never through an agent; a new version asks again, the consent can be withdrawn on the running website, and the program never starts by itself (not after Weave restarts, not after it exits). Where a release has both, the container or WebAssembly runs. Prefer those.
 
 Weave builds and hosts nothing itself. The project's own workflow builds the image and pushes it to a registry, like ghcr.io or Docker Hub. Weave only points to it and checks that it's the released one.
 

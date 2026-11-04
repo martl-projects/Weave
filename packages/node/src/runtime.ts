@@ -8,7 +8,8 @@ import { dirname, extname, isAbsolute, join, resolve as resolvePath, sep } from 
 import type { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { MessageChannel, Worker } from 'node:worker_threads';
-import { canonicalJson, netAllows, type AppImage, type AppManifest, type Json } from '@weave/core';
+import { canonicalJson, netAllows, programPlatforms, releaseProgram, type AppImage, type AppManifest, type Json, type ReleaseProgram } from '@weave/core';
+import { platformKey } from './appinstall.ts';
 import { launchFingerprint } from './applaunch.ts';
 import { listenNear } from './live.ts';
 import { acceptWebSocket, type WebSocketConnection } from './websocket.ts';
@@ -215,36 +216,47 @@ export class Runtime {
   }
 
   /**
-   * How a release runs here: in Weave (WebAssembly), or as its container when Docker runs. Never as a program of its
-   * own on this computer: whatever a release carries for a platform, Weave doesn't start it.
+   * How a release runs here: in Weave (WebAssembly), as its container when Docker runs, or, with neither, as the
+   * program it brings for this platform. The first two are sealed off from the computer and preferred; a program runs
+   * with its person's rights, so it runs only once they accepted a warning for exactly that release and file (a
+   * website service checks that: see Services.launchWebsite), and never for a service.
    */
-  runs(app: AppManifest): 'container' | 'wasm' | undefined {
+  runs(app: AppManifest): 'container' | 'wasm' | 'program' | undefined {
     // A WebAssembly service runs in Weave itself, anywhere: from its image, or its release file for wasm.
     if (app.wasm && (app.install?.image || app.install?.assets?.wasm)) return 'wasm';
     if (this.containerOf(app)) return 'container';
+    if (this.program(app)) return 'program';
     return undefined;
+  }
+
+  /** The program a release brings for this computer, if any: run only behind a warning. */
+  program(app: AppManifest): ReleaseProgram | undefined {
+    return releaseProgram(app, platformKey());
   }
 
   /** Why a release doesn't run here, in words. */
   whyNot(app: AppManifest): string {
     const name = [app.name, app.install?.tag].filter(Boolean).join(' ');
     if (app.install?.image?.packaged) return `${app.name} is a Weave service: it runs in a container, and Docker isn't running here`;
-    if (app.install?.image) return `${name} runs in a container, and Docker isn't running here`;
-    return `${name} has nothing Weave runs: no container image and no WebAssembly (Weave starts no programs from releases)`;
+    const platforms = programPlatforms(app);
+    if (app.install?.image) return `${name} runs in a container, and Docker isn't running here${platforms.length ? ` (its program is for ${platforms.join(', ')}, not this computer, ${platformKey()})` : ''}`;
+    if (platforms.length) return `${name} brings a program for ${platforms.join(', ')}, none for this computer (${platformKey()}), and no container image or WebAssembly`;
+    return `${name} has nothing Weave runs: no container image, no WebAssembly, no program for this computer`;
   }
 
-  /** What running a release here runs: its container (by this name), or its component in Weave. */
+  /** What running a release here runs: its container (by this name), its component in Weave, or its program. */
   command(container: string, app: AppManifest): string[] | undefined {
     const runs = this.runs(app);
     if (runs === 'container') return this.dockerRun(container, app, [...(app.env ?? []).map((e) => e.name), 'WEAVE_API', 'WEAVE_TOKEN', 'WEAVE_PROJECT', 'WEAVE_WEBSITE', 'WEAVE_SERVICE', 'WEAVE_SERVICE_API', 'WEAVE_SERVICE_TOKEN', 'PORT']);
     if (runs === 'wasm') return [`${app.wasm!.component} (WebAssembly, in Weave)`];
+    if (runs === 'program') return this.program(app)!.command;
     return undefined;
   }
 
   /** What a release runs, in words for an approval: here, or wherever Docker runs. */
   runText(app: AppManifest): string {
     const here = this.command('weave', app);
-    if (here) return here.join(' ');
+    if (here) return this.runs(app) === 'program' ? `${here.join(' ')} (a program from ${this.program(app)!.asset.file}, on this computer with your rights)` : here.join(' ');
     if (app.wasm) return `${app.wasm.component} (WebAssembly, in Weave)`;
     return app.install?.image ? `the container ${app.install.image.ref}@${app.install.image.digest}` : 'nothing';
   }
@@ -506,3 +518,12 @@ export class Runtime {
  */
 export const releaseApproval = (a: { id: string; manifest: AppManifest }): string =>
   launchFingerprint(['release', canonicalJson((a.manifest.start ?? {}) as unknown as Json), canonicalJson((a.manifest.install?.image ?? null) as unknown as Json)], a.id);
+
+/**
+ * What a person consents to when they let a release's program run on their computer: this release (its event) and
+ * exactly this file by its SHA-256, with the command that runs it, all read from the signed release. Another version,
+ * or the same file name with other bytes, is another consent. The settings they give it aren't part of it: those are
+ * their own, given per website, and change nothing about what runs.
+ */
+export const programConsent = (a: { id: string; manifest: AppManifest }, program: ReleaseProgram): string =>
+  launchFingerprint(['program', program.platform, program.asset.file, program.asset.sha256, ...program.command], a.id);

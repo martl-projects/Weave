@@ -32,14 +32,16 @@ describe('app settings in a manifest', () => {
   });
 });
 
-describe('no programs', () => {
-  it('ignores programs per platform: a release runs as its container or its WebAssembly, and what only has ports is a website', () => {
+describe('programs behind a warning', () => {
+  it('reads programs per platform, warns that they run behind a warning, and what only has ports is a website', () => {
     const old = checkManifest({ ...base, services: [{ port: 7000, protocol: 'tcp' }], start: { command: ['node', 'server.js'], release: { 'win32-x64': ['./band-ab.exe'] } } });
     expect(old.problems).toEqual([]);
-    expect(old.warnings.join('\n')).toMatch(/"start.release" is ignored: Weave runs no programs from releases/);
-    expect(old.warnings.join('\n')).toMatch(/nothing for Weave to run/);
-    expect(old.manifest?.start).toEqual({ command: ['node', 'server.js'] });
+    expect(old.warnings.join('\n')).toMatch(/"start.release" is a program per platform: it runs on people's computers with their rights, and only after a warning/);
+    expect(old.warnings.join('\n')).not.toMatch(/nothing for Weave to run/);
+    expect(old.manifest?.start).toEqual({ command: ['node', 'server.js'], release: { 'win32-x64': ['./band-ab.exe'] } });
     expect(artifactKindOf(old.manifest!)).toBe('website');
+    // Without any way to run a release, it says so; a container image needs nothing more.
+    expect(checkManifest({ ...base, start: { command: ['node', 'server.js'] } }).warnings.join('\n')).toMatch(/nothing for Weave to run sealed off/);
     expect(checkManifest({ ...base, start: { image: 'ghcr.io/martl/band-ab' } }).warnings.join('\n')).not.toMatch(/nothing for Weave to run/);
   });
 });

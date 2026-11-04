@@ -366,10 +366,15 @@ export interface ArtifactInfo {
   settings: AppSetting[];
   /** A Weave service: an image carrying its manifest, run in the sandbox only. */
   packaged?: true;
-  /** How it would run on this node: its container (Docker), or in Weave itself (WebAssembly). Never as a program. */
-  runs?: 'container' | 'wasm';
+  /**
+   * How it would run on this node: its container (Docker), in Weave itself (WebAssembly), or as the program it brings
+   * for this computer, with your rights, which Weave can't contain: only behind a warning you accept (ProgramInfo).
+   */
+  runs?: 'container' | 'wasm' | 'program';
   /** What starting it here would run (shown before you approve it). */
   command?: string[];
+  /** Runs as a program: which file, and whether you accepted the warning for exactly it before (that date). */
+  program?: ProgramInfo;
   /** Where its files are: a GitHub release (handed out by a service that offers artifact.fetch), or an image. */
   /** A board's view (a client service), pinned to boards rather than run. */
   lens?: true;
@@ -385,6 +390,39 @@ export interface ArtifactInfo {
   type?: string;
   /** Its own texts in other languages, published by a maintainer with the release (docs/localization.md). */
   texts?: TextPackage[];
+}
+
+/**
+ * A release's program for this computer: a program runs with your rights, and Weave can't contain it. It runs only
+ * after you accepted a warning in the app for exactly this release and file (its SHA-256); the consent is yours alone
+ * (never an agent's or a service's), kept until you withdraw it, and never carried to another version.
+ */
+export interface ProgramInfo {
+  platform: string;
+  file: string;
+  sha256: string;
+  size?: number;
+  /** What runs in its unpacked folder. */
+  command: string[];
+  /** The consent's fingerprint: what you'd accept, or did (then `allowed` says when). */
+  consent: string;
+  allowed?: string;
+}
+
+/** A consent you gave: a release's program may run on this computer. Withdrawn, its websites close. */
+export interface ProgramConsentInfo {
+  consent: string;
+  project: SpaceRef;
+  release: string;
+  tag: string;
+  app: string;
+  name: string;
+  file: string;
+  sha256: string;
+  /** When you accepted the warning. */
+  allowed: string;
+  /** Websites running under it right now, here. */
+  running: number;
 }
 
 /** A service someone runs, as anyone can see it: its public profile. */
@@ -1468,6 +1506,8 @@ export interface WebsiteInfo {
   offeredBy?: { did: Did; name?: string };
   /** The release it runs, when it was launched from one: its project's artifact (its name, if that project is known here). */
   from?: { project: { id: string; name?: string }; release: string; tag: string; name?: string };
+  /** Yours, running the release's program on this computer with your rights: the consent that lets it (withdrawProgramConsent ends it). */
+  program?: { file: string; sha256: string; consent: string };
   /** Your room service runs it on this device. */
   mine: boolean;
   open: boolean;
@@ -2110,7 +2150,11 @@ export interface Backend {
    * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
    * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
    */
-  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
+  /** The programs from releases you let run on this computer (the warning accepted), and what runs under each now. */
+  programConsents(): Promise<ProgramConsentInfo[]>;
+  /** Take a consent back: its websites close, and the program runs again only after a new warning. */
+  withdrawProgramConsent(consent: string): Promise<void>;
   /** Maintainers: hand out a file of a GitHub release as an artifact of the project (a document, a dataset), fingerprinted. */
   releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo>;
   /** Get a file artifact: from its project's provider (and your fetcher), checked against its fingerprint. Where it is now. */
@@ -2601,7 +2645,7 @@ export { LENS_CSP } from './lenscsp.ts';
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
-  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
+  'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
