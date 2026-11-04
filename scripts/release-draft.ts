@@ -1,5 +1,6 @@
 // The GitHub Release of a tag, for the release workflow: made as a draft with its notes (again: its notes updated),
-// and published once its files are there. Plain Node, no gh, so it runs on every runner.
+// and published once its files are there. Only a tag like v1.2.0-beta.1 is a pre-release; the rest become Latest.
+// Plain Node, no gh, so it runs on every runner.
 //
 //   GITHUB_TOKEN=… GITHUB_REPOSITORY=owner/name node scripts/release-draft.ts draft <tag> <notes file>
 //   GITHUB_TOKEN=… GITHUB_REPOSITORY=owner/name node scripts/release-draft.ts publish <tag>
@@ -23,7 +24,7 @@ const found = ((await api('/releases?per_page=30')) as unknown as Array<{ id: nu
 if (step === 'draft') {
   const body = readFileSync(notesFile, 'utf8');
   if (found) await api(`/releases/${found.id}`, { method: 'PATCH', body: JSON.stringify({ body }) });
-  else await api('/releases', { method: 'POST', body: JSON.stringify({ tag_name: tag, name: `Weave ${tag}`, body, draft: true, prerelease: tag.startsWith('v0.') }) });
+  else await api('/releases', { method: 'POST', body: JSON.stringify({ tag_name: tag, name: `Weave ${tag}`, body, draft: true, prerelease: tag.includes('-') }) });
   console.log(`${tag}: ${found ? 'notes updated' : 'drafted'}`);
 } else {
   if (!found) throw new Error(`no release for ${tag}`);
