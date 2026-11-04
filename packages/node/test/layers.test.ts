@@ -70,6 +70,7 @@ const MAY_USE_NODE = [
   'scim.ts',
   'services.ts',
   'servicesettings.ts',
+  'sessions.ts',
   'shipped.ts',
   'signin.ts',
   'spacestore.ts',

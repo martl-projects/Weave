@@ -158,6 +158,8 @@ Notes per step, where the build differed from the plan above.
 
 - **Step 4 (holding and retention):** `holding.ts` (`Holding`, 398 lines, `HoldingCore` with 23 members: pulled spaces, keepers, older history on request, budgets) and `retention.ts` (`Forgetting`, 289 lines, `RetentionCore` with 18: holds, forgetting by rule and the blobs that go with it, keeping a post, shredding old keys). node.ts 8,032 → 7,511. The sweep's order is untouched: node.ts still calls `applyShreds()` then `forget()` where it did. `held()` is reached lazily from the cores built before retention. The "who holds what" section turned out to hold the kernel's heart too (`#state`, `#takeKeys`, `#anchor`, `#upTo`, `#spaceInfo`, `#entryPoint`, `#direct`): those stayed for step 8.
 
+- **Step 5 (agents, sessions, the desk):** one module, `sessions.ts` (`Sessions`, 999 lines, `SessionsCore` with 29 members), not the two the plan named: agent harnesses, permission requests, the Claude app's sessions and their stacks, mentions and the desk share the same handful of mutable fields (`#follower`, `#appLog`, `#mentions`, `#expected`, `#openListeners`), and a field that two modules write belongs to one of them. node.ts 7,567 → 6,637. Tessel's sessions work had landed on main before the cut (`ba48b52`), so nothing of theirs was in flight. The post and board helpers that sat at the end of the desk section (`#keyFacts`, `editPost`, `boards`, `setBoardAccess`, …) stayed for step 6.
+
 ## 7. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.
