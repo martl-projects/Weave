@@ -7,7 +7,7 @@ import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import type { Attachment } from '@weave/core';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { CharCount } from './editor.tsx';
-import { api, bump, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
+import { api, clock, dayLabel, loadBlobImages, markSeen, plain, renderMarkdown, shortDid, useApi, useStickToBottom } from './lib.ts';
 import { Icon } from './icons.tsx';
 import { ask, attempt, Avatar, loadEmbeds, toast } from './ui.tsx';
 import { Marks } from './marks.tsx';
@@ -183,6 +183,7 @@ function Composer({
   replyTo,
   onCancelReply,
   members,
+  onSent,
 }: {
   space: SpaceInfo;
   channel: string;
@@ -190,6 +191,8 @@ function Composer({
   replyTo?: MessageInfo;
   onCancelReply(): void;
   members: MemberInfo[];
+  /** A message went out: the chat reads its messages again, now. */
+  onSent(): void;
 }) {
   const { t } = useTexts();
   const [text, setText] = useState('');
@@ -261,7 +264,7 @@ function Composer({
       // Keep it all if sending failed.
       setText(message);
       setFile(file);
-    } else bump(); // shown now, also when the daemon's events are late or their stream is down
+    } else onSent(); // this chat shows it now, also when the daemon's events are late or their stream is down; the rest of the app waits for the event
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -344,7 +347,7 @@ function Composer({
  * virtualized history. Either a channel of a space, or the chat of one post.
  */
 export function ChatView({ space, channel = 'general', post, meDid, meName, members }: { space: SpaceInfo; channel?: string; post?: string; meDid: string; meName?: string; members: MemberInfo[] }) {
-  const { data: messages } = useApi(
+  const { data: messages, reload: reloadMessages } = useApi(
     () => api<MessageInfo[]>('messages', post ? null : space.id, post ? { post, limit: 1000 } : { channel, limit: 1000 }),
     [space.id, channel, post],
   );
@@ -427,7 +430,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
           })}
         </div>
       </div>
-      <Composer space={space} channel={channel} post={post} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} />
+      <Composer space={space} channel={channel} post={post} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} onSent={reloadMessages} />
     </div>
   );
 }
