@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, createVerify } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
-import { type Access, type Box, type Did, type Json, KIND_ADMIT, KIND_ATTEST, KIND_BLOCK, KIND_CARRY, KIND_ESCROW, KIND_ESCROW_OPENED, KIND_FOLLOW, KIND_IDENTITY, KIND_IMPRINT, KIND_JOIN, KIND_LEAVE, KIND_LINK, KIND_MAINTAINER, KIND_MUTE, KIND_ORG_CHAT, KIND_ORG_CONSOLE, KIND_ORG_DONE, KIND_ORG_FREEZE, KIND_ORG_MAP, KIND_ORG_POLICY, KIND_ORG_REQUEST, KIND_ORG_SETTINGS, KIND_ORG_START, KIND_POST_DELETE, KIND_POST_EDIT, KIND_REKEY, KIND_ROTATE, KIND_SIGNIN, b64u, boxTo, canManage, canonicalKind, classOf, decodeContact, gift, isDid, normalizeWords, open, openBox, parseScope, randomBytes, recoveryIdentity, seal, sealFor, spaceScope } from '@weave/core';
+import { type Access, type Box, type Did, type Json, KIND_ADMIT, KIND_ATTEST, KIND_BLOCK, KIND_CARRY, KIND_ESCROW, KIND_ESCROW_OPENED, KIND_FOLLOW, KIND_IDENTITY, KIND_IMPRINT, KIND_JOIN, KIND_LEAVE, KIND_LINK, KIND_MAINTAINER, KIND_MUTE, KIND_ORG_CHAT, KIND_ORG_CONSOLE, KIND_ORG_DONE, KIND_ORG_FREEZE, KIND_ORG_MAP, KIND_ORG_POLICY, KIND_ORG_REQUEST, KIND_ORG_SETTINGS, KIND_ORG_START, KIND_POST_DELETE, KIND_POST_EDIT, KIND_REKEY, KIND_ROTATE, KIND_SIGNIN, b64u, boxTo, canonicalKind, classOf, decodeContact, gift, isDid, normalizeWords, open, openBox, parseScope, randomBytes, recoveryIdentity, seal, sealFor, spaceScope } from '@weave/core';
 import { type AuditSink, type AuditSinkInput, type StreamedLine, newSink, sendLines, sinkTarget } from './auditsinks.ts';
 import { KIND_AVATAR } from './avatar.ts';
 import { type AuditLine, type AuditStreamInfo, type CompanyAgentInfo, type CompanyDeviceInfo, type CompanyInfo, type ConsoleInfo, type ConsoleRole, type CreateCompanyInput, type ExportLine, type LinkInfo, type Profile, type ScimInfo, type SignInStatus } from './backend.ts';
@@ -14,6 +14,7 @@ import { machinePolicy } from './machine.ts';
 import { invitationMail, mailServer, sendMail } from './mail.ts';
 import { type ScimDirectory, type ScimRequest, type ScimResponse, emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches } from './scim.ts';
 import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, signInNonce } from './signin.ts';
+import { mayDo } from '@weave/core';
 import { type StoredSpace } from './spacestore.ts';
 import { KIND_THEME } from './theme.ts';
 import { type Keystore, keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson } from './vault.ts';
@@ -27,7 +28,7 @@ import type { SqliteStore } from './sqlitestore.ts';
  * Company accounts (stages 9 to 15): a company's group and spaces, the accounts
  * it owns and their sign-in, its attestor, policy and retention, escrowed
  * recovery, the audit and its export to security tools, SCIM, devices and the
- * admin console. Who may act is decided by canManage (core, mayAct soon) and by
+ * admin console. Who may act is decided by mayDo (core/authz.ts) and by
  * the company's own vouching here. It sees the node's internals only through
  * CompaniesCore; the node delegates the Backend methods to it.
  */
@@ -164,7 +165,7 @@ export class Companies {
     const space = this.core.space(input.space);
     const state = this.core.state(space);
     if (!state.managed) throw new Error(`${space.name} isn't a company space`);
-    if (!canManage(state, this.node.identity.author)) throw new Error(`only those who manage ${space.name} open an escrow`);
+    if (!mayDo(state, this.node.identity.author, 'manage').ok) throw new Error(`only those who manage ${space.name} open an escrow`);
     const person = this.node.resolve(input.person);
     const request = input.for ? decodeRecoveryRequest(input.for) : undefined;
     if (!request && this.node.replica.authority.keys(person).org)
@@ -563,7 +564,7 @@ export class Companies {
     for (const r of this.node.replica.events((e) => signers.has(e.signer))) last[r.signer] = Math.max(last[r.signer] ?? 0, r.seq);
     for (const space of [...this.core.spaces.values()]) {
       const state = this.core.state(space);
-      if (space.founder === this.node.identity.author && state.members.has(person) && canManage(state, this.node.identity.author)) await this.node.removeMember(space.id, person);
+      if (space.founder === this.node.identity.author && state.members.has(person) && mayDo(state, this.node.identity.author, 'manage').ok) await this.node.removeMember(space.id, person);
     }
     this.node.replica.write(this.node.identity, { kind: KIND_ORG_FREEZE, body: { person, keys: last } });
   }
@@ -642,7 +643,7 @@ export class Companies {
   /** The company's maximum: shred the keys of a company space that ended before it (what rules keep is carried forward first). */
   async #shredOlder(space: StoredSpace, maxDays: number): Promise<number> {
     const state = this.core.state(space);
-    if (this.core.held(state) || !canManage(state, this.node.identity.author)) return 0;
+    if (this.core.held(state) || !mayDo(state, this.node.identity.author, 'manage').ok) return 0;
     const before = new Date(this.node.clock() - maxDays * DAY_MS).toISOString();
     const starts = this.core.epochStarts(space);
     const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
@@ -962,7 +963,7 @@ export class Companies {
   async exportSpace(input: { space: string; since?: string; until?: string }): Promise<ExportLine[]> {
     const space = this.core.space(input.space);
     const state = this.core.state(space);
-    if (!canManage(state, this.node.identity.author)) throw new Error(`only those who manage ${space.name} export it`);
+    if (!mayDo(state, this.node.identity.author, 'manage').ok) throw new Error(`only those who manage ${space.name} export it`);
     const since = input.since ? new Date(input.since).toISOString() : '';
     const until = input.until ? new Date(input.until).toISOString() : '9999';
     const decoded = this.core.decodedIn(space.id);
@@ -1476,7 +1477,7 @@ export class Companies {
     for (const space of [...this.core.spaces.values()]) {
       const state = this.core.state(space);
       const attestor = state.managed?.attestor;
-      if (!attestor || !canManage(state, this.node.identity.author)) continue;
+      if (!attestor || !mayDo(state, this.node.identity.author, 'manage').ok) continue;
       const attested = this.attestations(space, attestor);
       for (const [did, member] of state.members) {
         if (did === state.founder || did === attestor || did === this.node.identity.author) continue;

@@ -1,4 +1,4 @@
-import { releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
+import { mayDo, releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
 import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
@@ -365,7 +365,7 @@ export class Services {
     if (builtin === 'github') throw new Error(GITHUB_SERVICE_GONE);
     // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
-    if (keptIn && !this.h.state(keptIn).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.service.settings.maintainers.only', { space: this.h.spaceName(keptIn) }, `only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
+    if (keptIn && !mayDo(this.h.state(keptIn), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.service.settings.maintainers.only', { space: this.h.spaceName(keptIn) }, `only the maintainers of ${this.h.spaceName(keptIn)} keep its services' settings there`);
     if (keptIn && input.node) throw new Error('settings kept in a project go with a service on this computer for now');
     // Except what it asks for as yours: that stays with you, for every project it's in.
     const yours = (name: string) => (asks ?? []).some((e) => e.name === name && e.yours);
@@ -1159,7 +1159,7 @@ export class Services {
   /** Maintainers: who may get one of a project's artifacts (null: everyone there). */
   async setArtifactAccess(input: { project: string; artifact: string; who: ActionWho | null }): Promise<ArtifactInfo[]> {
     const project = this.h.project(input.project);
-    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.artifact.access.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
+    if (!mayDo(this.h.state(project), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.artifact.access.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} decide who may get its artifacts`);
     if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new WeaveError('daemon.artifact.none', { space: this.h.spaceName(project) }, `${this.h.spaceName(project)} has no such artifact`);
     const who = input.who === null ? 'members' : parseWho(input.who);
     if (!who) throw new Error('who is members, maintainers, owner, {board: <name>} or {group: <id>}');
@@ -1170,7 +1170,7 @@ export class Services {
   /** Maintainers: withdraw a release. It's no longer listed, launched or handed out; who got it keeps what they have. */
   async withdrawArtifact(input: { project: string; artifact: string }): Promise<ArtifactInfo[]> {
     const project = this.h.project(input.project);
-    if (!this.h.state(project).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.release.withdraw.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
+    if (!mayDo(this.h.state(project), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.release.withdraw.maintainers.only', { space: this.h.spaceName(project) }, `only the maintainers of ${this.h.spaceName(project)} withdraw its releases`);
     if (!artifactsOf(this.h.entries(project), this.h.state(project).maintainers).some((a) => a.id === input.artifact)) throw new WeaveError('daemon.release.gone', { space: this.h.spaceName(project) }, `${this.h.spaceName(project)} has no such release (withdrawn already?)`);
     this.h.replica.write(this.h.identity, sealFor(this.h.cipher(project), { kind: KIND_ARTIFACT_WITHDRAWN, body: { artifact: input.artifact } }));
     return this.artifacts(project.id);
@@ -1203,7 +1203,7 @@ export class Services {
   /** Maintainers: who may use a service's action in a space, tighter than its contract (or null: as it says). */
   async setServicePolicy(input: { space: string; service: string; action: string; who: ActionWho | null }): Promise<ServiceActionInfo[]> {
     const space = this.h.space(input.space);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.service.who.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
+    if (!mayDo(this.h.state(space), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.service.who.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} decide who may use its services`);
     const did = await this.serviceDid(input.service);
     const action = (await this.serviceProfiles()).find((p) => p.did === did)?.contract.actions?.find((a) => a.name === input.action);
     if (!action) throw new WeaveError('daemon.service.no.action', { action: input.action }, `that service has no action ${input.action}`);
@@ -1336,7 +1336,7 @@ export class Services {
   /** List a Weave service in a catalog (its maintainers): a release of a project you're in, by its image. */
   async listInCatalog(input: { catalog: string; artifact: { project: string; tag?: string }; summary?: string; as?: string }): Promise<CatalogEntryInfo> {
     const space = this.h.space(input.catalog);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.catalog.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} list things in it`);
+    if (!mayDo(this.h.state(space), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.catalog.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} list things in it`);
     const { project, artifact } = this.artifact(input.artifact.project, input.artifact.tag);
     const image = artifact.manifest.install?.image;
     if (!image?.packaged) throw new Error(`${artifact.manifest.name} ${artifact.tag} isn't a Weave service: catalogs list images that carry their manifest (weave service release)`);
@@ -1348,7 +1348,7 @@ export class Services {
   /** Take an app off a catalog (its maintainers). */
   async unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void> {
     const space = this.h.space(input.catalog);
-    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new WeaveError('daemon.catalog.remove.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} take things off it`);
+    if (!mayDo(this.h.state(space), this.h.identity.author, 'curate').ok) throw new WeaveError('daemon.catalog.remove.maintainers.only', { space: this.h.spaceName(space) }, `only the maintainers of ${this.h.spaceName(space)} take things off it`);
     if (!(await this.catalog(space.id)).some((e) => e.app === input.app)) throw new WeaveError('daemon.catalog.not.listed', { space: this.h.spaceName(space), app: input.app }, `${this.h.spaceName(space)} lists no "${input.app}"`);
     await this.h.publish({ kind: KIND_CATALOG_ENTRY, body: { app: input.app, removed: true }, space: space.id, as: input.as });
   }

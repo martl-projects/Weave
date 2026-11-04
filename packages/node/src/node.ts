@@ -1,5 +1,8 @@
 import {
   accessOf,
+  managersOf,
+  mayDo,
+  mayDoAt,
   b64u,
   attachmentOf,
   BLOB_TYPES,
@@ -81,8 +84,6 @@ import {
   isMediaType,
   boardName,
   boardsOf,
-  canManage,
-  rekeyCounts,
   canonicalKind,
   classOf,
   channelName,
@@ -1376,7 +1377,7 @@ export class WeaveNode implements Backend {
     for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
       const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
       const epoch = body?.epoch;
-      if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) continue;
+      if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !mayDoAt(state, e, 'manage').ok) continue;
       const seen = this.#seenAt(e);
       const time = e.time < seen ? e.time : seen;
       const ok = gone.every(([did, at]) => time > at && !body?.boxes?.[did]);
@@ -1689,13 +1690,14 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.invite.direct', undefined, 'a direct chat is between two people; start a group to talk with more');
     if (state.closed) throw new WeaveError('daemon.invite.closed', { space: space.name }, `${space.name} is closed`);
-    if (state.tier && state.founder !== this.identity.author) {
+    if (state.tier && !mayDo(state, this.identity.author, 'invite').ok) {
       const who = this.nameOf(state.founder);
       throw who
         ? new WeaveError('daemon.invite.founder.only', { who, space: space.name }, `only ${who} lets people into ${space.name}`)
         : new WeaveError('daemon.invite.founder.only.unknown', { space: space.name }, `only its creator lets people into ${space.name}`);
     }
-    const allowed = space.kind !== 'project' ? state.members.has(this.identity.author) || this.#mineFounder(space) : state.maintainers.has(this.identity.author);
+    // Our own new space, before its creation is folded in, is ours to invite to.
+    const allowed = mayDo(state, this.identity.author, 'invite').ok || (space.kind !== 'project' && this.#mineFounder(space));
     if (!allowed)
       throw space.kind === 'project'
         ? new WeaveError('daemon.invite.maintainers.only', undefined, 'only maintainers can invite people into a project')
@@ -1874,7 +1876,7 @@ export class WeaveNode implements Backend {
     const starts = this.#epochStarts(space);
     // Only a manager's new key counts for the others (T3a83nLy): when one is needed, nobody else lets people in, or they'd read it all.
     const fresh = this.#needsFreshKey(space, state);
-    if (fresh && !canManage(state, this.identity.author)) {
+    if (fresh && !mayDo(state, this.identity.author, 'manage').ok) {
       throw new WeaveError('daemon.invite.needs.key', { space: space.name }, `${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
     }
     if (fresh) {
@@ -2057,7 +2059,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
-    if (!canManage(state, this.identity.author)) throw new WeaveError('daemon.rules.manage.only', { space: space.name }, `only those who manage ${space.name} decide what agents and services may do there`);
+    if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.rules.manage.only', { space: space.name }, `only those who manage ${space.name} decide what agents and services may do there`);
     const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
     const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
     if ((input.agents && !agents) || (input.services && !services)) throw new WeaveError('daemon.rules.who', undefined, 'a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
@@ -2216,7 +2218,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
-    if (!canManage(state, this.identity.author)) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
+    if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
     return this.#spaceInfo(space);
   }
@@ -2244,14 +2246,14 @@ export class WeaveNode implements Backend {
         const state = this.#state(s);
         if (state.managed) return !state.approvedAgents?.has(key);
         const who = state.visitors?.agents?.who ?? 'everyone';
-        return !canManage(state, this.identity.author) && (who === 'nobody' || (who === 'approved' && !state.approvedAgents?.has(key)));
+        return !mayDo(state, this.identity.author, 'manage').ok && (who === 'nobody' || (who === 'approved' && !state.approvedAgents?.has(key)));
       })
       .map((s) => ({ id: s.id, name: s.name }));
   }
 
   /**
    * The rekeys that count in a space (Gr9S4DLf): by someone who managed it as
-   * of the rekey (rekeyCounts), for an epoch we hold. Rekeys are in the clear:
+   * of the rekey (mayDoAt 'manage'), for an epoch we hold. Rekeys are in the clear:
    * anyone in the space can write one, dated as they like. Its time is its date,
    * but never later than when it got here.
    */
@@ -2261,7 +2263,7 @@ export class WeaveNode implements Backend {
       .events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)
       .flatMap((e) => {
         const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
-        if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !rekeyCounts(state, e)) return [];
+        if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !mayDoAt(state, e, 'manage').ok) return [];
         const seen = this.#seenAt(e);
         return [{ epoch: epoch as number, time: e.time < seen ? e.time : seen, seen }];
       });
@@ -2278,7 +2280,7 @@ export class WeaveNode implements Backend {
   #rotateMonthly(space: StoredSpace): number {
     const state = this.#state(space);
     const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companies.companyRetention(space)?.maxDays;
-    if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !canManage(state, this.identity.author)) return 0;
+    if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !mayDo(state, this.identity.author, 'manage').ok) return 0;
     const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
     if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
     this.#rotateKey(space);
@@ -2301,7 +2303,7 @@ export class WeaveNode implements Backend {
       const opened = this.#tryOpen((me) => openRekey(e, me));
       if (!opened) continue;
       const epoch = String(opened.epoch);
-      counts.set(epoch, (counts.get(epoch) ?? false) || rekeyCounts(state, e));
+      counts.set(epoch, (counts.get(epoch) ?? false) || mayDoAt(state, e, 'manage').ok);
     }
     let moved = 0;
     for (const [epoch, ok] of counts) {
@@ -2360,7 +2362,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(ref);
     if (space.kind === 'direct') throw new WeaveError('daemon.leave.direct', undefined, 'a direct chat has no leaving; unfollow or block the person instead');
     const state = this.#state(space);
-    if (state.founder === this.identity.author) {
+    if (mayDo(state, this.identity.author, 'own').ok) {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw others.length
         ? new WeaveError('daemon.leave.owner', { space: space.name }, `you own ${space.name}: hand it over to someone first`)
@@ -2379,7 +2381,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.handover.direct', undefined, 'a direct chat has no owner');
-    if (state.founder !== this.identity.author) throw new WeaveError('daemon.handover.owner.only', { space: space.name }, `only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
+    if (!mayDo(state, this.identity.author, 'own').ok) throw new WeaveError('daemon.handover.owner.only', { space: space.name }, `only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
     if (state.tier) throw new WeaveError('daemon.handover.tier', undefined, 'a membership tier stays with its creator; take it off your hub instead');
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new WeaveError('daemon.handover.self', undefined, "that's you");
@@ -2393,7 +2395,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.history.direct', undefined, 'a direct chat is between two people: there are no newcomers');
     if (!HISTORIES.includes(input.history)) throw new WeaveError('daemon.history.values', undefined, 'history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
-    if (!canManage(state, this.identity.author))
+    if (!mayDo(state, this.identity.author, 'manage').ok)
       throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
     if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
     return this.#spaceInfo(space);
@@ -2403,7 +2405,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.close.direct', undefined, "a direct chat can't be closed");
-    if (!canManage(state, this.identity.author))
+    if (!mayDo(state, this.identity.author, 'manage').ok)
       throw new WeaveError('daemon.close.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
     if (!!state.closed === input.closed) return this.#spaceInfo(space);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
@@ -2412,7 +2414,7 @@ export class WeaveNode implements Backend {
 
   /** After people leave, a node that may rotate the key does: they can't read what comes next. */
   #rotateAfterLeaving(space: StoredSpace, state: SpaceState): number {
-    if (space.kind === 'direct' || !canManage(state, this.identity.author) || !state.left.size) return 0;
+    if (space.kind === 'direct' || !mayDo(state, this.identity.author, 'manage').ok || !state.left.size) return 0;
     // A leave and a rekey after it, by their dates (never later than they got here) and by when they got here: a
     // leaver can date their leave early, but not make it arrive early; and only rekeys that count count (Gr9S4DLf).
     const latest = (times: string[]) => times.reduce((a, b) => (b > a ? b : a), '');
@@ -2439,13 +2441,13 @@ export class WeaveNode implements Backend {
    * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
    */
   #handMissedKeys(space: StoredSpace, state: SpaceState): number {
-    if (space.kind === 'direct' || !canManage(state, this.identity.author)) return 0;
+    if (space.kind === 'direct' || !mayDo(state, this.identity.author, 'manage').ok) return 0;
     const scope = spaceScope(space);
     // Who each epoch's key was boxed to, by rekeys that count.
     const boxed = new Map<number, Set<Did>>();
     for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
       const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
-      if (!Number.isSafeInteger(body?.epoch) || !rekeyCounts(state, e)) continue;
+      if (!Number.isSafeInteger(body?.epoch) || !mayDoAt(state, e, 'manage').ok) continue;
       const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
       for (const did of Object.keys(body?.boxes ?? {})) to.add(did as Did);
       boxed.set(body!.epoch as number, to);
@@ -2482,7 +2484,7 @@ export class WeaveNode implements Backend {
   async removeMember(ref: string, who: string): Promise<void> {
     const space = this.#space(ref);
     const state = this.#state(space);
-    if (!canManage(state, this.identity.author)) {
+    if (!mayDo(state, this.identity.author, 'manage').ok) {
       throw new WeaveError('daemon.remove.manage.only', { kind: space.kind }, { project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
     }
     const member = this.resolve(who);
@@ -3463,7 +3465,7 @@ export class WeaveNode implements Backend {
     if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && d.id === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
     if (post.by.did === this.identity.author) return post;
     const space = post.space && this.#spaces.get(post.space.id);
-    if (action === 'delete' && space && this.#state(space).maintainers.has(this.identity.author)) return post;
+    if (action === 'delete' && space && mayDo(this.#state(space), this.identity.author, 'curate').ok) return post;
     throw new Error(action === 'edit' ? 'only its author can edit a post' : `only its author${space ? ` or the ${space.kind === 'community' ? 'moderators' : 'maintainers'}` : ''} can delete a post`);
   }
 
@@ -3727,7 +3729,7 @@ export class WeaveNode implements Backend {
     const out: Admission[] = [];
     for (const project of projects) {
       const state = this.#state(project);
-      if (!state.maintainers.has(this.identity.author)) continue;
+      if (!mayDo(state, this.identity.author, 'group').ok) continue;
       for (const change of this.#changes(project, state)) out.push(change);
     }
     return out;
@@ -3742,7 +3744,7 @@ export class WeaveNode implements Backend {
     if (input.always) {
       for (const other of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
         const otherState = this.#state(other);
-        if (otherState.maintainers.has(this.identity.author) && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
+        if (mayDo(otherState, this.identity.author, 'group').ok && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
           this.replica.write(this.identity, sealFor(this.#managed.cipher(other), { kind: KIND_RULE, body: { group: group.id, auto: true } }));
         }
       }
@@ -3814,7 +3816,7 @@ export class WeaveNode implements Backend {
       for (const change of this.#changes(project, state)) {
         if (!state.groups.get(change.group.id)?.auto) continue;
         if (change.change === 'join') joins.set(change.group.id, [...(joins.get(change.group.id) ?? []), change.did]);
-        else if (state.maintainers.has(this.identity.author)) {
+        else if (mayDo(state, this.identity.author, 'remove').ok) {
           await this.removeMember(project.id, change.did);
           changed++;
         }
@@ -4483,7 +4485,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(project);
     const lines = new Map<string, AppManifest>();
     for (const e of this.#entries(project)) {
-      if (e.kind !== KIND_APP || !state.maintainers.has(e.event.author)) continue;
+      if (e.kind !== KIND_APP || !mayDo(state, e.event.author, 'curate').ok) continue;
       try {
         const m = parseManifest(e.body);
         lines.set(m.app, m);
@@ -5442,7 +5444,7 @@ export class WeaveNode implements Backend {
       if (!s.project) return [s];
       const project = this.#spaces.get(s.project.id);
       if (project?.kind !== 'project') return [{ ...s, project: { ...s.project, checked: false } }];
-      if (this.#state(project).maintainers.has(s.issuer)) return [{ ...s, project: { id: project.id, name: project.name, checked: true } }];
+      if (mayDo(this.#state(project), s.issuer, 'curate').ok) return [{ ...s, project: { id: project.id, name: project.name, checked: true } }];
       claimed.add(s.id);
       return [];
     });
@@ -5540,7 +5542,7 @@ export class WeaveNode implements Backend {
     }
     const announced = this.#treasuries();
     for (const space of this.#spaces.values()) {
-      if ((space.kind !== 'project' && space.kind !== 'community') || !this.#state(space).maintainers.has(this.identity.author) || !announced.has(space.id)) continue;
+      if ((space.kind !== 'project' && space.kind !== 'community') || !mayDo(this.#state(space), this.identity.author, 'curate').ok || !announced.has(space.id)) continue;
       await this.announceTreasury(space.id).catch(() => undefined);
     }
   }
@@ -5684,7 +5686,7 @@ export class WeaveNode implements Backend {
   /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
   #manages(spaceId: string, did: Did): boolean {
     const space = this.#spaces.get(spaceId);
-    return !!space && canManage(this.#state(space), did);
+    return !!space && mayDo(this.#state(space), did, 'manage').ok;
   }
 
   async label(input: { target: string; label: 'endorse' | 'block' | ''; reason?: string }): Promise<LabelInfo | undefined> {
@@ -6314,7 +6316,7 @@ export class WeaveNode implements Backend {
     const message = this.#find(input.message, [KIND_MSG, KIND_REPLY]);
     const space = message.space && this.#spaces.get(message.space.id);
     const mine = message.event.author === this.identity.author;
-    if (!mine && !(space && space.kind !== 'direct' && this.#state(space).maintainers.has(this.identity.author)))
+    if (!mine && !(space && mayDo(this.#state(space), this.identity.author, 'curate').ok))
       throw new Error(`only its author${space && space.kind !== 'direct' ? ` or the ${space.kind === 'community' ? 'moderators' : space.kind === 'project' ? 'maintainers' : 'owner'}` : ''} can delete a message`);
     await this.publish({ kind: KIND_POST_DELETE, body: { target: message.id }, space: space?.id, as: input.as });
   }
@@ -6658,7 +6660,7 @@ export class WeaveNode implements Backend {
 
   #maintainerState(project: StoredSpace): SpaceState {
     const state = this.#state(project);
-    if (!state.maintainers.has(this.identity.author)) throw new Error(`only ${project.kind === 'community' ? 'moderators' : 'maintainers'} of ${project.name} can do that`);
+    if (!mayDo(state, this.identity.author, 'curate').ok) throw new Error(`only ${project.kind === 'community' ? 'moderators' : 'maintainers'} of ${project.name} can do that`);
     return state;
   }
 
@@ -6912,7 +6914,7 @@ export class WeaveNode implements Backend {
   async setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
-    if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} puts it on hold`);
+    if (!mayDo(state, this.identity.author, 'own').ok) throw new Error(`only the owner of ${space.name} puts it on hold`);
     if (Number.isNaN(Date.parse(input.until))) throw new Error('until is a date, e.g. 2027-12-31');
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HOLD, body: { until: new Date(input.until).toISOString(), reason: input.reason ?? '' } }));
     return this.#spaceInfo(space);
@@ -6930,7 +6932,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) {
       if (space.founder !== this.identity.author || this.#directs.has(space.id)) continue;
       const state = this.#state(space);
-      if (state.founder !== this.identity.author) continue;
+      if (!mayDo(state, this.identity.author, 'own').ok) continue;
       for (const pair of state.unsettled ?? []) {
         this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SETTLE, body: pair }));
         settled++;
@@ -6949,7 +6951,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) {
       if (this.#directs.has(space.id)) continue;
       const state = this.#state(space);
-      if (!canManage(state, this.identity.author) || !state.removed.size) continue;
+      if (!mayDo(state, this.identity.author, 'manage').ok || !state.removed.size) continue;
       for (const did of state.removed.keys()) {
         if (state.left.has(did) || state.members.has(did)) continue;
         const signers = this.replica.signers().filter((s) => this.replica.authority.personOf(s) === did);
@@ -7290,7 +7292,7 @@ export class WeaveNode implements Backend {
   #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
     if (!dids.length) return;
     // Letting them in would need a new key we can't give: someone who manages the project does it.
-    if (!canManage(this.#state(project), this.identity.author) && this.#needsFreshKey(project)) return;
+    if (!mayDo(this.#state(project), this.identity.author, 'manage').ok && this.#needsFreshKey(project)) return;
     for (const member of dids) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
     this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
@@ -7323,7 +7325,7 @@ export class WeaveNode implements Backend {
     if (canonicalKind(event.kind) === KIND_REKEY) {
       const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
       // Judged by whether its author managed the space when they made it, not today (a member back after a handover still takes it).
-      if (!space || !rekeyCounts(this.#state(space), event)) return;
+      if (!space || !mayDoAt(this.#state(space), event, 'manage').ok) return;
       const opened = this.#tryOpen((me) => openRekey(event, me));
       if (!opened || space.shredded?.includes(opened.epoch)) return;
       const epoch = String(opened.epoch);
@@ -7337,7 +7339,7 @@ export class WeaveNode implements Backend {
       // Two managers rekeyed at once: keep every key of the epoch, and all seal with the one from the rekey with the lowest id.
       const state = this.#state(space);
       const all = this.replica
-        .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && rekeyCounts(state, e))
+        .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && mayDoAt(state, e, 'manage').ok)
         .flatMap((e) => {
           const o = this.#tryOpen((me) => openRekey(e, me));
           return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key, author: e.author }] : [];
@@ -7440,7 +7442,7 @@ export class WeaveNode implements Backend {
   #page(project: StoredSpace, state: SpaceState): ProjectPage {
     let page = DEFAULT_PAGE;
     for (const d of this.#decodeAll()) {
-      if (d.space?.id !== project.id || d.inner.kind !== KIND_PAGE || !state.maintainers.has(d.event.author)) continue;
+      if (d.space?.id !== project.id || d.inner.kind !== KIND_PAGE || !mayDo(state, d.event.author, 'curate').ok) continue;
       const body = (d.inner.body ?? {}) as Record<string, unknown>;
       const text = (key: string, max: number) => (typeof body[key] === 'string' ? (body[key] as string).slice(0, max) : undefined);
       // Pages from before titles and bodies had only a description: it becomes the body.
@@ -7506,7 +7508,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('a direct chat has no photo');
     const state = this.#state(space);
-    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only those who run ${space.name} set its photo`);
+    if (!mayDo(state, this.identity.author, 'curate').ok) throw new Error(`only those who run ${space.name} set its photo`);
     if (input.as) this.#agentMay(input.as, KIND_SPACE_PHOTO);
     for (const image of [input.photo, input.background]) if (image && !parseBlobRef(image)) throw new Error('a photo or background is an uploaded image (a wblob: reference)');
     if (input.banner !== undefined && input.banner.trim().length > 40) throw tooLong('The banner', input.banner.trim().length, 40);
@@ -7645,7 +7647,7 @@ export class WeaveNode implements Backend {
 
   /** Who manages a space's rules: its maintainers or moderators, and its owner. */
   #managers(state: SpaceState): Set<Did> {
-    return new Set([...state.maintainers, state.founder]);
+    return managersOf(state);
   }
 
   /** Per post, what goes with it: its last activity (edits, chat, upvotes, keep), its size, and the events to forget with it. */
@@ -7736,7 +7738,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     if (space.kind !== 'project' && space.kind !== 'community') throw new Error('rules for forgetting are for the boards of projects and communities');
     const state = this.#state(space);
-    if (!this.#managers(state).has(this.identity.author)) throw new Error(`only the ${space.kind === 'project' ? 'maintainers' : 'moderators'} of ${space.name} set how long posts stay`);
+    if (!mayDo(state, this.identity.author, 'curate').ok) throw new Error(`only the ${space.kind === 'project' ? 'maintainers' : 'moderators'} of ${space.name} set how long posts stay`);
     const board = this.#board(space, this.#spacePosts(space).boards, input.board);
     const valid = (v: number | null | undefined, max: number, what: string) => {
       if (v === undefined || v === null) return null;
@@ -7755,7 +7757,7 @@ export class WeaveNode implements Backend {
     const space = this.#space(input.space);
     if (space.kind === 'direct') throw new Error('a direct chat has nobody who manages it: there is nothing to shred');
     const state = this.#state(space);
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} shred its old keys`);
+    if (!mayDo(state, this.identity.author, 'manage').ok) throw new Error(`only those who manage ${space.name} shred its old keys`);
     if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: nothing is shredded`);
     const before = Date.parse(input.before);
     if (Number.isNaN(before)) throw new Error('before is a date, e.g. 2026-09-01');
@@ -7822,7 +7824,7 @@ export class WeaveNode implements Backend {
     for (const space of [...this.#spaces.values()]) {
       const state = this.#state(space);
       for (const d of this.#decodedIn(space.id)) {
-        if (d.inner.kind !== KIND_SHRED || d.carried || !canManage(state, d.event.author)) continue;
+        if (d.inner.kind !== KIND_SHRED || d.carried || !mayDo(state, d.event.author, 'manage').ok) continue;
         const epochs = (d.inner.body as { epochs?: unknown } | null)?.epochs;
         if (!Array.isArray(epochs)) continue;
         // A company's minimum keeps recent keys, whoever asks to shred them.
@@ -7879,7 +7881,7 @@ export class WeaveNode implements Backend {
     const post = await this.post(target);
     const space = post.space && this.#spaces.get(post.space.id);
     if (!space) throw new Error('only posts of projects and communities are forgotten');
-    if (post.by.did !== this.identity.author && !this.#managers(this.#state(space)).has(this.identity.author)) throw new Error('its author keeps a post, or those who manage the space');
+    if (post.by.did !== this.identity.author && !mayDo(this.#state(space), this.identity.author, 'curate').ok) throw new Error('its author keeps a post, or those who manage the space');
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_POST_KEEP, body: { target: post.id } }));
     return this.post(post.id);
   }
@@ -8440,7 +8442,7 @@ export class WeaveNode implements Backend {
     let access = this.#access(project, state, entries);
     if (!access.rules.size) return 0;
     let changed = 0;
-    if (state.maintainers.has(me)) {
+    if (mayDo(state, me, 'curate').ok) {
       const groups = new Set([...access.rules.values()].flatMap((r) => [...(r.read ?? []), ...(r.write ?? [])]).flatMap((g) => ('group' in g ? [g.group] : [])));
       for (const id of groups) {
         const group = this.#spaces.get(id);
@@ -8471,13 +8473,13 @@ export class WeaveNode implements Backend {
         changed++;
       };
       if (!epochs?.size) {
-        if (state.maintainers.has(me) && !Object.keys(mine).length) newKey(0);
+        if (mayDo(state, me, 'curate').ok && !Object.keys(mine).length) newKey(0);
         continue;
       }
       const latest = Math.max(...epochs.keys());
       if (!mine[String(latest)]) continue; // the newest key hasn't reached us yet
       // Someone who may no longer read holds the current key: maintainers start a new one.
-      if (state.maintainers.has(me) && [...epochs.get(latest)!].some((did) => !readers.includes(did))) newKey(latest + 1);
+      if (mayDo(state, me, 'curate').ok && [...epochs.get(latest)!].some((did) => !readers.includes(did))) newKey(latest + 1);
       // Readers get every key we hold that they lack, older ones too, so they can read the board's history.
       for (const [epoch, holding] of epochs) {
         const key = mine[String(epoch)];
