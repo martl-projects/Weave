@@ -1,45 +1,23 @@
 import {
-  accessOf,
-  managersOf,
   mayDo,
   mayDoAt,
   b64u,
   attachmentOf,
-  boardKeyFor,
-  boardOfEvents,
-  boardOfInner,
   decodeKnock,
   encodeKnock,
   inviteRightsOf,
   isKnockLink,
-  keyHolders,
-  KIND_BOARD_KEY,
-  KIND_BOARD_SEALED,
   KIND_KNOCK,
   KIND_KNOCK_HANDLED,
   KIND_KNOCK_PENDING,
   KIND_CLOSE,
   KIND_HISTORY,
-  boardRulesOf,
-  lifetimeOf,
-  overBudget,
-  type BoardRule,
-  KIND_CARRY,
-  KIND_SETTLE,
   joinProof,
   inviteKeys,
   type RevokedHead,
-  canonicalJson,
-  verifyEventV2,
-  isWellFormedV2,
-  innerHash,
-  KIND_SHRED,
-  KIND_MANAGED,
-  KIND_KMS,
   KIND_AGENT_APPROVE,
   KIND_VISITORS,
   parseVisitorRule,
-  visitorCounts,
   type VisitorRule,
   KIND_ORG_FREEZE,
   KIND_ORG_POLICY,
@@ -49,42 +27,25 @@ import {
   openBox,
   type Box,
   HISTORIES,
-  epochsToShare,
   type HistorySetting,
   KIND_HANDOVER,
   KIND_LEAVE,
-  KIND_ROSTER,
   knockFor,
-  mayUse,
-  newBoardKey,
-  openBoard,
-  openBoardKey,
   openKnock,
-  readersOf,
-  sealForBoard,
-  type Access,
   type BoardRight,
   createSubKey,
-  parseBlobRef,
-  boardName,
-  boardsOf,
   canonicalKind,
   classOf,
-  currentEpoch,
   decodeInvite,
   isInviteLink,
   peekInvite,
   peekKnock,
-  directSpace,
   delegation,
-  EDGE_KINDS,
   encodeContact,
   encodeInvite,
   findRecoveryIndex,
-  friendsOf,
   gift,
   isDid,
-  issuesOf,
   inception,
   KIND_ADMIT,
   KIND_APP,
@@ -97,15 +58,10 @@ import {
   KIND_INVITE_CLOSE,
   KIND_ISSUE,
   KIND_JOIN,
-  KIND_MAINTAINER,
-  KIND_MEMBERSHIP_PENDING,
   KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
   KIND_POST,
-  coauthorsOf,
-  type SessionStamp,
   postTargetOf,
-  postUrl,
   shortPrefixes,
   type PostTarget,
   KIND_PROJECT_GROUP,
@@ -114,7 +70,6 @@ import {
   KIND_REMOVE,
   KIND_REPLY,
   KIND_RULE,
-  KIND_SAVE,
   KIND_SEALED,
   KIND_SPACE_CREATE,
   KIND_THREAD,
@@ -125,18 +80,12 @@ import {
   KIND_OFFICIAL,
   messagesOf,
   newRecoveryWords,
-  newSpace,
   normalizeWords,
   open,
-  openGift,
-  openIn,
-  openRekey,
   parseManifest,
   type RoomPages,
   parseScope,
   permits,
-  postsOf,
-  proposalsOf,
   randomBytes,
   recoveryEncryptionKey,
   recoveryIdentity,
@@ -145,48 +94,26 @@ import {
   revocation,
   rotation,
   Replica,
-  savesOf,
-  scoresOf,
   seal,
   sealFor,
-  selfKey,
-  socialGraph,
   spaceScope,
-  spaceState,
   spaceTopics,
   visibleIn,
   type AppSetting,
-  type Board,
-  type Member,
   type Did,
-  type EdgeEvent,
-  type Entry,
   type EventFields,
   type Inner,
   type Recipient,
-  type Invite,
-  type Issue,
   type Json,
-  type Message,
-  type Post,
-  type Proposal,
-  type Reaction,
-  type Reply,
-  type SaveMode,
-  type Score,
   type Sealed,
   type SigningIdentity,
-  type SpaceKeys,
   type SpaceKind,
   type SpaceState,
-  type Thread,
   type KeyPair,
   type WeaveEvent,
   type WeaveRecord,
   eventId,
   recordOfV1,
-  recordOfV2,
-  canonicalIdV2,
   isWireItemV2,
   type WireItemV2,
   signEventV2,
@@ -195,7 +122,6 @@ import {
   type LogStore,
   checkTextFields,
   KEY_KINDS,
-  tooLong,
   SERVICE_PREFIX,
   type ServiceContract,
   type Builtin,
@@ -207,11 +133,9 @@ import {
 } from '@weave/core';
 import { WeaveError } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
-import { SwarmNode, type HeldSpace, type SpaceAccess } from '@weave/net';
+import { SwarmNode, type SpaceAccess } from '@weave/net';
 import {
-  PROJECT_STATUSES,
   noAgentError,
-  type Actor,
   type Admission,
   type AgentInfo,
   type Backend,
@@ -223,26 +147,17 @@ import {
   type IdentityInfo,
   type KeyInfo,
   type FeedQuery,
-  type HomeSource,
   type InviteLook,
   type InviteOptions,
   type KnockInfo,
-  type IssueInfo,
   type MemberInfo,
-  type MessageInfo,
   type Person,
   type Notice,
   type PostInfo,
   type ProjectInfo,
   type ProjectPage,
-  type ProjectStatus,
-  type ProposalInfo,
   type PublishInput,
-  type ReactionInfo,
-  type ReplyInfo,
   type SpaceInfo,
-  type SpaceRef,
-  type ThreadInfo,
   type Whoami,
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
@@ -295,7 +210,7 @@ import { Hints, type HeldNotice } from './hints.ts';
 import { RemoteAccess } from './remote.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { ManagedKeys, type ManagedCore } from './managed.ts';
-import { CARRIED_STATE, KIND_NODE_INDEX, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
+import { KIND_NODE_INDEX } from './shared.ts';
 import { Companies, KIND_GENERATION, type CompaniesCore } from './companies.ts';
 import { Payments, type PaymentsCore } from './payments.ts';
 import { Holding, type HoldingCore } from './holding.ts';
@@ -304,6 +219,7 @@ import { Sessions, type SessionsCore } from './sessions.ts';
 import { Content, type ContentCore } from './content.ts';
 import { People, type PeopleCore } from './people.ts';
 import { Apps, type AppsCore } from './apps.ts';
+import { Kernel, type KernelCore } from './kernel.ts';
 
 
 export const KIND_PROFILE = 'weave.profile';
@@ -438,7 +354,7 @@ export interface Decoded {
 }
 
 /** The order replica.events() returns: claimed time, then signer, then seq. */
-const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
+export const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
 
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
@@ -484,11 +400,11 @@ export const carriedItem = (d: { id: string; event: { author: Did; signer: Did; 
 });
 
 /** Who stands where on a space's group photo: people's keys, each once, front row first (at most 100). */
-const photoOrderOf = (value: unknown): Did[] =>
+export const photoOrderOf = (value: unknown): Did[] =>
   Array.isArray(value) ? [...new Set(value.filter((d): d is Did => typeof d === 'string' && /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(d)))].slice(0, 100) : [];
 
 /** How each one poses on a space's group photo: their key → a pose's or a scene's id (what they mean is Weave avatar's). */
-const photoPosesOf = (value: unknown): Record<Did, string> =>
+export const photoPosesOf = (value: unknown): Record<Did, string> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? Object.fromEntries(
         Object.entries(value)
@@ -497,7 +413,7 @@ const photoPosesOf = (value: unknown): Record<Did, string> =>
       )
     : {};
 
-const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
+export const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
 
 
 
@@ -1017,6 +933,8 @@ export class WeaveNode implements Backend {
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
   /** The company key service: halves, unlocking, sealing and opening with both halves (managed.ts). */
+  /** The kernel: spaces, keys, decoding, state, the reading layer, board access (kernel.ts). Built first: the modules bind to it. */
+  #kernel: Kernel = new Kernel(this, WeaveNode.kernelCore(this));
   #managed: ManagedKeys = new ManagedKeys(this, WeaveNode.managedCore(this));
   /** Money: tiers, badges, treasuries, Safes, wallets and tickets (payments.ts). */
   #payments: Payments = new Payments(this, WeaveNode.paymentsCore(this));
@@ -1042,32 +960,20 @@ export class WeaveNode implements Backend {
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
   #marks: Marks = new Marks(WeaveNode.servicesHost(this));
   #hints: Hints = new Hints(WeaveNode.servicesHost(this), (since) => this.#heldNotices(since));
-  /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
-  #decoded?: Decoded[];
-  /** Bumped whenever the decoded events change (an event added, or a rebuild): what caches of them key on. */
-  #decodedRevision = 0;
-  /** Bumped when everything is decoded again; per-space caches from before don't count then. */
-  #decodedGeneration = 0;
-  /** The decoded events of each space, in replica order, kept with #decoded. */
-  #bySpace = new Map<string, Decoded[]>();
-  /** Bumped when an event of that space is added. */
-  #spaceRevision = new Map<string, number>();
-  /** Each person's own valid events (see #eventsOf), until they write again or keys change. */
-  #personEvents = new Map<Did, WeaveRecord[]>();
-  /** Results computed from all decoded events, valid until the decoded events change. */
-  #memos = new Map<string, { revision: number; value: unknown }>();
-  /** Bumped when a control event of that space is added (members, roles, keys, rules): all that its state depends on. */
-  #controlRevision = new Map<string, number>();
-  /** Each space's state, valid while generation and control revision hold: chat and posts leave it alone. */
-  #stateCache = new Map<string, { key: string; state: SpaceState }>();
-  /** Entries and access of each space, valid while generation and space revision hold. */
-  #spaceCache = new Map<string, { key: string; entries?: Entry[]; access?: Access; accessFor?: SpaceState }>();
-  /** Direct chats, derived (never stored) for everyone whose log this node holds: space id → space and the other person. */
-  #directs = new Map<string, { space: StoredSpace; peer: Did }>();
-  #directByPeer = new Map<Did, StoredSpace>();
-  #contactCache?: { from: number; map: Map<Did, string | undefined> };
-  /** Board-key events already looked at, so each box is tried once. */
-  #boardKeysSeen = new Set<string>();
+  // Kernel (kernel.ts): the node delegates.
+
+  sessionAccess(...args: Parameters<Kernel['sessionAccess']>): ReturnType<Kernel['sessionAccess']> {
+    return this.#kernel.sessionAccess(...args);
+  }
+
+  setSpacePhoto(...args: Parameters<Kernel['setSpacePhoto']>): ReturnType<Kernel['setSpacePhoto']> {
+    return this.#kernel.setSpacePhoto(...args);
+  }
+
+  _decodedIds(...args: Parameters<Kernel['_decodedIds']>): ReturnType<Kernel['_decodedIds']> {
+    return this.#kernel._decodedIds(...args);
+  }
+
 
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
@@ -1093,7 +999,7 @@ export class WeaveNode implements Backend {
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
-    for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
+    for (const event of this.replica.events(isKeys)) this.#kernel.takeKeys(event);
     this.replica.admit = this.#holding.admit;
     this.replica.onAppend((event) => {
       if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#companies.seeGeneration(event);
@@ -1101,16 +1007,16 @@ export class WeaveNode implements Backend {
       if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
       const kept = scoped ? this.#managed.rawCache.get(scoped) : undefined;
-      const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
+      const space = scoped ? (this.#spaces.get(scoped) ?? this.#kernel.directs.get(scoped)?.space) : undefined;
       // A company half or setting arriving changes which key opens what: decode again.
-      if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#decoded = undefined;
-      if (isKeys(event)) this.#takeKeys(event);
-      this.#decodedAdd(event);
+      if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#kernel.invalidateDecoded();
+      if (isKeys(event)) this.#kernel.takeKeys(event);
+      this.#kernel.decodedAdd(event);
       // A new encryption key (mine or a peer's) adds an epoch to direct chats.
       if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
-      if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
-      if (event.kind === KIND_ORG_FREEZE) this.#decoded = undefined;
+      if (KEY_KINDS.has(event.kind)) this.#kernel.personEvents.clear();
+      if (event.kind === KIND_ORG_FREEZE) this.#kernel.invalidateDecoded();
       if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
       else this.#personEventsAdd(event);
     });
@@ -1328,7 +1234,7 @@ export class WeaveNode implements Backend {
       await node.close();
       throw new Error("the answer doesn't vouch for this node's key: link it again");
     }
-    for (const space of payload.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#addSpace({ ...space, entry: { topics: [person], bootstrap: [] } });
+    for (const space of payload.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#kernel.addSpace({ ...space, entry: { topics: [person], bootstrap: [] } });
     await node.join(person);
     rmSync(file, { force: true });
     return node;
@@ -1342,8 +1248,8 @@ export class WeaveNode implements Backend {
   /** Our spaces for our always-on nodes: all but direct chats, with their keys. */
   #nodeSpaces(): unknown[] {
     return [...this.#spaces.values()]
-      .filter((s) => s.kind !== 'direct' && !this.#directs.has(s.id))
-      .map((s) => ({ ...this.#keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
+      .filter((s) => s.kind !== 'direct' && !this.#kernel.directs.has(s.id))
+      .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
   }
 
   /** Written by our devices while we have always-on nodes: every space of ours they should keep and host. When it changes. */
@@ -1355,7 +1261,7 @@ export class WeaveNode implements Backend {
     const body = { spaces: this.#nodeSpaces() };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (!force && hash === this.#nodeIndexHash) return 0;
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
+    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
     this.#nodeIndexHash = hash;
     return 1;
   }
@@ -1395,7 +1301,7 @@ export class WeaveNode implements Backend {
       for (const topic of this.#meetingTopics(space)) topics.add(topic);
       for (const topic of space.entry.topics) topics.add(topic);
     }
-    for (const friend of this.#friends()) for (const topic of spaceTopics(this.#direct(friend), 0)) topics.add(topic);
+    for (const friend of this.#kernel.friends()) for (const topic of spaceTopics(this.#kernel.direct(friend), 0)) topics.add(topic);
     return [...topics];
   }
 
@@ -1406,7 +1312,7 @@ export class WeaveNode implements Backend {
    * who left finds them past the key that followed.
    */
   #meetingTopics(space: StoredSpace): string[] {
-    const state = this.#state(space);
+    const state = this.#kernel.state(space);
     const gone = [...state.removed];
     if (space.kind === 'direct' || !gone.length) return spaceTopics(space, 0);
     const scope = spaceScope(space);
@@ -1512,10 +1418,10 @@ export class WeaveNode implements Backend {
       if (problem) throw new Error(problem);
     }
     let inner: Inner = { kind: input.kind, body: input.body ?? null };
-    const space = input.space ? this.#space(input.space) : undefined;
-    if (space && space.kind !== 'direct' && this.#state(space).closed) throw new WeaveError('daemon.space.closed', { space: space.name }, `${space.name} is closed: it's kept as it is, read-only`);
-    if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
-    if (space?.kind === 'project') inner = this.#forBoard(space, inner);
+    const space = input.space ? this.#kernel.space(input.space) : undefined;
+    if (space && space.kind !== 'direct' && this.#kernel.state(space).closed) throw new WeaveError('daemon.space.closed', { space: space.name }, `${space.name} is closed: it's kept as it is, read-only`);
+    if (space && input.as) this.#kernel.visitorMay(space, signer.did, input.as, input.kind);
+    if (space?.kind === 'project') inner = this.#kernel.forBoard(space, inner);
     const fields: EventFields = space ? sealFor(await this.#managed.cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
     return this.itemFor(event)!;
@@ -1530,23 +1436,23 @@ export class WeaveNode implements Backend {
 
   async feed(query: FeedQuery = {}): Promise<FeedItem[]> {
     const kinds = query.kinds?.length ? new Set(query.kinds) : undefined;
-    const onlySpace = query.space ? this.#space(query.space) : undefined;
+    const onlySpace = query.space ? this.#kernel.space(query.space) : undefined;
     const onlyAuthor = query.author ? this.resolve(query.author) : undefined;
-    const hidden = this.#hiddenAuthors();
+    const hidden = this.#kernel.hiddenAuthors();
     const states = new Map<string, SpaceState>();
 
     const items: FeedItem[] = [];
-    for (const decoded of this.#decodeAll()) {
+    for (const decoded of this.#kernel.decodeAll()) {
       if (onlySpace && decoded.space?.id !== onlySpace.id) continue;
       if (onlyAuthor && decoded.event.author !== onlyAuthor) continue;
       if (query.publicOnly && (decoded.space || decoded.private)) continue;
       if (kinds && !kinds.has(decoded.inner.kind)) continue;
       if (hidden.has(decoded.event.author)) continue;
       if (decoded.space) {
-        if (!states.has(decoded.space.id)) states.set(decoded.space.id, this.#state(decoded.space));
-        if (!this.#mine(decoded.event) && !visibleIn(states.get(decoded.space.id)!, decoded.event, decoded.inner)) continue;
+        if (!states.has(decoded.space.id)) states.set(decoded.space.id, this.#kernel.state(decoded.space));
+        if (!this.#kernel.mine(decoded.event) && !visibleIn(states.get(decoded.space.id)!, decoded.event, decoded.inner)) continue;
       }
-      items.push(this.#toItem(decoded));
+      items.push(this.#kernel.toItem(decoded));
     }
     return items.slice(-(query.limit ?? 50));
   }
@@ -1554,24 +1460,24 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- groups and projects
 
   async spaces(kind?: SpaceKind): Promise<SpaceInfo[]> {
-    return [...this.#spaces.values()].filter((s) => !kind || s.kind === kind).map((s) => this.#spaceInfo(s));
+    return [...this.#spaces.values()].filter((s) => !kind || s.kind === kind).map((s) => this.#kernel.spaceInfo(s));
   }
 
   async createGroup(name: string): Promise<SpaceInfo> {
-    return this.#spaceInfo(await this.#createSpace('group', name));
+    return this.#kernel.spaceInfo(await this.#kernel.createSpace('group', name));
   }
 
   async createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo> {
     // An agent counts as its person: it may start a project for them, which is theirs, never its own.
     if (input.as) this.#agentMay(input.as, KIND_SPACE_CREATE);
-    const project = await this.#createSpace('project', input.name);
+    const project = await this.#kernel.createSpace('project', input.name);
     if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
     return this.project(project.id);
   }
 
   async invite(ref: string, hours = 24 * 7, options: InviteOptions = {}): Promise<string> {
-    const space = this.#space(ref);
-    const state = this.#state(space);
+    const space = this.#kernel.space(ref);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.invite.direct', undefined, 'a direct chat is between two people; start a group to talk with more');
     if (state.closed) throw new WeaveError('daemon.invite.closed', { space: space.name }, `${space.name} is closed`);
     if (state.tier && !mayDo(state, this.identity.author, 'invite').ok) {
@@ -1581,14 +1487,14 @@ export class WeaveNode implements Backend {
         : new WeaveError('daemon.invite.founder.only.unknown', { space: space.name }, `only its creator lets people into ${space.name}`);
     }
     // Our own new space, before its creation is folded in, is ours to invite to.
-    const allowed = mayDo(state, this.identity.author, 'invite').ok || (space.kind !== 'project' && this.#mineFounder(space));
+    const allowed = mayDo(state, this.identity.author, 'invite').ok || (space.kind !== 'project' && this.#kernel.mineFounder(space));
     if (!allowed)
       throw space.kind === 'project'
         ? new WeaveError('daemon.invite.maintainers.only', undefined, 'only maintainers can invite people into a project')
         : new WeaveError('daemon.invite.not.member', { space: space.name }, `you are not a member of ${space.name}`);
     if (options.access?.length && space.kind !== 'project') throw new WeaveError('daemon.invite.board.rights', undefined, 'board rights are for projects');
-    const boards = space.kind === 'project' ? this.#spacePosts(space).boards : [];
-    const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
+    const boards = space.kind === 'project' ? this.#kernel.spacePosts(space).boards : [];
+    const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#kernel.board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
     // The space reads the link's public key as its id; the link keeps the secret one (inviteKeys).
     const { invite, key } = inviteKeys();
     const expires = new Date(Date.now() + hours * 3600_000).toISOString();
@@ -1604,18 +1510,18 @@ export class WeaveNode implements Backend {
         inviter: this.identity.author,
         enc: this.#encryptionKeyOf(this.identity.author),
         expires,
-        entry: this.#entryPoint(),
+        entry: this.#kernel.entryPoint(),
       });
     }
-    const boardKeys = this.#boardKeysFor(space, access);
-    return encodeInvite({ v: 2, space: this.#keysForNewcomers(space), invite, key, inviter: this.identity.author, expires, entry: this.#entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+    const boardKeys = this.#kernel.boardKeysFor(space, access);
+    return encodeInvite({ v: 2, space: this.#kernel.keysForNewcomers(space), invite, key, inviter: this.identity.author, expires, entry: this.#kernel.entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
   }
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
     if (isKnockLink(text)) return this.#knock(text, note ?? '');
     const { space, invite, proof } = await this.#takeInvite(text);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
   async lookAtInvite(text: string): Promise<InviteLook> {
@@ -1632,13 +1538,13 @@ export class WeaveNode implements Backend {
     const held = this.#spaces.get(parsed.space.id);
     const look: InviteLook = {
       kind: knock ? 'knock' : 'invite',
-      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
+      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#kernel.spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
       inviter: { did: parsed.inviter, ...(this.nameOf(parsed.inviter) ? { name: this.nameOf(parsed.inviter) } : {}) },
       expires: parsed.expires,
       boards: Object.keys(parsed.boards ?? {}),
       standing: 'open',
     };
-    const state = held ? this.#state(held) : undefined;
+    const state = held ? this.#kernel.state(held) : undefined;
     if (parsed.inviter === me) return { ...look, standing: 'mine', ...(state ? { members: state.members.size } : {}) };
     // In already: we hold its keys and weren't removed (a join written here counts before the invite it cites has synced).
     // Removed and asked back with a new link: open, as #takeInvite takes it.
@@ -1657,19 +1563,19 @@ export class WeaveNode implements Backend {
     const held = this.#spaces.get(invite.space.id);
     if (held) {
       // Removed, and asked back with a new link (_Ak3UUmp): the space as it is now, keys added to the ones we kept.
-      const state = this.#state(held);
+      const state = this.#kernel.state(held);
       if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new WeaveError('daemon.join.already', { space: invite.space.name }, `you are already in ${invite.space.name}`);
       for (const [epoch, key] of Object.entries(invite.space.keys)) if (!held.keys[epoch]) held.keys[epoch] = key;
       held.via = invite.inviter;
       if (invite.boards) for (const [board, epochs] of Object.entries(invite.boards)) held.boards = { ...held.boards, [board]: { ...held.boards?.[board], ...epochs } };
-      this.#saveSpace(held);
+      this.#kernel.saveSpace(held);
       return { space: held, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(held), this.identity.author) } : {}) };
     }
     const inside = this.#companies.insideOnly(invite.space.founder);
     if (inside) throw new Error(inside);
-    this.#adoptBootstrap(invite.entry);
+    this.#kernel.adoptBootstrap(invite.entry);
     const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
-    await this.#addSpace(space);
+    await this.#kernel.addSpace(space);
     return { space, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(space), this.identity.author) } : {}) };
   }
 
@@ -1678,11 +1584,11 @@ export class WeaveNode implements Backend {
     const link = decodeKnock(text);
     if (this.#spaces.has(link.space.id)) throw new WeaveError('daemon.join.already', { space: link.space.name }, `you are already in ${link.space.name}`);
     if (link.inviter === this.identity.author) throw new WeaveError('daemon.join.own.link', undefined, "that's your own link");
-    this.#adoptBootstrap(link.entry);
+    this.#kernel.adoptBootstrap(link.entry);
     // The meeting point the link holds (links from before meeting points hold the inviter's DID instead).
     for (const topic of new Set(link.entry.topics)) await this.join(topic);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter, ...(link.entry.meet ? { meet: link.entry.meet } : {}) } }));
-    this.replica.write(this.identity, knockFor(link, note.trim(), this.#entryPoint()));
+    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter, ...(link.entry.meet ? { meet: link.entry.meet } : {}) } }));
+    this.replica.write(this.identity, knockFor(link, note.trim(), this.#kernel.entryPoint()));
     return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, history: 'all', waiting: true };
   }
 
@@ -1708,10 +1614,10 @@ export class WeaveNode implements Backend {
     if (input.accept) {
       const member = event.author;
       this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_ADMIT, body: { member, invite } }));
-      const boardKeys = this.#boardKeysFor(space, rights);
-      this.replica.write(this.identity, gift({ ...this.#keysForNewcomers(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
+      const boardKeys = this.#kernel.boardKeysFor(space, rights);
+      this.replica.write(this.identity, gift({ ...this.#kernel.keysForNewcomers(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#kernel.direct(member)), this.#kernel.entryPoint(), this.#encryptionKeyOf));
     }
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_KNOCK_HANDLED, body: { knock: id } }));
+    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_KNOCK_HANDLED, body: { knock: id } }));
   }
 
   /** Knocks with my live links that I haven't answered and whose senders aren't in yet. */
@@ -1724,9 +1630,9 @@ export class WeaveNode implements Backend {
       const opened = this.#tryOpen((me) => openKnock(event, me));
       const space = opened && this.#spaces.get(opened.space);
       if (!opened || !space) continue;
-      const state = this.#state(space);
+      const state = this.#kernel.state(space);
       if (state.members.has(event.author)) continue;
-      const entries = this.#entries(space);
+      const entries = this.#kernel.entries(space);
       const live = entries.some((e) => e.kind === KIND_INVITE && e.event.author === this.identity.author && (e.body as { invite?: unknown; expires?: unknown; accept?: unknown })?.invite === opened.invite && (e.body as { accept?: unknown }).accept === true && String((e.body as { expires?: unknown }).expires) >= new Date().toISOString());
       if (!live) continue;
       out.push({ id, event, space, invite: opened.invite, note: opened.note, rights: inviteRightsOf(entries, state).get(opened.invite) ?? [] });
@@ -1734,221 +1640,18 @@ export class WeaveNode implements Backend {
     return out.sort((x, y) => x.event.time.localeCompare(y.event.time));
   }
 
-  /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
-  #keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, ...keys } = space;
-    return keys;
-  }
-
-  /**
-   * A space's keys for newcomers, as its history setting allows: every epoch,
-   * those of the last 30 days, or (joining) a fresh one made for them. A `30d`
-   * space whose key is older than 30 days gets a new one first, so what
-   * newcomers read stays near 30 days. Rotating is for those who manage the
-   * space (only their new keys count).
-   */
-  /** Does letting someone in now need a fresh key, so they don't read what came before (history joining, or 30d with an older key)? */
-  #needsFreshKey(space: StoredSpace, state: SpaceState = this.#state(space)): boolean {
-    const history = state.history?.value ?? 'all';
-    const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
-    return history === 'joining' || (history === '30d' && start < new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString());
-  }
-
-  #keysForNewcomers(space: StoredSpace): SpaceKeys {
-    const state = this.#state(space);
-    const history = state.history?.value ?? 'all';
-    const starts = this.#epochStarts(space);
-    // Only a manager's new key counts for the others (T3a83nLy): when one is needed, nobody else lets people in, or they'd read it all.
-    const fresh = this.#needsFreshKey(space, state);
-    if (fresh && !mayDo(state, this.identity.author, 'manage').ok) {
-      throw new WeaveError('daemon.invite.needs.key', { space: space.name }, `${space.name} lets newcomers read only from when they come: only those who manage it let people in while that needs a new key`);
-    }
-    if (fresh) {
-      this.#rotateKey(space);
-      starts.set(currentEpoch(space), new Date().toISOString());
-    }
-    const keys = this.#keysOnly(space);
-    const share = new Set(epochsToShare(space, history, starts).map(String));
-    if (share.size < Object.keys(keys.keys).length) this.#carry(space, share);
-    return { ...keys, keys: Object.fromEntries(Object.entries(keys.keys).filter(([epoch]) => share.has(epoch))) };
-  }
-
-  /**
-   * Restate under the current key what newcomers need of the epochs they don't
-   * get: the space's control events (members, roles, boards, rules, keys of
-   * boards) and its latest state (page, app, channels, curation, theme), with
-   * their original ids, authors and times.
-   */
-  #carry(space: StoredSpace, shared: Set<string>): boolean {
-    const events = this.#decodedIn(space.id)
-      .filter((d) => (classOf(canonicalKind(d.inner.kind)) === 'control' || CARRIED_STATE.has(d.inner.kind)) && d.inner.kind !== KIND_CARRY && !d.board)
-      .filter((d) => !shared.has(String((d.event.body as { epoch?: unknown } | null)?.epoch ?? '')))
-      .map(carriedItem);
-    if (!events.length) return false;
-    // v: 3, its items carry their envelopes: checkable (or, from before protocol 3, vouched for by the founder).
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json, v: 3 } }));
-    return true;
-  }
-
-  /**
-   * Carries from before protocol 3 restate their events without envelopes, which nobody else takes any more: who came
-   * in through one never learns what came before, not even who founded the space, so its founder's messages don't
-   * show (Julian, 1.11.2026). The founder restates it all once more, in today's shape, under the current key, so
-   * everyone who read an old one reads the new one.
-   *
-   * Known limit: for an envelope from before protocol 3 the founder vouches for what it sealed, so they could claim
-   * any content for another author's old envelope (a control or carried-state kind, from before 30.10.2026). Who wrote
-   * it, with which key, as which number and when still holds (its signature); and a founder can do nearly anything in
-   * their space anyway.
-   */
-  #recarry(space: StoredSpace, state: SpaceState): number {
-    // Once settled for a space, settled for this run: our node writes only carries of today's shape from then on.
-    if (this.#recarried.has(space.id)) return 0;
-    if (space.kind === 'direct' || space.founder !== this.identity.author || (state.history?.value ?? 'all') === 'all') return 0;
-    const epochOf = (d: Decoded) => Number((d.event.body as { epoch?: unknown } | null)?.epoch);
-    // Our carries as written (the decoded views have them only as the events they restate).
-    const scope = spaceScope(space);
-    const carries = this.replica
-      .events((r) => r.scope === scope && r.author === this.identity.author && r.kind === KIND_SEALED)
-      .flatMap((r) => {
-        const d = this.#decode(r);
-        return d && d.inner.kind === KIND_CARRY ? [d] : [];
-      });
-    const old = carries.filter((d) => (d.inner.body as { v?: unknown } | null)?.v !== 3).map(epochOf).filter(Number.isSafeInteger);
-    const newest = old.length ? Math.max(...old) : -1;
-    if (!old.length || carries.some((d) => (d.inner.body as { v?: unknown } | null)?.v === 3 && epochOf(d) >= newest)) {
-      this.#recarried.add(space.id);
-      return 0;
-    }
-    const wrote = this.#carry(space, new Set([String(currentEpoch(space))]));
-    if (wrote) this.#recarried.add(space.id);
-    return wrote ? 1 : 0;
-  }
-
-  /** Spaces whose carries are of today's shape (see #recarry). */
-  #recarried = new Set<string>();
-
-  /**
-   * A carry becomes the events it restates, each checked against its original
-   * envelope: signed by its author's key, in this space, sealing exactly what
-   * the carry says (ih). Who wrote it and when come from that envelope, never
-   * from the carry. Items that can't be checked count only in our own private
-   * carries (`unchecked`): anyone else could make them up. One exception: an
-   * envelope from before protocol 3 (no inner hash), restated by the space's
-   * founder, who vouches for what it sealed.
-   */
-  #expandCarry(d: Decoded, space: StoredSpace | undefined = d.space as StoredSpace | undefined, unchecked = false): Decoded[] {
-    if (d.inner.kind !== KIND_CARRY || !space) return [];
-    const items = (d.inner.body as { events?: unknown } | null)?.events;
-    if (!Array.isArray(items)) return [];
-    const scope = spaceScope(space);
-    const out: Decoded[] = [];
-    for (const item of items as Array<Record<string, unknown>>) {
-      if (typeof item?.kind !== 'string') continue;
-      const inner = { kind: item.kind, body: (item.body ?? null) as Json };
-      const e = item.e;
-      // What the envelope signed: the inner itself, or for a read-limited board its sealed blob, which must open (board key) to exactly the inner.
-      const sealed = item.sealed as { kind?: unknown; body?: unknown } | undefined;
-      const signed = sealed && typeof sealed.kind === 'string' ? { kind: sealed.kind, body: (sealed.body ?? null) as Json } : inner;
-      const opened = signed === inner ? undefined : space.kind === 'project' ? openBoard(space, signed, space.boards) : undefined;
-      const opensTo = signed === inner || (!!opened && opened.kind === inner.kind && canonicalJson(opened.body) === canonicalJson(inner.body));
-      const checked = isWellFormedV2(e) && typeof item.salt === 'string' && e.kind === KIND_SEALED && e.space === scope && e.ih === innerHash({ ...signed, salt: item.salt }) && opensTo && verifyEventV2(e);
-      // An envelope from before protocol 3 signs no inner hash: what it sealed can't be checked against it. Its author,
-      // signer, number and time still can (its signature), and the space's founder vouches for the rest: in a space
-      // that lets newcomers read only from when they come, that's how they learn what came before (Julian, 1.11.2026).
-      const vouched = !checked && !sealed && isWellFormedV2(e) && e.ih === undefined && e.kind === KIND_SEALED && e.space === scope && d.event.author === space.founder && verifyEventV2(e);
-      if (checked || vouched) {
-        const id = canonicalIdV2(e);
-        if (!this.replica.authority.check(recordOfV2(id, e, undefined)).ok) continue;
-        const event: WeaveRecord = { ...d.event, id, author: e.author, signer: e.signer, seq: e.n, cseq: e.class === 'control' ? e.seq : undefined, cs: e.class === 'content' ? e.cs : undefined, time: e.time, body: null };
-        out.push({ id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
-        continue;
-      }
-      if (!unchecked || typeof item.id !== 'string' || !isDid(item.author) || !isDid(item.signer) || typeof item.time !== 'string' || !Number.isSafeInteger(item.seq)) continue;
-      const event: WeaveRecord = { ...d.event, id: item.id, author: item.author, signer: item.signer, seq: item.seq as number, cseq: undefined, cs: undefined, time: item.time, body: null };
-      out.push({ id: item.id, event, inner, space, carried: true, ...(d.board ? { board: d.board } : {}) });
-    }
-    return out;
-  }
-
-  /**
-   * The events restated in carries. Whoever wrote a carry vouches for nothing:
-   * every item is checked against its author's own signature (#expandCarry), so
-   * a carry from anyone holding the space's key restates only what was really
-   * written there. Our own private carries (what we wrote, kept before keys were
-   * shredded) count as they are.
-   */
-  #trustedCarries(decoded: Decoded[]): Decoded[] {
-    return decoded
-      .filter((d) => d.inner.kind === KIND_CARRY)
-      .flatMap((d) => {
-        if (d.private) {
-          // Our own: {space, events} kept in our private space.
-          const space = this.#spaces.get(String((d.inner.body as { space?: unknown } | null)?.space ?? ''));
-          return d.event.author === this.identity.author && space ? this.#expandCarry(d, space, true) : [];
-        }
-        return this.#expandCarry(d, d.space as StoredSpace | undefined).filter((x) => !this.#retention.forgottenCarried().has(x.id));
-      });
-  }
-
-  /**
-   * What agent and service keys signed counts only as far as the space lets them (visitorCounts): in managed
-   * spaces only approved keys (stage 9); elsewhere as the space's rule for agents and services says.
-   */
-  #approvedOnly(decoded: Decoded[]): Decoded[] {
-    const states = new Map<string, SpaceState>();
-    const of = (space: StoredSpace) => {
-      let state = states.get(space.id);
-      if (!state) {
-        state = spaceState(space.kind, space.founder, decoded.filter((d) => d.space?.id === space.id));
-        states.set(space.id, state);
-      }
-      return state;
-    };
-    return decoded.filter((d) => {
-      const space = d.space as StoredSpace | undefined;
-      const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
-      if (!space || grant?.role !== 'agent') return true;
-      return visitorCounts(of(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managed.managedRaw(space).setting);
-    });
-  }
-
-  /** One new event: does it count, by the space's state as known (see #approvedOnly)? */
-  #agentCounts(d: Decoded): boolean {
-    const space = d.space as StoredSpace | undefined;
-    const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
-    if (!space || grant?.role !== 'agent') return true;
-    return visitorCounts(this.#state(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managed.managedRaw(space).setting);
-  }
-
-  /** Before an agent or service of ours signs in a space: refuse what the space wouldn't count, and say why. */
-  #visitorMay(space: StoredSpace, key: Did, name: string, kind: string): void {
-    const state = this.#state(space);
-    const managed = !!this.#managed.managedRaw(space).setting;
-    const service = name.startsWith(SERVICE_PREFIX) || this.#services.storedServices().some((s) => s.name === name);
-    if (visitorCounts(state, { key, author: this.identity.author, service }, canonicalKind(kind), managed)) return;
-    const what = service ? `service "${name}"` : `agent "${name}"`;
-    const rule = service ? state.visitors?.services : state.visitors?.agents;
-    const ref = `${this.nameOf(this.identity.author) ?? this.identity.author}/${name}`;
-    const whoActs = service ? 'services' : 'agents';
-    if (rule?.who === 'nobody') throw new WeaveError('daemon.rules.nobody', { space: space.name, what: whoActs }, `${space.name} doesn't let ${whoActs} act in it: its maintainers decide that`);
-    if (managed || rule?.who === 'approved')
-      if (!state.approvedAgents?.has(key)) throw new WeaveError('daemon.rules.not.approved', { what, space: space.name }, `${what} isn't approved in ${space.name}: those who manage it can approve it (weave approve-agent "${space.name}" ${ref})`);
-    const kinds = rule?.kinds?.join(', ') ?? '';
-    throw new WeaveError('daemon.rules.kinds', { space: space.name, what: whoActs, kind, kinds }, `${space.name} doesn't let ${whoActs} write ${kind} (only ${kinds}): its maintainers decide that`);
-  }
 
   /** What people's agents and services may do in a space (those who manage it). Leaving one out keeps it as it is. */
   async setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
+    const space = this.#kernel.space(input.space);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
     if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.rules.manage.only', { space: space.name }, `only those who manage ${space.name} decide what agents and services may do there`);
     const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
     const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
     if ((input.agents && !agents) || (input.services && !services)) throw new WeaveError('daemon.rules.who', undefined, 'a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
   // Companies (companies.ts): the node delegates.
@@ -2099,12 +1802,12 @@ export class WeaveNode implements Backend {
 
 
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
+    const space = this.#kernel.space(input.space);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
     if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
   /** An agent key from `person/agent` (a person's name or id, the agent's name) or the key itself. */
@@ -2127,7 +1830,7 @@ export class WeaveNode implements Backend {
     // Where its key doesn't count at all (what it may write there is a matter of kinds).
     return [...this.#spaces.values()]
       .filter((s) => {
-        const state = this.#state(s);
+        const state = this.#kernel.state(s);
         if (state.managed) return !state.approvedAgents?.has(key);
         const who = state.visitors?.agents?.who ?? 'everyone';
         return !mayDo(state, this.identity.author, 'manage').ok && (who === 'nobody' || (who === 'approved' && !state.approvedAgents?.has(key)));
@@ -2135,94 +1838,14 @@ export class WeaveNode implements Backend {
       .map((s) => ({ id: s.id, name: s.name }));
   }
 
-  /**
-   * The rekeys that count in a space (Gr9S4DLf): by someone who managed it as
-   * of the rekey (mayDoAt 'manage'), for an epoch we hold. Rekeys are in the clear:
-   * anyone in the space can write one, dated as they like. Its time is its date,
-   * but never later than when it got here.
-   */
-  #countingRekeys(space: StoredSpace, state: SpaceState = this.#state(space)): Array<{ epoch: number; time: string; seen: string }> {
-    const scope = spaceScope(space);
-    return this.replica
-      .events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)
-      .flatMap((e) => {
-        const epoch = (e.body as { epoch?: unknown } | null)?.epoch;
-        if (!Number.isSafeInteger(epoch) || !space.keys[String(epoch)] || !mayDoAt(state, e, 'manage').ok) return [];
-        const seen = this.#seenAt(e);
-        return [{ epoch: epoch as number, time: e.time < seen ? e.time : seen, seen }];
-      });
-  }
-
-  /** When each of a space's epochs began: the earliest rekey to it that counts (the epoch number is in the clear). */
-  #epochStarts(space: StoredSpace): Map<number, string> {
-    const starts = new Map<number, string>();
-    for (const r of this.#countingRekeys(space)) if (!(starts.get(r.epoch)! <= r.time)) starts.set(r.epoch, r.time);
-    return starts;
-  }
-
-  /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
-  #rotateMonthly(space: StoredSpace): number {
-    const state = this.#state(space);
-    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companies.companyRetention(space)?.maxDays;
-    if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !mayDo(state, this.identity.author, 'manage').ok) return 0;
-    const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
-    if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
-    this.#rotateKey(space);
-    return 1;
-  }
-
-  /**
-   * Keys from rekeys that don't count after all (their author had lost the role
-   * by then, as a demotion or removal made at the same time shows): kept to read
-   * what was sealed with them, never used to seal. Whoever took one before
-   * hearing of the loss falls back to the key everyone else seals with.
-   */
-  #settleEpochKeys(space: StoredSpace): number {
-    if (space.kind === 'direct') return 0;
-    const state = this.#state(space);
-    if (!state.cutoffs?.some((c) => c.managed)) return 0;
-    const scope = spaceScope(space);
-    const counts = new Map<string, boolean>();
-    for (const e of this.replica.events((x) => x.scope === scope && canonicalKind(x.kind) === KIND_REKEY)) {
-      const opened = this.#tryOpen((me) => openRekey(e, me));
-      if (!opened) continue;
-      const epoch = String(opened.epoch);
-      counts.set(epoch, (counts.get(epoch) ?? false) || mayDoAt(state, e, 'manage').ok);
-    }
-    let moved = 0;
-    for (const [epoch, ok] of counts) {
-      if (ok || !space.keys[epoch]) continue;
-      (space.alternates ??= {})[epoch] = [...new Set([...(space.alternates[epoch] ?? []), space.keys[epoch]])];
-      delete space.keys[epoch];
-      moved++;
-    }
-    if (moved) this.#saveSpace(space);
-    return moved;
-  }
-
-  /** A new key for a space, boxed to everyone in it. */
-  #rotateKey(space: StoredSpace): void {
-    const { fields, epoch, key } = rekey(space, [...this.#state(space).members.keys()], this.#encryptionKeyOf);
-    space.keys[String(epoch)] = key;
-    this.#saveSpace(space);
-    this.replica.write(this.identity, fields);
-    this.#managed.afterRekey(space, epoch, key);
-  }
-
-  /** Keys of the read-limited boards that these rights open, to hand over with an invite. */
-  #boardKeysFor(space: StoredSpace, rights: BoardRight[]): Record<string, Record<string, string>> | undefined {
-    const out: Record<string, Record<string, string>> = {};
-    for (const r of rights) if ((r.read || r.write) && space.boards?.[r.board]) out[r.board] = { ...space.boards[r.board] };
-    return Object.keys(out).length ? out : undefined;
-  }
 
   async members(ref: string): Promise<MemberInfo[]> {
-    const space = this.#space(ref);
-    const state = this.#state(space);
+    const space = this.#kernel.space(ref);
+    const state = this.#kernel.state(space);
     const lastActive = new Map<Did, string>();
     const agents = new Map<Did, Set<string>>();
     const attested = state.managed?.attestor ? this.#companies.attestations(space, state.managed.attestor) : new Map();
-    for (const entry of this.#entries(space)) {
+    for (const entry of this.#kernel.entries(space)) {
       const { author, signer, time } = entry.event;
       if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
       const agent = this.#agentName(signer, author);
@@ -2233,7 +1856,7 @@ export class WeaveNode implements Backend {
       name: this.nameOf(m.did),
       since: m.since,
       ...(m.invitedBy ? { invitedBy: m.invitedBy, invitedByName: this.nameOf(m.invitedBy) } : {}),
-      ...(m.via ? { via: this.#groupRef(m.via, state) } : {}),
+      ...(m.via ? { via: this.#kernel.groupRef(m.via, state) } : {}),
       ...(space.kind === 'project' && state.maintainers.has(m.did) ? { maintainer: true as const } : {}),
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
@@ -2243,142 +1866,74 @@ export class WeaveNode implements Backend {
   }
 
   async leave(ref: string): Promise<void> {
-    const space = this.#space(ref);
+    const space = this.#kernel.space(ref);
     if (space.kind === 'direct') throw new WeaveError('daemon.leave.direct', undefined, 'a direct chat has no leaving; unfollow or block the person instead');
-    const state = this.#state(space);
+    const state = this.#kernel.state(space);
     if (mayDo(state, this.identity.author, 'own').ok) {
       const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
       throw others.length
         ? new WeaveError('daemon.leave.owner', { space: space.name }, `you own ${space.name}: hand it over to someone first`)
         : new WeaveError('daemon.leave.last', { space: space.name }, `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#kernel.upTo(this.identity.author), at: this.#kernel.anchor(this.identity.author, space) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
-    this.#decoded = undefined;
+    this.#kernel.invalidateDecoded();
     removeSpace(this.home, space.id);
-    this.#announceNow();
+    this.#kernel.announceNow();
     for (const topic of spaceTopics(space, 0)) await this.#swarm?.leave(topic).catch(() => {});
   }
 
   async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
+    const space = this.#kernel.space(input.space);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.handover.direct', undefined, 'a direct chat has no owner');
     if (!mayDo(state, this.identity.author, 'own').ok) throw new WeaveError('daemon.handover.owner.only', { space: space.name }, `only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
     if (state.tier) throw new WeaveError('daemon.handover.tier', undefined, 'a membership tier stays with its creator; take it off your hub instead');
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new WeaveError('daemon.handover.self', undefined, "that's you");
     if (!state.members.has(to)) throw new WeaveError('daemon.handover.not.member', { who: input.to, space: space.name }, `${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
-    return this.#spaceInfo(space);
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#kernel.upTo(this.identity.author), at: this.#kernel.anchor(this.identity.author, space) } }));
+    return this.#kernel.spaceInfo(space);
   }
 
   async setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
+    const space = this.#kernel.space(input.space);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.history.direct', undefined, 'a direct chat is between two people: there are no newcomers');
     if (!HISTORIES.includes(input.history)) throw new WeaveError('daemon.history.values', undefined, 'history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
     if (!mayDo(state, this.identity.author, 'manage').ok)
       throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
     if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
   async closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
+    const space = this.#kernel.space(input.space);
+    const state = this.#kernel.state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.close.direct', undefined, "a direct chat can't be closed");
     if (!mayDo(state, this.identity.author, 'manage').ok)
       throw new WeaveError('daemon.close.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
-    if (!!state.closed === input.closed) return this.#spaceInfo(space);
+    if (!!state.closed === input.closed) return this.#kernel.spaceInfo(space);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
-  /** After people leave, a node that may rotate the key does: they can't read what comes next. */
-  #rotateAfterLeaving(space: StoredSpace, state: SpaceState): number {
-    if (space.kind === 'direct' || !mayDo(state, this.identity.author, 'manage').ok || !state.left.size) return 0;
-    // A leave and a rekey after it, by their dates (never later than they got here) and by when they got here: a
-    // leaver can date their leave early, but not make it arrive early; and only rekeys that count count (Gr9S4DLf).
-    const latest = (times: string[]) => times.reduce((a, b) => (b > a ? b : a), '');
-    const leaves = this.#decodedIn(space.id)
-      .filter((d) => canonicalKind(d.inner.kind) === KIND_LEAVE && state.left.has(d.event.author))
-      .map((d) => {
-        const seen = this.#seenAt(d.event);
-        return { time: d.event.time < seen ? d.event.time : seen, seen };
-      });
-    const rekeys = this.#countingRekeys(space, state);
-    if (latest(leaves.map((l) => l.time)) <= latest(rekeys.map((r) => r.time)) && latest(leaves.map((l) => l.seen)) <= latest(rekeys.map((r) => r.seen))) return 0;
-    const { fields, epoch, key } = rekey(space, [...state.members.keys()], this.#encryptionKeyOf);
-    space.keys[String(epoch)] = key;
-    this.#saveSpace(space);
-    this.replica.write(this.identity, fields);
-    this.#managed.afterRekey(space, epoch, key);
-    return 1;
-  }
-
-  /**
-   * Keys someone missed because their join came in after them: made after their invite, while their join was still
-   * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
-   * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite, unless the
-   * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
-   */
-  #handMissedKeys(space: StoredSpace, state: SpaceState): number {
-    if (space.kind === 'direct' || !mayDo(state, this.identity.author, 'manage').ok) return 0;
-    const scope = spaceScope(space);
-    // Who each epoch's key was boxed to, by rekeys that count.
-    const boxed = new Map<number, Set<Did>>();
-    for (const e of this.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
-      const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
-      if (!Number.isSafeInteger(body?.epoch) || !mayDoAt(state, e, 'manage').ok) continue;
-      const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
-      for (const did of Object.keys(body?.boxes ?? {})) to.add(did as Did);
-      boxed.set(body!.epoch as number, to);
-    }
-    // The epoch each invite was sealed with: what came after it is the newcomer's to read.
-    const invitedAt = new Map<string, number>();
-    for (const d of this.#decodedIn(space.id)) {
-      const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
-      const epoch = (d.event.body as { epoch?: unknown } | null)?.epoch;
-      if (canonicalKind(d.inner.kind) === KIND_INVITE && typeof invite === 'string' && Number.isSafeInteger(epoch)) invitedAt.set(invite, epoch as number);
-    }
-    // A space that once let newcomers read only part of it and now lets them read everything: those who came in
-    // meanwhile get the keys from before too (Julian, 2.11.2026), not only newcomers from now on.
-    const opened = (state.history?.value ?? 'all') === 'all' && this.#decodedIn(space.id).some((d) => d.inner.kind === KIND_HISTORY && (d.inner.body as { history?: unknown } | null)?.history !== 'all');
-    let handed = 0;
-    const epochs = opened ? Object.keys(space.keys).map(Number) : [...boxed.keys()];
-    for (const epoch of epochs) {
-      const key = space.keys[String(epoch)];
-      if (!key) continue;
-      const to = boxed.get(epoch) ?? new Set<Did>();
-      const missing = [...state.members.values()]
-        .filter((m) => m.did !== this.identity.author && !to.has(m.did))
-        .filter((m) => opened || (m.invite !== undefined && invitedAt.has(m.invite) && epoch > invitedAt.get(m.invite)!))
-        .map((m) => m.did);
-      if (!missing.length) continue;
-      const boxes: Record<string, Json> = {};
-      for (const did of missing) boxes[did] = boxTo(this.#encryptionKeyOf(did), { space: space.id, epoch, key }) as unknown as Json;
-      this.replica.write(this.identity, { kind: KIND_REKEY, scope, body: { epoch, boxes } });
-      handed++;
-    }
-    return handed;
-  }
 
   async removeMember(ref: string, who: string): Promise<void> {
-    const space = this.#space(ref);
-    const state = this.#state(space);
+    const space = this.#kernel.space(ref);
+    const state = this.#kernel.state(space);
     if (!mayDo(state, this.identity.author, 'manage').ok) {
       throw new WeaveError('daemon.remove.manage.only', { kind: space.kind }, { project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
     }
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new WeaveError('daemon.remove.not.member', { who, space: space.name }, `${who} is not in ${space.name}`);
     if (member === state.founder) throw new WeaveError('daemon.remove.owner', { space: space.name }, `the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(await this.#managed.cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
+    this.replica.write(this.identity, sealFor(await this.#managed.cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#kernel.upTo(member), at: this.#kernel.anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
-    this.#saveSpace(space);
+    this.#kernel.saveSpace(space);
     this.replica.write(this.identity, fields);
     this.#managed.afterRekey(space, epoch, key);
   }
@@ -2386,32 +1941,32 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- communities
 
   async createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo> {
-    const community = await this.#createSpace('community', input.name);
+    const community = await this.#kernel.createSpace('community', input.name);
     if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description } }));
     return this.community(community.id);
   }
 
   async community(ref: string): Promise<CommunityInfo> {
-    const community = this.#space(ref, 'community');
-    const state = this.#state(community);
+    const community = this.#kernel.space(ref, 'community');
+    const state = this.#kernel.state(community);
     return {
-      ...this.#spaceInfo(community),
+      ...this.#kernel.spaceInfo(community),
       kind: 'community',
-      description: this.#page(community, state).description,
-      moderators: [...state.maintainers].map((did) => this.#actor(did, did)),
+      description: this.#kernel.page(community, state).description,
+      moderators: [...state.maintainers].map((did) => this.#kernel.actor(did, did)),
       moderator: state.maintainers.has(this.identity.author),
     };
   }
 
   async setCommunity(input: { community: string; description: string }): Promise<CommunityInfo> {
-    const community = this.#space(input.community, 'community');
-    this.#maintainerState(community);
+    const community = this.#kernel.space(input.community, 'community');
+    this.#kernel.maintainerState(community);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
     return this.community(community.id);
   }
 
   async setModerator(input: { community: string; who: string; on: boolean }): Promise<void> {
-    this.#appoint(this.#space(input.community, 'community'), input.who, input.on);
+    this.#kernel.appoint(this.#kernel.space(input.community, 'community'), input.who, input.on);
   }
 
   // Content (content.ts): the node delegates.
@@ -2579,66 +2134,66 @@ export class WeaveNode implements Backend {
   /** What co-authorship needs to know about keys. */
 
   async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
-    this.#appoint(this.#project(input.project), input.who, input.on);
+    this.#kernel.appoint(this.#kernel.project(input.project), input.who, input.on);
   }
 
   async inviteGroup(input: { project: string; group: string }): Promise<void> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const group = this.#space(input.group, 'group');
+    const project = this.#kernel.project(input.project);
+    const state = this.#kernel.maintainerState(project);
+    const group = this.#kernel.space(input.group, 'group');
     this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: true } }));
     // Inviting the group is the consent for everyone in it right now.
-    const newcomers = [...this.#state(group).members.keys()].filter((did) => !state.members.has(did));
-    this.#admitAll(project, group, newcomers);
+    const newcomers = [...this.#kernel.state(group).members.keys()].filter((did) => !state.members.has(did));
+    this.#kernel.admitAll(project, group, newcomers);
   }
 
   async uninviteGroup(input: { project: string; group: string }): Promise<void> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const group = this.#knownGroup(project, input.group);
+    const project = this.#kernel.project(input.project);
+    this.#kernel.maintainerState(project);
+    const group = this.#kernel.knownGroup(project, input.group);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: false } }));
   }
 
   async setRule(input: { project: string; group: string; auto: boolean }): Promise<void> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const group = this.#knownGroup(project, input.group);
+    const project = this.#kernel.project(input.project);
+    this.#kernel.maintainerState(project);
+    const group = this.#kernel.knownGroup(project, input.group);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_RULE, body: { group: group.id, auto: input.auto } }));
   }
 
   async admissions(ref?: string): Promise<Admission[]> {
-    const projects = ref ? [this.#project(ref)] : [...this.#spaces.values()].filter((s) => s.kind === 'project');
+    const projects = ref ? [this.#kernel.project(ref)] : [...this.#spaces.values()].filter((s) => s.kind === 'project');
     const out: Admission[] = [];
     for (const project of projects) {
-      const state = this.#state(project);
+      const state = this.#kernel.state(project);
       if (!mayDo(state, this.identity.author, 'group').ok) continue;
-      for (const change of this.#changes(project, state)) out.push(change);
+      for (const change of this.#kernel.changes(project, state)) out.push(change);
     }
     return out;
   }
 
   async admit(input: { project: string; who: string; group: string; always?: boolean }): Promise<void> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const group = this.#space(input.group, 'group');
+    const project = this.#kernel.project(input.project);
+    const state = this.#kernel.maintainerState(project);
+    const group = this.#kernel.space(input.group, 'group');
     if (!state.groups.has(group.id)) throw new Error(`${group.name} is not invited to ${project.name}`);
     // "Allow for all projects with this group": a standing rule in every project we maintain that invited it.
     if (input.always) {
       for (const other of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
-        const otherState = this.#state(other);
+        const otherState = this.#kernel.state(other);
         if (mayDo(otherState, this.identity.author, 'group').ok && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
           this.replica.write(this.identity, sealFor(this.#managed.cipher(other), { kind: KIND_RULE, body: { group: group.id, auto: true } }));
         }
       }
     }
     const did = this.resolve(input.who);
-    if (!state.members.has(did)) this.#admitAll(project, group, [did]);
+    if (!state.members.has(did)) this.#kernel.admitAll(project, group, [did]);
   }
 
   async decline(input: { project: string; who: string; group: string }): Promise<void> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const group = this.#knownGroup(project, input.group);
+    const project = this.#kernel.project(input.project);
+    this.#kernel.maintainerState(project);
+    const group = this.#kernel.knownGroup(project, input.group);
     this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_DECLINE, body: { member: this.resolve(input.who), via: group.id } }));
   }
 
@@ -2658,25 +2213,25 @@ export class WeaveNode implements Backend {
     }
     this.#content.prefetchBlobs();
     let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts();
-    for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.settleEpochKeys(space);
     changed += await this.#content.closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
-    for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
-    for (const space of [...this.#spaces.values()]) changed += this.#handMissedKeys(space, this.#state(space));
-    for (const space of [...this.#spaces.values()]) changed += this.#recarry(space, this.#state(space));
-    for (const space of [...this.#spaces.values()]) changed += this.#rotateMonthly(space);
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateAfterLeaving(space, this.#kernel.state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.recarry(space, this.#kernel.state(space));
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateMonthly(space);
     changed += this.#retention.applyShreds();
     changed += this.#retention.forget();
     changed += this.#holding.release();
     changed += await this.#companies.renewSignIn();
-    for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#managed.unlock(space);
+    for (const space of [...this.#spaces.values()]) if (this.#kernel.state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
     changed += await this.#companies.attest();
     changed += await this.#companies.applyDirectory();
     changed += await this.#companies.offboard();
-    changed += this.#anchorRemovals();
-    changed += this.#settleLosses();
+    changed += this.#kernel.anchorRemovals();
+    changed += this.#kernel.settleLosses();
     changed += await this.#companies.orgDuties();
     changed += await this.#companies.continueEnrollment();
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
@@ -2691,11 +2246,11 @@ export class WeaveNode implements Backend {
     // On an always-on node: services handed over by its person's computers.
     changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
-      const state = this.#state(project);
+      const state = this.#kernel.state(project);
       if (!state.members.has(this.identity.author)) continue;
-      changed += await this.#reconcileBoards(project);
+      changed += await this.#kernel.reconcileBoards(project);
       const joins = new Map<string, Did[]>();
-      for (const change of this.#changes(project, state)) {
+      for (const change of this.#kernel.changes(project, state)) {
         if (!state.groups.get(change.group.id)?.auto) continue;
         if (change.change === 'join') joins.set(change.group.id, [...(joins.get(change.group.id) ?? []), change.did]);
         else if (mayDo(state, this.identity.author, 'remove').ok) {
@@ -2704,7 +2259,7 @@ export class WeaveNode implements Backend {
         }
       }
       for (const [groupId, dids] of joins) {
-        this.#admitAll(project, this.#spaces.get(groupId)!, dids);
+        this.#kernel.admitAll(project, this.#spaces.get(groupId)!, dids);
         changed += dids.length;
       }
     }
@@ -2970,7 +2525,7 @@ export class WeaveNode implements Backend {
         this.replica.write(root, delegation(fresh.did, 'device', ['*'], deviceName()));
         saveDevice(this.home, fresh);
         this.#identity = fresh;
-        this.#decoded = undefined;
+        this.#kernel.invalidateDecoded();
       }
     }
     return this.keys();
@@ -3005,8 +2560,8 @@ export class WeaveNode implements Backend {
       return;
     }
     this.#markMigrated();
-    this.#decoded = undefined;
-    this.#personEvents.clear();
+    this.#kernel.invalidateDecoded();
+    this.#kernel.personEvents.clear();
     this.#farewell();
     console.error(`weave: moved to v0.4: ${resigned} events signed again; your home from before is in ${backup}`);
   }
@@ -3035,7 +2590,7 @@ export class WeaveNode implements Backend {
     if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE || this.replica.store.byNumber(key.did, event.seq)) return false;
     let cls = classOf(event.kind);
     if (event.kind === KIND_SEALED) {
-      const inner = this.#decodeInner(recordOfV1(event))?.inner.kind;
+      const inner = this.#kernel.decodeInner(recordOfV1(event))?.inner.kind;
       cls = inner ? classOf(canonicalKind(inner)) : 'content';
     }
     // Scopes v2 doesn't know (gifts of v0.3 had their own) go to public, where v0.3 had them anyway.
@@ -3052,7 +2607,7 @@ export class WeaveNode implements Backend {
     const text = `I've moved to Weave 0.4, which v0.3 can't talk to. Please update: ${RELEASES_URL}`;
     for (const space of this.#spaces.values()) {
       if (space.kind !== 'group' && space.kind !== 'project') continue;
-      if (this.#state(space).members.size < 2) continue;
+      if (this.#kernel.state(space).members.size < 2) continue;
       this.replica.append(this.#identity, sealFor(this.#managed.cipher(space), { kind: KIND_MSG, body: { text, moved: '0.4' } }));
     }
   }
@@ -3086,7 +2641,7 @@ export class WeaveNode implements Backend {
     let locked = false;
     for (const space of this.#spaces.values()) {
       if (space.kind !== 'group' && space.kind !== 'project') continue;
-      if (this.#state(space).members.size < 2) continue;
+      if (this.#kernel.state(space).members.size < 2) continue;
       try {
         farewells[space.id] = this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_MSG, body: { text, moved: 3 } }, { legacy: true })).id;
       } catch {
@@ -3122,7 +2677,7 @@ export class WeaveNode implements Backend {
       this.#saveEncryption([...this.#encryption, enc]);
     }
     this.replica.write({ author: me, did: next.did, keys: next }, rotation(recoveryRoot(words, index + 2).did, retire, enc?.did));
-    this.#decoded = undefined;
+    this.#kernel.invalidateDecoded();
     return this.identityInfo();
   }
 
@@ -3140,7 +2695,7 @@ export class WeaveNode implements Backend {
   #saveEncryption(keys: EncryptionKey[]): void {
     saveEncryptionKeys(this.home, keys);
     this.#encryption = keys;
-    this.#decoded = undefined;
+    this.#kernel.invalidateDecoded();
     this.#forgetDirects();
   }
 
@@ -3152,9 +2707,9 @@ export class WeaveNode implements Backend {
 
   /** Direct chats are derived again (with their new epoch) after an encryption key changed, mine or a peer's. */
   #forgetDirects(): void {
-    this.#directs.clear();
-    this.#directByPeer.clear();
-    this.#decoded = undefined;
+    this.#kernel.directs.clear();
+    this.#kernel.directByPeer.clear();
+    this.#kernel.invalidateDecoded();
   }
 
   /** Where to encrypt to when writing to someone: their published encryption key. */
@@ -3215,10 +2770,10 @@ export class WeaveNode implements Backend {
    */
   /** An accepted event of a person whose list is kept: into its place (time, then seq), no rescan. */
   #personEventsAdd(event: WeaveRecord): void {
-    const list = this.#personEvents.get(event.author);
+    const list = this.#kernel.personEvents.get(event.author);
     if (!list || event.missing) return;
-    if (list.some((e) => e.id === event.id)) return void this.#personEvents.delete(event.author); // re-signed: gather again
-    if (this.replica.authority.personOf(event.signer) !== event.author) return void this.#personEvents.delete(event.author);
+    if (list.some((e) => e.id === event.id)) return void this.#kernel.personEvents.delete(event.author); // re-signed: gather again
+    if (this.replica.authority.personOf(event.signer) !== event.author) return void this.#kernel.personEvents.delete(event.author);
     let lo = 0;
     let hi = list.length;
     while (lo < hi) {
@@ -3231,7 +2786,7 @@ export class WeaveNode implements Backend {
   }
 
   #eventsOf(person: Did): WeaveRecord[] {
-    const kept = this.#personEvents.get(person);
+    const kept = this.#kernel.personEvents.get(person);
     if (kept) return kept;
     const authority = this.replica.authority;
     const events: WeaveRecord[] = [];
@@ -3240,7 +2795,7 @@ export class WeaveNode implements Backend {
       for (const event of this.replica.eventsBy(signer)) if (event.author === person && !event.missing) events.push(event);
     }
     events.sort((a, b) => a.time.localeCompare(b.time) || a.seq - b.seq);
-    this.#personEvents.set(person, events);
+    this.#kernel.personEvents.set(person, events);
     return events;
   }
 
@@ -3254,8 +2809,8 @@ export class WeaveNode implements Backend {
 
   /** Bodies of your own self-sealed events of one kind. */
   #selfBodies(kind: string): Array<Record<string, unknown>> {
-    return this.#memo(`self:${kind}`, () =>
-      this.#decodeAll()
+    return this.#kernel.memo(`self:${kind}`, () =>
+      this.#kernel.decodeAll()
         .filter((d) => d.private && d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object')
         .map((d) => d.inner.body as Record<string, unknown>),
     );
@@ -3279,22 +2834,20 @@ export class WeaveNode implements Backend {
     return at;
   };
 
-  /** Whether someone manages a space we know: outside it, we can't tell, and say no. */
-
   // ---------------------------------------------------------------- direct chats between friends
 
   async chats(): Promise<ChatInfo[]> {
-    const friends = new Set(this.#friends());
-    this.#decodeAll();
+    const friends = new Set(this.#kernel.friends());
+    this.#kernel.decodeAll();
     const chats: ChatInfo[] = [];
-    for (const { space, peer } of this.#directs.values()) {
-      const messages = messagesOf(this.#entries(space));
+    for (const { space, peer } of this.#kernel.directs.values()) {
+      const messages = messagesOf(this.#kernel.entries(space));
       const friend = friends.has(peer);
       const wrote = messages.some((m) => m.author === this.identity.author);
       if (!friend && !wrote) continue; // only friends can start a chat with you
       const last = messages.at(-1);
       chats.push({
-        space: this.#spaceInfo(space),
+        space: this.#kernel.spaceInfo(space),
         peer: { did: peer, name: this.nameOf(peer) },
         friend,
         ...(last ? { last: { text: (last.text || (last.file ? `📎 ${last.file.name}` : '')).slice(0, 140), time: last.time, mine: last.author === this.identity.author } } : {}),
@@ -3306,10 +2859,10 @@ export class WeaveNode implements Backend {
   async openChat(who: string): Promise<SpaceInfo> {
     const peer = this.resolve(who);
     if (peer === this.identity.author) throw new Error('that is you');
-    if (!this.#friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
-    const space = this.#direct(peer);
+    if (!this.#kernel.friends().includes(peer)) throw new Error(`you can chat with friends: people you follow who follow you back. ${this.nameOf(peer) ?? who} isn't one yet`);
+    const space = this.#kernel.direct(peer);
     await Promise.all(spaceTopics(space, 0).map((topic) => this.#swarm?.join(topic)));
-    return this.#spaceInfo(space);
+    return this.#kernel.spaceInfo(space);
   }
 
 
@@ -3323,14 +2876,14 @@ export class WeaveNode implements Backend {
   #closeInvites(space: StoredSpace): number {
     if (space.kind === 'direct') return 0;
     const now = new Date(this.clock()).toISOString();
-    const decoded = this.#decodedIn(space.id);
+    const decoded = this.#kernel.decodedIn(space.id);
     const closed = new Set(decoded.filter((d) => d.inner.kind === KIND_INVITE_CLOSE && d.event.author === this.identity.author).map((d) => (d.inner.body as { invite?: unknown } | null)?.invite));
     let n = 0;
     for (const d of decoded) {
       if (canonicalKind(d.inner.kind) !== KIND_INVITE || d.event.author !== this.identity.author) continue;
       const b = (d.inner.body ?? {}) as { invite?: unknown; expires?: unknown; key?: unknown };
       if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || (b.expires > now && b.key === true) || closed.has(b.invite)) continue;
-      const state = this.#state(space);
+      const state = this.#kernel.state(space);
       const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
       this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
       closed.add(b.invite);
@@ -3351,7 +2904,7 @@ export class WeaveNode implements Backend {
     if (!notice) return undefined;
     // Who and which board, for the rules that say what counts where (see the app's notify.tsx).
     const stored = notice.open.space && this.#spaces.get(notice.open.space.id);
-    const board = stored && notice.open.post ? this.#spacePosts(stored).posts.find((p) => p.id === notice.open.post)?.board : undefined;
+    const board = stored && notice.open.post ? this.#kernel.spacePosts(stored).posts.find((p) => p.id === notice.open.post)?.board : undefined;
     return { ...notice, from: item.author, ...(board ? { board } : {}) };
   }
 
@@ -3370,7 +2923,7 @@ export class WeaveNode implements Backend {
     const lookup = (id: Json | undefined, kinds: string[]) => {
       if (typeof id !== 'string') return undefined;
       try {
-        const found = this.#find(id, kinds);
+        const found = this.#kernel.find(id, kinds);
         const title = (found.inner.body as Record<string, Json> | null)?.title;
         return { id: found.id, author: found.event.author, title: typeof title === 'string' ? title : '' };
       } catch {
@@ -3408,7 +2961,7 @@ export class WeaveNode implements Backend {
       if (space.kind === 'community') return { type: 'post', category: 'activity', title: `New post in ${where}`, text: `${who}: ${title}`, name: 'daemon.notice.new', values: { type: 'post', where, who, title }, open: { space, post: item.id } };
       if (space.kind !== 'project') return undefined;
       const stored = this.#spaces.get(space.id);
-      const board = stored && this.#spacePosts(stored).posts.find((p) => p.id === item.id)?.board;
+      const board = stored && this.#kernel.spacePosts(stored).posts.find((p) => p.id === item.id)?.board;
       if (!board || !this.#follows(space.id, board)) return undefined;
       const type = item.kind === KIND_ISSUE ? 'issue' : item.kind === KIND_PROPOSAL ? 'proposal' : 'post';
       return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, name: 'daemon.notice.new', values: { type, where, who, title }, open: { space, post: item.id } };
@@ -3452,13 +3005,13 @@ export class WeaveNode implements Backend {
   async #heldNotices(since: string): Promise<HeldNotice[]> {
     const kinds = new Set([KIND_MSG, KIND_REPLY, KIND_POST, KIND_ISSUE, KIND_PROPOSAL, KIND_KNOCK, KIND_BADGE, KIND_BADGE_TRANSFER, KIND_MEMBERSHIP_REQUEST]);
     const me = this.identity.author;
-    const hidden = this.#hiddenAuthors();
+    const hidden = this.#kernel.hiddenAuthors();
     const out: HeldNotice[] = [];
-    for (const d of this.#decodeAll()) {
+    for (const d of this.#kernel.decodeAll()) {
       if (d.private || !kinds.has(d.inner.kind) || d.event.author === me || hidden.has(d.event.author) || d.event.time <= since) continue;
       let notice = this.#heldNoticeCache.get(d.id);
       if (notice === undefined) {
-        notice = (await this.#noticeFor(this.#toItem(d), true).catch(() => undefined)) ?? null;
+        notice = (await this.#noticeFor(this.#kernel.toItem(d), true).catch(() => undefined)) ?? null;
         this.#heldNoticeCache.set(d.id, notice);
       }
       if (notice) out.push({ id: d.id, time: d.event.time, notice });
@@ -3468,194 +3021,10 @@ export class WeaveNode implements Backend {
 
   /** The event as this node can read it, or undefined if it can't (someone else's space or private data). */
   itemFor(event: WeaveRecord): FeedItem | undefined {
-    const decoded = this.#decode(event);
-    return decoded && this.#toItem(decoded);
+    const decoded = this.#kernel.decode(event);
+    return decoded && this.#kernel.toItem(decoded);
   }
 
-  // ---------------------------------------------------------------- internals: spaces
-
-  /** A space by id or name, optionally of one kind. */
-  #space(ref: string, kind?: SpaceKind): StoredSpace {
-    const byId = this.#spaces.get(ref) ?? (this.#decodeAll(), this.#directs.get(ref)?.space);
-    if (byId && (!kind || byId.kind === kind)) return byId;
-    const byName = [...this.#spaces.values()].filter((s) => (!kind || s.kind === kind) && s.name.toLowerCase() === ref.toLowerCase());
-    if (byName.length === 1) return byName[0];
-    const what = kind ?? 'group, project or community';
-    throw new Error(byName.length ? `several ${what}s are named "${ref}" — use its id` : `you are not in a ${what} "${ref}"`);
-  }
-
-  #project(ref: string): StoredSpace {
-    const space = this.#space(ref);
-    if (space.kind !== 'project') throw new Error(`${space.name} is a ${space.kind}; discussions, votes and issues live in projects`);
-    return space;
-  }
-
-  #maintainerState(project: StoredSpace): SpaceState {
-    const state = this.#state(project);
-    if (!mayDo(state, this.identity.author, 'curate').ok) throw new Error(`only ${project.kind === 'community' ? 'moderators' : 'maintainers'} of ${project.name} can do that`);
-    return state;
-  }
-
-  /** A group invited to a project, by name or id, even if this node isn't in that group. */
-  #knownGroup(project: StoredSpace, ref: string): { id: string; name: string } {
-    const invited = [...this.#state(project).groups.values()];
-    const match = invited.find((g) => g.id === ref) ?? invited.find((g) => (this.#spaces.get(g.id)?.name ?? g.name).toLowerCase() === ref.toLowerCase());
-    if (!match) throw new Error(`no group "${ref}" is invited to ${project.name}`);
-    return { id: match.id, name: this.#spaces.get(match.id)?.name ?? match.name };
-  }
-
-  #groupRef(id: string, state: SpaceState): SpaceRef {
-    return { id, kind: 'group', name: this.#spaces.get(id)?.name ?? state.groups.get(id)?.name ?? 'group' };
-  }
-
-  #mineFounder = (space: StoredSpace) => space.founder === this.identity.author;
-
-  /** Make someone a maintainer (project) or moderator (community), or drop them. */
-  #appoint(space: StoredSpace, who: string, on: boolean): void {
-    const state = this.#maintainerState(space);
-    const member = this.resolve(who);
-    const role = space.kind === 'community' ? 'moderator' : 'maintainer';
-    if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
-    if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member), at: this.#anchor(member, space) }) } }));
-  }
-
-  /** A board of a space, by name or title. */
-  #board(space: StoredSpace, boards: Board[], ref: string): Board {
-    const name = boardName(ref);
-    const board = boards.find((b) => b.name === name) ?? boards.find((b) => b.title.toLowerCase() === ref.trim().toLowerCase());
-    if (!board) throw new Error(`${space.name} has no board "${ref}" — it has ${boards.map((b) => b.name).join(', ')}`);
-    return board;
-  }
-
-  async #createSpace(kind: SpaceKind, name: string, extra: Record<string, Json> = {}): Promise<StoredSpace> {
-    if (!name?.trim()) throw new Error(`a ${kind} needs a name`);
-    const inside = this.#companies.insideOnly();
-    if (inside) throw new Error(inside);
-    const space: StoredSpace = { ...newSpace(kind, name.trim(), this.identity.author), entry: { topics: [], bootstrap: [] } };
-    await this.#addSpace(space);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SPACE_CREATE, body: { name: space.name, ...extra } }));
-    return space;
-  }
-
-  async #addSpace(space: StoredSpace): Promise<void> {
-    this.#saveSpace(space);
-    if (this.#swarm) await Promise.all([...this.#meetingTopics(space), ...space.entry.topics].map((t) => this.#swarm!.join(t, { announce: !this.#looksOnly(t) })));
-  }
-
-  #saveSpace(space: StoredSpace): void {
-    this.#decoded = undefined;
-    // New keys may open its setting and halves: read them again.
-    this.#managed.rawCache.delete(space.id);
-    this.#spaces.set(space.id, space);
-    saveSpace(this.home, space);
-    // At once: what is written next in this space must not reach anyone who lost it.
-    this.#announceNow();
-  }
-
-  /**
-   * The spaces this node holds, with the keys that prove it to peers (the
-   * current epoch's first, then every one before: a member who hasn't got a
-   * new key yet still meets the others and is handed the rekeys, however many
-   * rotations they missed; see docs/v2-stage2.md, "Closing the grace key"):
-   * its spaces, its direct chats, and its own private space, which only its
-   * other devices hold.
-   */
-  #heldSpaces(): HeldSpace[] {
-    // Listing may derive new direct chats, which would announce again: not from inside.
-    this.#listingSpaces = true;
-    try {
-      this.#ensureDirects();
-    } finally {
-      this.#listingSpaces = false;
-    }
-    const held = (space: SpaceKeys): HeldSpace => ({
-      space: spaceScope(space),
-      keys: Object.keys(space.keys).map(Number).sort((a, b) => b - a).map((epoch) => b64u.decode(space.keys[String(epoch)])),
-      ...(this.#spaces.has(space.id) && this.#holding.pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
-    });
-    // Anyone whose log we hold can make our direct chat's key: only with those we chose to know does it let them in.
-    const chosen = new Set<Did>([...this.#people.contacts().keys(), ...(this.#graph().get(this.identity.author)?.following ?? [])]);
-    return [
-      ...[...this.#spaces.values()].map(held),
-      ...[...this.#directs.values()].map(({ space, peer }) => ({ ...held(space), admits: chosen.has(peer) })),
-      { space: SELF_SCOPE, keys: [selfKey(this.#selfSecret())] },
-      // Meeting points: ours, which whoever we gave a link holds, and theirs, from the links we were given.
-      ...[this.#meetSecret(), ...this.#theirMeets()].map((secret) => ({ space: meetTopic(secret), keys: [secret], proof: true as const })),
-      // The front door: whoever has the public contact link gets in, here only (never on a computer that isn't one).
-      ...(this.#frontDoor() ? [{ space: meetTopic(this.#doorSecret()), keys: [this.#doorSecret()], proof: true as const }] : []),
-    ];
-  }
-
-  /** Rekey events a peer ahead of us offered: take a key from those signed for a manager of the space, if a box opens for us. */
-  #offeredKeys(items: WireItemV2[]): void {
-    for (const { e } of items) {
-      const record = recordOfV2(canonicalIdV2(e), e);
-      if (canonicalKind(record.kind) !== KIND_REKEY || !this.replica.authority.check(record).ok) continue;
-      this.#takeKeys(record);
-    }
-  }
-
-  #announcing = false;
-  #listingSpaces = false;
-
-  /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
-  sessionAccess(): SpaceAccess {
-    const node = this;
-    return {
-      spaces: () => this.#heldSpaces(),
-      offerKeys: (items) => this.#offeredKeys(items),
-      wantsBody: (space, id) => this.#holding.wantsBody(space, id),
-      keep: this.#holding.keepAccess,
-      farewells: () => this.#farewells(),
-      // Strangers are turned away: only peers that share a space, a chosen direct chat or one of our links get in.
-      // Read for each new connection, so changing who reaches you (setReach) holds from the next one on.
-      get firewall() {
-        return node.config.firewall !== false;
-      },
-      fromBehind: (item) => this.#joinFromBehind(item),
-      // Behind the firewall, a peer learns the public side of us and of those it shares something with here, never
-      // of everyone we know (a newcomer through a contact link would otherwise get our family's names and faces).
-      publicFor: (shared: ReadonlySet<string>) => (this.config.firewall !== false ? this.#publicFor(shared) : undefined),
-    };
-  }
-
-  /** Whose public events a peer gets that shares these spaces with us (see SpaceAccess.publicFor). */
-  #publicFor(shared: ReadonlySet<string>): ((author: Did) => boolean) | undefined {
-    // One of our own devices: all of it.
-    if (shared.has(SELF_SCOPE)) return undefined;
-    const people = new Set<Did>([this.identity.author]);
-    for (const scope of shared) {
-      const parsed = parseScope(scope);
-      if (!parsed) continue;
-      const direct = this.#directs.get(parsed.id);
-      if (direct) {
-        people.add(direct.peer);
-        continue;
-      }
-      const space = this.#spaces.get(parsed.id);
-      if (!space) continue;
-      const state = this.#state(space);
-      people.add(space.founder);
-      for (const did of state.members.keys()) people.add(did);
-    }
-    return (author) => people.has(author);
-  }
-
-  /**
-   * A control event from a peer that holds only an older key of a space: taken only if it's a join with an invite this
-   * space made (a join that reached us after our newer key). Whoever's behind may also be someone removed: nothing
-   * else of theirs counts here, and control events aren't rate-limited.
-   */
-  #joinFromBehind(item: WireItemV2): boolean {
-    const scope = parseScope(item.e.space);
-    const space = scope && this.#spaces.get(scope.id);
-    if (!space) return false;
-    const d = this.#decode(recordOfV2(canonicalIdV2(item.e), item.e, item.b));
-    if (!d || canonicalKind(d.inner.kind) !== KIND_JOIN) return false;
-    const invite = (d.inner.body as { invite?: unknown } | null)?.invite;
-    return typeof invite === 'string' && this.#decodedIn(space.id).some((x) => canonicalKind(x.inner.kind) === KIND_INVITE && (x.inner.body as { invite?: unknown } | null)?.invite === invite);
-  }
 
   // ManagedKeys (managed.ts): the node delegates.
 
@@ -3732,627 +3101,6 @@ export class WeaveNode implements Backend {
   }
 
 
-  // ---------------------------------------------------------------- removals, settled and anchored
-
-  /**
-   * Two people who took each other's role at once (each removal or demotion
-   * not naming the other as seen): as the owner, say which came first, by the
-   * order this node got them, so every node ends up alike (H7hk7X9S).
-   */
-  #settleLosses(): number {
-    let settled = 0;
-    for (const space of [...this.#spaces.values()]) {
-      if (space.founder !== this.identity.author || this.#directs.has(space.id)) continue;
-      const state = this.#state(space);
-      if (!mayDo(state, this.identity.author, 'own').ok) continue;
-      for (const pair of state.unsettled ?? []) {
-        this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SETTLE, body: pair }));
-        settled++;
-      }
-    }
-    return settled;
-  }
-
-  /**
-   * People removed before removals named what they saw (an anchor, see
-   * spaces.ts): whoever manages the space anchors them now, once, by what this
-   * node holds of them. What they sign past it counts as after their removal.
-   */
-  #anchorRemovals(): number {
-    let anchored = 0;
-    for (const space of [...this.#spaces.values()]) {
-      if (this.#directs.has(space.id)) continue;
-      const state = this.#state(space);
-      if (!mayDo(state, this.identity.author, 'manage').ok || !state.removed.size) continue;
-      for (const did of state.removed.keys()) {
-        if (state.left.has(did) || state.members.has(did)) continue;
-        const signers = this.replica.signers().filter((s) => this.replica.authority.personOf(s) === did);
-        if (!signers.length || signers.every((s) => state.cutoffs?.some((c) => c.signer === s && c.c !== undefined))) continue;
-        this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_REMOVE, body: { member: did, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
-        anchored++;
-      }
-    }
-    return anchored;
-  }
-
-
-
-  /** The space's rules for agents and services as they apply (company spaces: approved only), and who is approved. */
-  #visitorsInfo(space: StoredSpace): NonNullable<SpaceInfo['visitors']> {
-    const state = this.#state(space);
-    const fallback: VisitorRule = { who: state.managed ? 'approved' : 'everyone' };
-    return {
-      agents: state.visitors?.agents ?? fallback,
-      services: state.visitors?.services ?? fallback,
-      approved: [...(state.approvedAgents ?? [])].map((did) => {
-        const grant = this.replica.authority.grant(did);
-        return grant ? `${this.nameOf(grant.author) ?? grant.author}/${(grant.name ?? did.slice(8, 16)).replace(SERVICE_PREFIX, '')}` : did;
-      }),
-    };
-  }
-
-
-
-  /** Tell peers which spaces this node holds, right away (a key changed), and join the right meeting points soon. */
-  #announceNow(): void {
-    if (!this.#swarm || this.#listingSpaces) return;
-    this.#swarm.announce();
-    this.#announceSoon();
-  }
-
-  /** Tell peers which spaces this node holds, once the current change is done. */
-  #announceSoon(): void {
-    if (!this.#swarm || this.#announcing) return;
-    this.#announcing = true;
-    setImmediate(() => {
-      this.#announcing = false;
-      this.#swarm?.announce();
-      this.#refreshTopics();
-    });
-  }
-
-  /** Join the meeting points this node should be at now, and leave those it shouldn't (a space's key moved on, or it left). */
-  #refreshTopics(): void {
-    const swarm = this.#swarm;
-    if (!swarm) return;
-    const wanted = new Set(this.topics);
-    for (const topic of wanted) if (!swarm.joined.includes(topic)) swarm.join(topic, { announce: !this.#looksOnly(topic) }).catch(() => {});
-    for (const topic of swarm.joined) if (!wanted.has(topic)) swarm.leave(topic).catch(() => {});
-  }
-
-  /** Where our links say we're found: our meeting point, with its secret (holding it lets whoever has the link in). */
-  #entryPoint(): Invite['entry'] {
-    const secret = this.#meetSecret();
-    return { topics: [meetTopic(secret)], bootstrap: this.config.bootstrap, meet: b64u.encode(secret) };
-  }
-
-  /** Someone on a private network (e.g. a local testnet) brings us onto it. */
-  #adoptBootstrap(entry: Invite['entry']): void {
-    const key = (list: Invite['entry']['bootstrap']) => JSON.stringify(list.map((b) => `${b.host}:${b.port}`).sort());
-    if (key(entry.bootstrap) === key(this.config.bootstrap)) return;
-    const describe = (list: Invite['entry']['bootstrap']) => (list.length ? `the private network at ${list.map((b) => `${b.host}:${b.port}`).join(', ')}` : 'the public network');
-    // A brand-new node may follow its first link onto a private network (handy for test networks):
-    // it has nothing there yet to lose. An established node never switches silently.
-    const fresh = this.config.bootstrap.length === 0 && this.#spaces.size === 0 && this.#people.contacts().size === 0 && !(this.#graph().get(this.identity.author)?.following.size);
-    if (fresh && entry.bootstrap.length) {
-      this.config = { ...this.config, bootstrap: entry.bootstrap };
-      saveConfig(this.home, this.config);
-      return;
-    }
-    const fix = entry.bootstrap.length ? `weave bootstrap ${entry.bootstrap.map((b) => `${b.host}:${b.port}`).join(' ')}` : 'weave bootstrap --clear';
-    throw new Error(
-      `this link comes from ${describe(entry.bootstrap)}, but your node uses ${describe(this.config.bootstrap)}, so you couldn't reach each other. ` +
-        `To switch on purpose: "${fix}", restart your node, then use the link again.`,
-    );
-  }
-
-  /** Record admissions into a project and hand the newcomers its keys through the group they came by. */
-  #admitAll(project: StoredSpace, group: StoredSpace, dids: Did[]): void {
-    if (!dids.length) return;
-    // Letting them in would need a new key we can't give: someone who manages the project does it.
-    if (!mayDo(this.#state(project), this.identity.author, 'manage').ok && this.#needsFreshKey(project)) return;
-    for (const member of dids) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
-    this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
-  }
-
-  /** Joins to and departures from a project's invited groups that this node can see (it must be in the group). */
-  #changes(project: StoredSpace, state: SpaceState): Admission[] {
-    const changes: Admission[] = [];
-    const projectRef: SpaceRef = { id: project.id, kind: 'project', name: project.name };
-    for (const invited of state.groups.values()) {
-      const group = this.#spaces.get(invited.id);
-      if (!group) continue;
-      const groupMembers = this.#state(group).members;
-      const groupRef: SpaceRef = { id: group.id, kind: 'group', name: group.name };
-      for (const did of groupMembers.keys()) {
-        // Someone removed from the project stays out, whatever groups they're in (unless they left on their own).
-        const removed = state.removed.has(did) && !state.left.has(did);
-        if (!state.members.has(did) && !removed && state.declined.get(did) !== group.id) changes.push({ project: projectRef, did, name: this.nameOf(did), group: groupRef, change: 'join' });
-      }
-      for (const member of state.members.values()) {
-        if (member.via === group.id && !groupMembers.has(member.did) && member.did !== state.founder) {
-          changes.push({ project: projectRef, did: member.did, name: this.nameOf(member.did), group: groupRef, change: 'leave' });
-        }
-      }
-    }
-    return changes;
-  }
-
-  /** New epoch keys from a rekey, or a whole space gifted to us when a project admitted us. */
-  #takeKeys(event: WeaveRecord): void {
-    if (canonicalKind(event.kind) === KIND_REKEY) {
-      const space = this.#spaces.get(parseScope(event.scope)?.id ?? '');
-      // Judged by whether its author managed the space when they made it, not today (a member back after a handover still takes it).
-      if (!space || !mayDoAt(this.#state(space), event, 'manage').ok) return;
-      const opened = this.#tryOpen((me) => openRekey(event, me));
-      if (!opened || space.shredded?.includes(opened.epoch)) return;
-      const epoch = String(opened.epoch);
-      if (!space.keys[epoch]) {
-        space.keys[epoch] = opened.key;
-        (space.rekeyers ??= {})[epoch] = event.author;
-        this.#saveSpace(space);
-        return;
-      }
-      if (space.keys[epoch] === opened.key || space.alternates?.[epoch]?.includes(opened.key)) return;
-      // Two managers rekeyed at once: keep every key of the epoch, and all seal with the one from the rekey with the lowest id.
-      const state = this.#state(space);
-      const all = this.replica
-        .events((e) => e.scope === event.scope && canonicalKind(e.kind) === KIND_REKEY && mayDoAt(state, e, 'manage').ok)
-        .flatMap((e) => {
-          const o = this.#tryOpen((me) => openRekey(e, me));
-          return o && String(o.epoch) === epoch ? [{ id: e.id, key: o.key, author: e.author }] : [];
-        })
-        .sort((a, b) => a.id.localeCompare(b.id));
-      const keys = [...new Set([...all.map((k) => k.key), space.keys[epoch], ...(space.alternates?.[epoch] ?? [])])];
-      space.keys[epoch] = all[0]?.key ?? space.keys[epoch];
-      if (all[0]) (space.rekeyers ??= {})[epoch] = all[0].author;
-      (space.alternates ??= {})[epoch] = keys.filter((k) => k !== space.keys[epoch]);
-      this.#saveSpace(space);
-      return;
-    }
-    const opened = this.#tryOpen((me) => openGift(event, me));
-    if (!opened) return;
-    // Only accept gifts posted in a group we're in, by someone in that group,
-    // or a tier's keys from the creator we asked to join it.
-    const via = this.#spaces.get(parseScope(event.scope)?.id ?? '');
-    const viaGroup = !!via && via.kind === 'group' && this.#state(via).members.has(event.author);
-    const asked = opened.space.kind === 'group' && opened.space.founder === event.author && this.#selfBodies(KIND_MEMBERSHIP_PENDING).some((b) => b.tier === opened.space.id && b.creator === event.author);
-    // Or the keys of a space we knocked on, from the person whose link we used.
-    const knocked = this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === opened.space.id && b.inviter === event.author);
-    if (!viaGroup && !asked && !knocked) return;
-    const known = this.#spaces.get(opened.space.id);
-    if (known) {
-      let added = false;
-      // For a space we hold, a gifted key counts only if it opens something sealed with it there (8R9bN-yO): anyone in a
-      // group with us can gift, and a made-up key for an epoch to come would keep the real one out.
-      for (const [epoch, key] of Object.entries(opened.space.keys)) {
-        if (!known.keys[epoch] && !known.shredded?.includes(Number(epoch)) && this.#opensSomething(known, epoch, key)) (known.keys[epoch] = key), (added = true);
-      }
-      for (const [board, epochs] of Object.entries((opened.space as StoredSpace).boards ?? {})) {
-        for (const [epoch, key] of Object.entries(epochs)) if (!known.boards?.[board]?.[epoch] && this.#opensSomething(known, epoch, key, board)) (((known.boards ??= {})[board] ??= {})[epoch] = key), (added = true);
-      }
-      if (added) this.#saveSpace(known);
-      return;
-    }
-    void this.#addSpace({ ...opened.space, entry: opened.entry, via: event.author });
-  }
-
-  /** Does a key we're handed open something sealed with it in this space (an epoch's events, or a board's)? */
-  #opensSomething(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
-    const scope = spaceScope(space);
-    const withKey = { ...space, keys: { ...space.keys, [epoch]: key } };
-    for (const e of this.replica.events((r) => r.kind === KIND_SEALED && r.scope === scope && !r.missing)) {
-      if (board === undefined) {
-        if ((e.body as { epoch?: unknown } | null)?.epoch === Number(epoch) && openIn(withKey, e)) return true;
-        continue;
-      }
-      const inner = openIn(space, e);
-      const b = inner?.body as { board?: unknown; epoch?: unknown } | null | undefined;
-      if (inner?.kind === KIND_BOARD_SEALED && b?.board === board && b.epoch === Number(epoch) && openBoard(space, inner, { [board]: { [epoch]: key } })) return true;
-    }
-    return false;
-  }
-
-  #anchor(person: Did, space: StoredSpace): Record<string, { c: number; s: number; n: number }> {
-    // In the space itself, each key's control head and last content (see Anchor in spaces.ts): numbered there without gaps.
-    const scope = spaceScope(space);
-    const out: Record<string, { c: number; s: number; n: number }> = {};
-    for (const signer of this.replica.signers()) {
-      if (this.replica.authority.personOf(signer) !== person) continue;
-      const n = this.replica.number(signer);
-      if (n > 0) out[signer] = { c: this.replica.store.chainHead(signer, scope)?.seq ?? 0, s: this.replica.store.contentCount(signer, scope), n };
-    }
-    return out;
-  }
-
-  /**
-   * The last number of each of a person's keys (devices, agents) this node
-   * holds: what a removal, demotion, leave or handover names as counting before
-   * it. Whatever those keys sign numbered past it counts as after, whatever date
-   * it claims (Julian's backdating issue).
-   */
-  #upTo(person: Did): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const signer of this.replica.signers()) {
-      if (this.replica.authority.personOf(signer) !== person) continue;
-      const n = this.replica.number(signer);
-      if (n > 0) out[signer] = n;
-    }
-    return out;
-  }
-
-  #state(space: StoredSpace): SpaceState {
-    const direct = this.#directs.get(space.id);
-    if (direct) {
-      // Two people, no membership events: the key itself says who is in.
-      const member = (did: Did): [Did, Member] => [did, { did, since: '' }];
-      return { kind: 'direct', founder: space.founder, members: new Map([member(this.identity.author), member(direct.peer)]), removed: new Map(), maintainers: new Set(), groups: new Map(), declined: new Map(), left: new Set() };
-    }
-    this.#decodeAll();
-    const key = `${this.#decodedGeneration}:${this.#controlRevision.get(space.id) ?? 0}`;
-    const kept = this.#stateCache.get(space.id);
-    if (kept?.key === key) return kept.state;
-    const state = spaceState(space.kind, space.founder, this.#decodedIn(space.id), { arrival: (e) => this.replica.arrival((e as { id?: string }).id ?? '') });
-    this.#stateCache.set(space.id, { key, state });
-    return state;
-  }
-
-  #page(project: StoredSpace, state: SpaceState): ProjectPage {
-    let page = DEFAULT_PAGE;
-    for (const d of this.#decodeAll()) {
-      if (d.space?.id !== project.id || d.inner.kind !== KIND_PAGE || !mayDo(state, d.event.author, 'curate').ok) continue;
-      const body = (d.inner.body ?? {}) as Record<string, unknown>;
-      const text = (key: string, max: number) => (typeof body[key] === 'string' ? (body[key] as string).slice(0, max) : undefined);
-      // Pages from before titles and bodies had only a description: it becomes the body.
-      const legacy = body.body === undefined && body.subtitle === undefined;
-      const subtitle = text('subtitle', 300) ?? '';
-      const pageBody = text('body', 100_000) ?? (legacy ? (text('description', 5000) ?? '') : '');
-      const icon = parseBlobRef(body.icon) ? (body.icon as string) : undefined;
-      const banner = parseBlobRef(body.banner) ? (body.banner as string) : undefined;
-      page = {
-        title: text('title', 100) ?? '',
-        subtitle,
-        body: pageBody,
-        ...(icon ? { icon } : {}),
-        ...(banner ? { banner } : {}),
-        description: subtitle || summary(pageBody),
-        status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : page.status,
-        public: body.public === true,
-      };
-    }
-    return page;
-  }
-
-  #spaceInfo(space: StoredSpace): SpaceInfo {
-    const state = this.#state(space);
-    return {
-      id: space.id,
-      kind: space.kind,
-      name: this.#spaceName(space),
-      founder: state.founder,
-      founderName: this.nameOf(state.founder),
-      members: state.members.size,
-      epoch: currentEpoch(space),
-      ...(space.kind === 'project' && this.#page(space, state).icon ? { icon: this.#page(space, state).icon } : {}),
-      ...this.#spacePhoto(space, state),
-      ...(state.closed ? { closed: true as const } : {}),
-      history: state.history?.value ?? 'all',
-      ...(state.managed ? { managed: this.#managed.managedInfo(space, state.managed) } : {}),
-      ...(space.kind !== 'direct' ? { visitors: this.#visitorsInfo(space) } : {}),
-      ...(this.#retention.held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
-      ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
-    };
-  }
-
-  /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
-  #spacePhoto(space: StoredSpace, state: SpaceState): { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } {
-    if (space.kind === 'direct') return {};
-    const managers = this.#managers(state);
-    let out: { photo?: string; bannerText?: string; background?: string; membersOnBanner?: true; photoOrder?: Did[]; photoPoses?: Record<Did, string>; photoInList?: boolean } = { photoInList: space.kind !== 'project' };
-    for (const e of this.#entries(space)) {
-      if (e.kind !== KIND_SPACE_PHOTO || !managers.has(e.event.author)) continue;
-      const body = (e.body ?? {}) as Record<string, unknown>;
-      const banner = typeof body.banner === 'string' ? body.banner.trim().slice(0, 40) : '';
-      out = { ...(parseBlobRef(body.photo) ? { photo: body.photo as string } : {}), ...(banner ? { bannerText: banner } : {}), ...(parseBlobRef(body.background) ? { background: body.background as string } : {}), ...(space.kind === 'project' && body.members === true ? { membersOnBanner: true as const } : {}), ...((order) => (order.length ? { photoOrder: order } : {}))(photoOrderOf(body.order)), ...((poses) => (Object.keys(poses).length ? { photoPoses: poses } : {}))(photoPosesOf(body.poses)), photoInList: typeof body.list === 'boolean' ? body.list : space.kind !== 'project' };
-    }
-    return out;
-  }
-
-  /**
-   * A space's photo: a picture of its own, or none for everyone's avatars together; the banner's text; and the
-   * background behind the group photo. Its founder, maintainers or moderators set it. Empty removes; left out stays.
-   */
-  async setSpacePhoto(input: { space: string; photo?: string; banner?: string; background?: string; members?: boolean; order?: string[]; poses?: Record<string, string>; list?: boolean; as?: string }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    if (space.kind === 'direct') throw new Error('a direct chat has no photo');
-    const state = this.#state(space);
-    if (!mayDo(state, this.identity.author, 'curate').ok) throw new Error(`only those who run ${space.name} set its photo`);
-    if (input.as) this.#agentMay(input.as, KIND_SPACE_PHOTO);
-    for (const image of [input.photo, input.background]) if (image && !parseBlobRef(image)) throw new Error('a photo or background is an uploaded image (a wblob: reference)');
-    if (input.banner !== undefined && input.banner.trim().length > 40) throw tooLong('The banner', input.banner.trim().length, 40);
-    const before = this.#spacePhoto(space, state);
-    const photo = input.photo === undefined ? before.photo : input.photo || undefined;
-    const banner = input.banner === undefined ? before.bannerText : input.banner.trim() || undefined;
-    const background = input.background === undefined ? before.background : input.background || undefined;
-    if (input.members && space.kind !== 'project') throw new Error("members stand on a project's banner; only projects have one");
-    const members = input.members ?? !!before.membersOnBanner;
-    if (input.order && input.order.length !== photoOrderOf(input.order).length) throw new Error("the photo's order lists people by their keys (did:key:…), each once, at most 100");
-    const order = input.order ?? before.photoOrder ?? [];
-    if (input.poses && Object.keys(input.poses).length !== Object.keys(photoPosesOf(input.poses)).length) throw new Error("the photo's poses go by people's keys (did:key:…), each a pose's id like wave or idea, at most 100");
-    const poses = input.poses ? photoPosesOf(input.poses) : (before.photoPoses ?? {});
-    const list = input.list ?? before.photoInList ?? space.kind !== 'project';
-    await this.publish({ kind: KIND_SPACE_PHOTO, body: { photo: photo ?? '', banner: banner ?? '', background: background ?? '', members, order, poses, list }, space: space.id, as: input.as });
-    return this.#spaceInfo(space);
-  }
-
-  /** A space's name; a direct chat is named after the other person. */
-  #spaceName(space: StoredSpace): string {
-    const peer = this.#directs.get(space.id)?.peer;
-    return peer ? (this.nameOf(peer) ?? `${peer.slice(8, 16)}…`) : space.name;
-  }
-
-  /** Friends: people I follow who follow me back. */
-  #friends(): Did[] {
-    return friendsOf(this.#graph(), this.identity.author);
-  }
-
-  /** The direct chat with someone, derived once and remembered for this run. */
-  #direct(peer: Did): StoredSpace {
-    let space = this.#directByPeer.get(peer);
-    if (!space) {
-      space = { ...directSpace({ author: this.identity.author, keys: this.#myEncryptionPairs() }, peer, this.replica.authority.encryptionKeys(peer)), entry: { topics: [peer], bootstrap: [] } };
-      this.#directByPeer.set(peer, space);
-      this.#directs.set(space.id, { space, peer });
-      this.#announceSoon();
-    }
-    return space;
-  }
-
-  /** Derive the direct chats with everyone whose log we hold (people, not their agents' keys). */
-  #ensureDirects(): void {
-    for (const signer of this.replica.signers()) this.#ensureDirectFor(signer);
-  }
-
-  #ensureDirectFor(signer: Did): void {
-    const person = this.replica.authority.personOf(signer);
-    if (person !== this.identity.author && !this.#directByPeer.has(person) && !this.replica.authority.grant(person)) this.#direct(person);
-  }
-
-  // ---------------------------------------------------------------- internals: posts
-
-  /** Your saves, from your self-sealed events. */
-  #saves(): Map<string, SaveMode> {
-    return this.#memo('saves', () => {
-      const mine = this.#decodeAll()
-        .filter((d) => d.private && d.inner.kind === KIND_SAVE)
-        .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-      return savesOf(mine);
-    });
-  }
-
-  /** How many messages each post's chat has, and when the latest came. */
-  #chats(entries: Entry[]): Map<string, { count: number; last: string }> {
-    const chats = new Map<string, { count: number; last: string }>();
-    for (const e of entries) {
-      const body = e.body as { post?: unknown; target?: unknown } | null;
-      const post = e.kind === KIND_MSG ? body?.post : e.kind === KIND_REPLY ? body?.target : undefined;
-      if (typeof post !== 'string') continue;
-      const chat = chats.get(post) ?? { count: 0, last: '' };
-      chat.count++;
-      if (e.event.time > chat.last) chat.last = e.event.time;
-      chats.set(post, chat);
-    }
-    return chats;
-  }
-
-  /** All posts in a project's boards or a community, and its boards. */
-  #spacePosts(space: StoredSpace): { posts: PostInfo[]; boards: Board[] } {
-    const entries = this.#entries(space);
-    const state = this.#state(space);
-    const access = space.kind === 'project' ? this.#access(space, state, entries) : undefined;
-    const me = this.identity.author;
-    // Boards we may not read stay out of sight altogether.
-    const boards = boardsOf(space.kind, entries, state.maintainers).filter((b) => !access?.rules.get(b.name)?.read || !state.members.has(me) || mayUse('read', b.name, me, state, access));
-    const known = new Set(boards.map((b) => b.name));
-    const pinned = new Set(boards.flatMap((b) => b.pinned));
-    const issues = new Map(space.kind === 'project' ? issuesOf(entries).map((i) => [i.id, i]) : []);
-    const proposals = new Map(space.kind === 'project' ? proposalsOf(entries, this.#voters(space)).map((p) => [p.id, p]) : []);
-    const rules = boardRulesOf(entries, this.#managers(state), this.#seenAt);
-    const around = this.#aroundPosts(entries);
-    const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
-    const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
-    const minDays = this.#companies.companyRetention(space)?.minDays;
-    // Each author's share of each board with a rule: their bytes against an even split (stage 8).
-    const overuse = new Map<string, number>();
-    for (const board of rules.keys()) {
-      const mine = new Map<Did, number>();
-      for (const p of visible.filter((x) => x.board === board)) mine.set(p.author, (mine.get(p.author) ?? 0) + p.title.length + p.text.length);
-      const total = [...mine.values()].reduce((a, b) => a + b, 0);
-      for (const [author, bytes] of mine) if (total && mine.size > 1) overuse.set(`${board} ${author}`, bytes / (total / mine.size));
-    }
-    const posts = visible
-      .map((p) => {
-        const info = this.#postInfo(p, space, ctx);
-        if (pinned.has(p.id)) info.pinned = true;
-        const near = around.get(p.id);
-        const active = near && near.last > info.active ? near.last : info.active;
-        const permanent = p.type !== 'post' || (space.kind === 'project' && p.board === 'releases');
-        info.lifetime = lifetimeOf({ active, upvotes: ctx.scores.get(p.id)?.up ?? 0, rule: rules.get(p.board), pinned: info.pinned, permanent, overuse: overuse.get(`${p.board} ${p.author}`), ...(minDays ? { minDays } : {}) });
-        if (p.author === this.identity.author || state.founder === this.identity.author) info.lifetime.yours = true;
-        const issue = issues.get(p.id);
-        if (issue) info.issue = { status: issue.status, labels: issue.labels, ...(issue.assignee ? { assignee: this.#actor(issue.assignee.author, issue.assignee.signer) } : {}) };
-        const proposal = proposals.get(p.id);
-        if (proposal) info.proposal = this.#proposalInfo(proposal);
-        return info;
-      });
-    if (this.#holding.pulled(space, state)) {
-      const members = [...state.members.keys()];
-      const recent = new Date(this.clock() - RECENT_HOLD_MS).toISOString();
-      for (const p of posts) p.heldBy = this.#holding.heldBy(p, members, p.active >= recent);
-    }
-    // A board over its size: the posts that would go soonest go now.
-    for (const [board, rule] of rules) {
-      const inBoard = posts.filter((p) => p.board === board).map((p) => ({ id: p.id, lifetime: p.lifetime!, bytes: (around.get(p.id)?.bytes ?? 0) + JSON.stringify(p.text).length + p.title.length, overuse: overuse.get(`${board} ${p.by.did}`) }));
-      const full = overBudget(inBoard, rule, this.clock());
-      for (const post of posts) if (full.has(post.id)) post.lifetime = { until: new Date(this.clock()).toISOString(), upvotes: 0, addedDays: 0, full: true, ...(post.lifetime?.yours ? { yours: true as const } : {}) };
-    }
-    return { posts, boards };
-  }
-
-  #ruleInfo(rule: BoardRule): NonNullable<BoardInfo['rule']> {
-    return { keepDays: rule.keepDays, maxMB: rule.maxMB, by: this.#actor(rule.by, rule.by), time: rule.time };
-  }
-
-  /** Who manages a space's rules: its maintainers or moderators, and its owner. */
-  #managers(state: SpaceState): Set<Did> {
-    return managersOf(state);
-  }
-
-  /** Per post, what goes with it: its last activity (edits, chat, upvotes, keep), its size, and the events to forget with it. */
-  #aroundPosts(entries: Entry[]): Map<string, { last: string; bytes: number; ids: Array<{ id: string; author: Did }> }> {
-    const out = new Map<string, { last: string; bytes: number; ids: Array<{ id: string; author: Did }> }>();
-    for (const e of entries) {
-      const body = e.body as { post?: unknown; target?: unknown } | null;
-      const post = typeof body?.post === 'string' ? body.post : typeof body?.target === 'string' ? body.target : undefined;
-      if (!post) continue;
-      const near = out.get(post) ?? { last: '', bytes: 0, ids: [] };
-      if (e.event.time > near.last) near.last = e.event.time;
-      near.bytes += JSON.stringify(e.body).length;
-      near.ids.push({ id: e.id, author: e.event.author });
-      out.set(post, near);
-    }
-    return out;
-  }
-
-  /** A project shown as a post: its id is the event that created it. */
-  #projectPost(project: StoredSpace): PostInfo | undefined {
-    const entries = this.#entries(project);
-    const created = entries.find((e) => canonicalKind(e.kind) === KIND_SPACE_CREATE && e.event.author === project.founder);
-    if (!created) return undefined;
-    const state = this.#state(project);
-    const page = this.#page(project, state);
-    const score = scoresOf(entries).get(created.id);
-    const messages = entries.filter((e) => e.kind === KIND_MSG);
-    // Active by its chat: a post there is on Home itself and moves up there, not the project (nor services' events).
-    const active = [created.event.time, ...messages.map((e) => e.event.time)].reduce((a, b) => (b > a ? b : a));
-    const saved = this.#saves().get(created.id);
-    return {
-      id: created.id,
-      short: created.id.slice(0, 8),
-      url: postUrl({ id: created.id, title: project.name, space: project, project: true }, this.#prefix()),
-      type: 'project',
-      space: { id: project.id, kind: 'project', name: project.name },
-      by: this.#actor(project.founder, project.founder),
-      title: project.name,
-      text: page.description,
-      time: created.event.time,
-      active,
-      score: score?.score ?? 0,
-      myVote: score?.votes.get(this.identity.author) ?? 0,
-      chat: messages.length,
-      pinned: false,
-      ...(saved ? { saved } : {}),
-      project: { id: project.id, name: project.name, description: page.description, status: page.status, ...(page.icon ? { icon: page.icon } : {}), participants: state.members.size, member: true },
-    };
-  }
-
-  #postInfo(p: Post, space: StoredSpace | undefined, ctx: { scores: Map<string, Score>; chats: Map<string, { count: number; last: string }>; saves: Map<string, SaveMode>; entries?: Entry[]; prefixes?: Map<string, string> }): PostInfo {
-    const score = ctx.scores.get(p.id);
-    const chat = ctx.chats.get(p.id);
-    const saved = ctx.saves.get(p.id);
-    const info: PostInfo = {
-      id: p.id,
-      short: p.id.slice(0, 8),
-      url: postUrl({ id: p.id, title: p.title, ...(space ? { space, board: p.board } : { author: this.#actor(p.author, p.author).name }) }, this.#prefix(ctx.prefixes)),
-      type: p.type,
-      ...(space ? { space: { id: space.id, kind: space.kind, name: space.name }, board: p.board } : {}),
-      by: this.#actor(p.author, p.signer, p.session),
-      title: p.title,
-      text: p.text,
-      ...(p.link ? { link: p.link } : {}),
-      ...(p.image ? { image: p.image } : {}),
-      ...(p.scene ? { scene: p.scene } : {}),
-      ...(p.prompt ? { prompt: p.prompt } : {}),
-      ...(p.routine ? { routine: p.routine } : {}),
-      time: p.time,
-      ...(p.edited ? { edited: p.edited } : {}),
-      active: chat && chat.last > p.time ? chat.last : p.time,
-      score: score?.score ?? 0,
-      myVote: score?.votes.get(this.identity.author) ?? 0,
-      chat: chat?.count ?? 0,
-      pinned: false,
-      ...(saved ? { saved } : {}),
-    };
-    if (p.with && ctx.entries) {
-      // Everyone sees confirmed co-authors; the post's author also sees who was asked and who declined.
-      const own = p.author === this.identity.author;
-      const coauthors = coauthorsOf(p, ctx.entries, this.#content.keyFacts)
-        .filter((c) => own || c.state === 'confirmed')
-        .map((c) => ({ ...this.#content.keyActor(c.did), state: c.state }));
-      if (coauthors.length) info.coauthors = coauthors;
-    }
-    if (p.share) {
-      info.share = { ...(p.share.space ? { space: p.share.space } : {}), post: p.share.post, member: !!p.share.space && this.#spaces.has(p.share.space.id) };
-      if (p.share.project) {
-        const mine = this.#spaces.get(p.share.project.id);
-        const icon = mine ? this.#page(mine, this.#state(mine)).icon : p.share.project.icon;
-        info.project = { ...p.share.project, ...(icon ? { icon } : {}), member: !!mine, ...(mine ? { participants: this.#state(mine).members.size } : {}) };
-      }
-    }
-    return info;
-  }
-
-  /** Public posts by you and the people you follow, upvoted in public. */
-  #publicPosts(): PostInfo[] {
-    const following = this.#graph().get(this.identity.author)?.following ?? new Set<Did>();
-    const hidden = this.#hiddenAuthors();
-    const entries = this.#decodeAll()
-      .filter((d) => !d.space && !d.private)
-      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    const posts = postsOf(undefined, entries).filter((p) => (p.author === this.identity.author || following.has(p.author)) && !hidden.has(p.author));
-    const ctx = { scores: scoresOf(entries), chats: new Map(), saves: this.#saves(), entries, prefixes: shortPrefixes(posts.map((p) => p.id)) };
-    return posts.map((p) => this.#postInfo(p, undefined, ctx));
-  }
-
-  /**
-   * Home: your communities' posts, your projects, and public posts from people
-   * you follow, from all of them or one kind of source. Spaces you hid from
-   * Home stay out (pass `from` undefined to get everything, e.g. to look a post up).
-   */
-  #homePosts(from?: HomeSource): PostInfo[] {
-    const me = this.identity.author;
-    const hidden = this.#hiddenAuthors();
-    const hiddenSpaces = from ? this.#homeHidden() : new Set<string>();
-    const friends = from === 'friends' ? new Set(friendsOf(this.#graph(), me)) : new Set<Did>();
-    const wants = (kind: 'community' | 'project' | 'public') =>
-      !from || from === 'all' || (kind === 'community' ? from === 'communities' : kind === 'project' ? ['projects', 'mine', 'friends'].includes(from) : ['following', 'friends', 'mine'].includes(from));
-    const said = this.#boardFollows();
-    const posts: PostInfo[] = [];
-    for (const space of this.#spaces.values()) {
-      if (hiddenSpaces.has(space.id)) continue;
-      if (space.kind === 'community' && wants('community')) posts.push(...this.#spacePosts(space).posts);
-      if (space.kind === 'project' && wants('project')) {
-        const state = this.#state(space);
-        if (from === 'mine' && state.founder !== me && !state.maintainers.has(me)) continue;
-        if (from === 'friends' && !friends.has(state.founder)) continue;
-        const post = this.#projectPost(space);
-        if (post) posts.push(post);
-        posts.push(...this.#spacePosts(space).posts.filter((p) => p.board && this.#follows(space.id, p.board, said)));
-      }
-    }
-    if (wants('public')) {
-      for (const p of this.#publicPosts()) {
-        // Shared projects: yours under "mine", your friends' under "friends"; "following" takes every public post.
-        if (from === 'mine' && !(p.project && p.by.did === me)) continue;
-        if (from === 'friends' && !(p.project && friends.has(p.by.did))) continue;
-        // On Home, a share of a project you're in is already there as the project itself.
-        if (from && p.project && posts.some((q) => q.type === 'project' && q.space?.id === p.project!.id)) continue;
-        posts.push(p);
-      }
-    }
-    return posts.filter((p) => !hidden.has(p.by.did));
-  }
-
   // ---------------------------------------------------------------- phones
 
   async pairPhone(): Promise<{ link: string; expires: string }> {
@@ -4368,18 +3116,18 @@ export class WeaveNode implements Backend {
   }
 
   async setHomeVisibility(input: { space: string; visible: boolean }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
+    const space = this.#kernel.space(input.space);
     if (space.kind !== 'community' && space.kind !== 'project') throw new Error('only communities and projects are on Home');
-    if (this.#homeHidden().has(space.id) === !input.visible) return this.#spaceInfo(space);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_HOME_HIDDEN, body: { space: space.id, hidden: !input.visible } }));
-    return this.#spaceInfo(space);
+    if (this.#homeHidden().has(space.id) === !input.visible) return this.#kernel.spaceInfo(space);
+    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_HOME_HIDDEN, body: { space: space.id, hidden: !input.visible } }));
+    return this.#kernel.spaceInfo(space);
   }
 
   async followBoard(input: { project: string; board: string; on: boolean }): Promise<BoardInfo[]> {
-    const project = this.#project(input.project);
-    const board = this.#board(project, this.#spacePosts(project).boards, input.board);
+    const project = this.#kernel.project(input.project);
+    const board = this.#kernel.board(project, this.#kernel.spacePosts(project).boards, input.board);
     if (this.#follows(project.id, board.name) !== input.on) {
-      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_BOARD_FOLLOW, body: { space: project.id, board: board.name, on: input.on } }));
+      this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_BOARD_FOLLOW, body: { space: project.id, board: board.name, on: input.on } }));
     }
     return this.boards(project.id);
   }
@@ -4409,9 +3157,9 @@ export class WeaveNode implements Backend {
 
   /** Everything that can be shown as a post, including every board of every project. */
   #allPosts(): PostInfo[] {
-    const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#spacePosts(s).posts);
+    const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#kernel.spacePosts(s).posts);
     // Posts of followed boards are on Home too: each post once.
-    return [...new Map([...this.#homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
+    return [...new Map([...this.#kernel.homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
   }
 
   /**
@@ -4442,546 +3190,104 @@ export class WeaveNode implements Backend {
     return post.type === 'project' ? { space } : { space, post: post.id };
   }
 
-  // ---------------------------------------------------------------- internals: reading
-
-  #sealForSelf(inner: Inner): EventFields {
-    const key = selfKey(this.#selfSecret());
-    return { kind: KIND_SEALED, scope: SELF_SCOPE, class: classOf(inner.kind), body: seal(key, inner as unknown as Json, `weave/self/v1:${this.identity.author}`) };
-  }
-
-  #decode(event: WeaveRecord): Decoded | undefined {
-    const decoded = this.#decodeInner(event);
-    return decoded && { ...decoded, id: event.id };
-  }
-
-  #decodeInner(event: WeaveRecord): Omit<Decoded, 'id'> | undefined {
-    if (canonicalKind(event.kind) === KIND_REKEY || event.kind === KIND_GIFT) return undefined; // key plumbing, not content
-    if (event.missing) return undefined; // decoded when its body comes
-    if (event.kind !== KIND_SEALED) return { event, inner: { kind: event.kind, body: event.body } };
-
-    let decoded: Omit<Decoded, 'id'> | undefined;
-    if (event.scope === SELF_SCOPE) {
-      if (event.author !== this.identity.author) return undefined;
-      try {
-        const key = selfKey(this.#selfSecret());
-        const inner = open(key, event.body as Sealed, `weave/self/v1:${event.author}`) as unknown as Inner;
-        decoded = { event, inner, private: true };
-      } catch {
-        return undefined;
-      }
-    } else {
-      const scope = parseScope(event.scope);
-      let space = this.#spaces.get(scope?.id ?? '') ?? this.#directs.get(scope?.id ?? '')?.space;
-      // A direct message from someone new: their chat with us is the one derived from their key.
-      if (!space && scope?.kind === 'direct' && event.author !== this.identity.author) {
-        const candidate = this.#direct(event.author);
-        if (candidate.id === scope.id) space = candidate;
-      }
-      // The setting and the company halves are sealed with the Weave half alone; nothing else counts that way in a managed space.
-      const raw = space ? openIn(space, event) : undefined;
-      const inner = space && (openIn(this.#managed.cipher(space), event) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
-      if (!inner) return undefined;
-      decoded = { event, inner, space };
-      // An event of a read-limited board: readable only with that board's key.
-      if (inner.kind === KIND_BOARD_SEALED) {
-        const opened = space?.kind === 'project' ? openBoard(space, inner, space.boards) : undefined;
-        if (!opened) return undefined;
-        decoded = { event, inner: { kind: opened.kind, body: opened.body }, space, board: opened.board, outer: inner };
-      }
-    }
-    // A delegated key may carry sealed events, but only of kinds it was granted.
-    if (event.signer !== event.author) {
-      const grant = this.replica.authority.grant(event.signer);
-      if (!grant || !permits(grant.permissions, decoded.inner.kind)) return undefined;
-    }
-    // The farewell a node leaves for v0.3 peers when it moves to v0.4: not for v0.4 eyes.
-    if (decoded.inner.kind === KIND_MSG && (decoded.inner.body as { moved?: unknown } | null)?.moved !== undefined) return undefined;
-    return decoded;
-  }
-
-  #decodeAll(): Decoded[] {
-    // A managed key used for these views ran out: decode again without it.
-    if (this.#decoded && this.clock() >= this.#managed.decodedValidUntil) this.#decoded = undefined;
-    if (!this.#decoded) this.#managed.decodedValidUntil = Infinity;
-    // Board keys arrive inside the project: taking one makes more events readable, so decode again.
-    for (let round = 0; round < 4; round++) {
-      if (!this.#decoded) {
-        this.#ensureDirects();
-        const plain = this.replica.events().flatMap((event) => {
-          const d = this.#decode(event);
-          return d ? [d] : [];
-        });
-        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)]);
-        // What a carry restates and we can read ourselves counts once, as read.
-        // (and restated by several carries, once).
-        const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
-        this.#decoded = decoded.filter((d) => !d.carried || (!read.has(d.id) && (read.add(d.id), true))).sort((a, b) => replicaOrder(a.event, b.event));
-        this.#decodedRevision++;
-        this.#decodedGeneration++;
-        this.#bySpace.clear();
-        this.#spaceCache.clear();
-        this.#stateCache.clear();
-        for (const d of this.#decoded) {
-          if (!d.space) continue;
-          const list = this.#bySpace.get(d.space.id);
-          if (list) list.push(d);
-          else this.#bySpace.set(d.space.id, [d]);
-        }
-      }
-      if (!this.#takeBoardKeys(this.#decoded)) break;
-    }
-    return this.#decoded!;
-  }
-
-  /**
-   * A new event: decode just it and put it in its place (replica order: time,
-   * signer, seq). Events that change keys or rights make everything decode
-   * again instead, the next time it's needed (they are rare): key events change
-   * which signers count, and new space or board keys (taken before this runs)
-   * have already dropped the decoded events.
-   */
-  #decodedAdd(event: WeaveRecord): void {
-    const decoded = this.#decoded;
-    if (!decoded) return;
-    // A v2 event standing for a v1 event already decoded (same id, re-signed): decode again, so it replaces it (rare).
-    if (isWireItemV2(event.wire) && event.wire.e.was && decoded.some((x) => x.id === event.id)) {
-      this.#decoded = undefined;
-      return;
-    }
-    if (KEY_KINDS.has(event.kind)) {
-      this.#decoded = undefined;
-      return;
-    }
-    this.#ensureDirectFor(event.signer);
-    const d = this.#decode(event);
-    if (!d || !this.#agentCounts(d)) return;
-    // An approval, or a space's rule for agents and services, decides what they signed counts, earlier events
-    // too (nothing is deleted: a looser rule shows them again): decode again (rare).
-    if (d.inner.kind === KIND_AGENT_APPROVE || d.inner.kind === KIND_VISITORS) {
-      this.#decoded = undefined;
-      return;
-    }
-    // A carry restates many events at their own times: decode everything again (they are rare).
-    if (d.inner.kind === KIND_CARRY) {
-      this.#decoded = undefined;
-      return;
-    }
-    if (d.inner.kind === KIND_SHRED)
-      setImmediate(() => {
-        try {
-          this.#retention.applyShreds();
-        } catch {
-          // closed in the meantime: the next start applies it
-        }
-      });
-    let lo = 0;
-    let hi = decoded.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (replicaOrder(decoded[mid].event, event) <= 0) lo = mid + 1;
-      else hi = mid;
-    }
-    decoded.splice(lo, 0, d);
-    this.#decodedRevision++;
-    if (d.space) {
-      const id = d.space.id;
-      const list = this.#bySpace.get(id) ?? [];
-      let a = 0;
-      let b = list.length;
-      while (a < b) {
-        const mid = (a + b) >>> 1;
-        if (replicaOrder(list[mid].event, event) <= 0) a = mid + 1;
-        else b = mid;
-      }
-      list.splice(a, 0, d);
-      this.#bySpace.set(id, list);
-      this.#spaceRevision.set(id, (this.#spaceRevision.get(id) ?? 0) + 1);
-      if (classOf(canonicalKind(d.inner.kind)) === 'control') this.#controlRevision.set(id, (this.#controlRevision.get(id) ?? 0) + 1);
-    }
-    // A board key for us makes more events readable: that drops the decoded events (see #takeBoardKeys).
-    if (d.inner.kind === KIND_BOARD_KEY) this.#takeBoardKeys([d]);
-  }
-
-  /** A result computed from all decoded events, kept until they change. Callers must not change what it returns. */
-  #memo<T>(name: string, compute: () => T): T {
-    this.#decodeAll();
-    const hit = this.#memos.get(name);
-    if (hit && hit.revision === this.#decodedRevision) return hit.value as T;
-    const value = compute();
-    this.#memos.set(name, { revision: this.#decodedRevision, value });
-    return value;
-  }
-
-  /** The decoded events of one space, in replica order. */
-  #decodedIn(spaceId: string): Decoded[] {
-    this.#decodeAll();
-    return this.#bySpace.get(spaceId) ?? [];
-  }
-
-  /** The cache slot of a space, emptied when the space's events or everything decoded changed. */
-  #cacheFor(spaceId: string): { key: string; entries?: Entry[]; access?: Access; accessFor?: SpaceState } {
-    this.#decodeAll();
-    const key = `${this.#decodedGeneration}:${this.#spaceRevision.get(spaceId) ?? 0}`;
-    let slot = this.#spaceCache.get(spaceId);
-    if (slot?.key !== key) {
-      slot = { key };
-      this.#spaceCache.set(spaceId, slot);
-    }
-    return slot;
-  }
-
-  /** For tests: the ids of the decoded events, as kept up to date or (rebuild) decoded from scratch. */
-  _decodedIds(rebuild = false): string[] {
-    if (rebuild) this.#decoded = undefined;
-    return this.#decodeAll().map((d) => d.id);
-  }
-
-  /** Keep board keys boxed to us; true if any was new (then everything is decoded again). */
-  #takeBoardKeys(decoded: Decoded[]): boolean {
-    const changed = new Set<StoredSpace>();
-    for (const d of decoded) {
-      if (d.inner.kind !== KIND_BOARD_KEY || d.space?.kind !== 'project') continue;
-      const id = d.id;
-      if (this.#boardKeysSeen.has(id)) continue;
-      this.#boardKeysSeen.add(id);
-      const opened = this.#tryOpen((me) => openBoardKey(d.space!, d.inner, me));
-      if (!opened) continue;
-      const epochs = ((d.space.boards ??= {})[opened.board] ??= {});
-      if (epochs[String(opened.epoch)]) continue;
-      epochs[String(opened.epoch)] = opened.key;
-      changed.add(d.space);
-    }
-    for (const space of changed) this.#saveSpace(space);
-    return changed.size > 0;
-  }
-
-  #graph() {
-    return this.#memo('graph', () => {
-      const edges: EdgeEvent[] = this.#decodeAll()
-        .filter((d) => (EDGE_KINDS as readonly string[]).includes(d.inner.kind))
-        // In a direct chat, only a follow of the other one of the two counts: it says nothing about anyone else.
-        .filter((d) => {
-          const direct = d.space && this.#directs.get(d.space.id);
-          if (!direct) return true;
-          const subject = (d.inner.body as { subject?: unknown } | null)?.subject;
-          const pair = [this.identity.author, direct.peer];
-          return pair.includes(d.event.author) && pair.includes(subject as Did);
-        })
-        .map((d) => ({ author: d.event.author, kind: d.inner.kind, body: d.inner.body, time: d.event.time, signer: d.event.signer, seq: d.event.seq }));
-      return socialGraph(edges);
-    });
-  }
-
-  /** Authors I blocked or muted: their events are left out of feeds. */
-  #hiddenAuthors(): Set<Did> {
-    return this.#memo('hidden', () => {
-      const mine = this.#graph().get(this.identity.author);
-      return new Set([...(mine?.blocked ?? []), ...(mine?.muted ?? [])]);
-    });
-  }
-
-  /**
-   * Your own events are always shown to you: after joining offline, your node
-   * can't confirm your membership until it has synced the founder's events.
-   */
-  #mine = (event: WeaveRecord): boolean => event.author === this.identity.author;
-
-  /** A space's readable events from members, as entries for the collaboration functions. */
-  #entries(space: StoredSpace): Entry[] {
-    const slot = this.#cacheFor(space.id);
-    if (slot.entries) return slot.entries;
-    const state = this.#state(space);
-    const entries = this.#decodedIn(space.id)
-      .filter((d) => this.#mine(d.event) || visibleIn(state, d.event, d.inner))
-      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    return (slot.entries = space.kind === 'project' ? this.#writable(space, state, entries) : entries);
-  }
-
-  // ---------------------------------------------------------------- internals: board access
-
-  #readersOf(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
-    if (!board || space.kind !== 'project') return [...state.members.keys()];
-    return readersOf(board, state, this.#access(space, state, entries));
-  }
-
-  #access(space: StoredSpace, state: SpaceState, entries: Entry[]): Access {
-    // Cached only for the space's own state and entries (callers sometimes pass others).
-    const slot = this.#cacheFor(space.id);
-    if (slot.access && slot.accessFor === state && slot.entries === entries) return slot.access;
-    const access = accessOf(entries, state, inviteRightsOf(entries, state));
-    if (slot.entries === entries) Object.assign(slot, { access, accessFor: state });
-    return access;
-  }
-
-  /** Where issues and proposals that don't name a board live: the first board of their type. */
-  #boardDefaults(state: SpaceState, entries: Entry[]): { issues?: string; proposals?: string } {
-    const boards = boardsOf('project', entries, state.maintainers);
-    return { issues: boards.find((b) => b.type === 'issues')?.name, proposals: boards.find((b) => b.type === 'proposals')?.name };
-  }
-
-  /** Leave out what people wrote in boards they may not write in (everyone's node does the same). */
-  #writable(space: StoredSpace, state: SpaceState, entries: Entry[]): Entry[] {
-    const access = this.#access(space, state, entries);
-    if (![...access.rules.values()].some((r) => r.write)) return entries;
-    const boards = boardOfEvents(entries, this.#boardDefaults(state, entries));
-    return entries.filter((e) => {
-      const board = boards.get(e.id);
-      return !board || !access.rules.get(board)?.write || mayUse('write', board, e.event.author, state, access);
-    });
-  }
-
-  /** Who may vote on each proposal: the people who may write in its board. */
-  #voters(project: StoredSpace): (proposal: Entry) => Set<Did> {
-    const state = this.#state(project);
-    const entries = this.#entries(project);
-    const access = this.#access(project, state, entries);
-    const boards = boardOfEvents(entries, this.#boardDefaults(state, entries));
-    const everyone = new Set(state.members.keys());
-    return (proposal) => {
-      const board = boards.get(proposal.id);
-      return board && access.rules.get(board)?.write ? new Set([...everyone].filter((did) => mayUse('write', board, did, state, access))) : everyone;
-    };
-  }
-
-  /** Check a new event against its board's rules, and seal it with the board's key if the board is read-limited. */
-  #forBoard(space: StoredSpace, inner: Inner): Inner {
-    const state = this.#state(space);
-    const entries = this.#entries(space);
-    const access = this.#access(space, state, entries);
-    if (!access.rules.size) return inner;
-    const defaults = this.#boardDefaults(state, entries);
-    const board = boardOfInner(inner, boardOfEvents(entries, defaults), defaults);
-    const rules = board ? access.rules.get(board) : undefined;
-    if (!board || !rules) return inner;
-    const me = this.identity.author;
-    if (rules.write && state.members.has(me) && !mayUse('write', board, me, state, access)) throw new Error(`only some people may write in ${board} of ${space.name}, and you're not one of them`);
-    if (!rules.read) return inner;
-    const epochs = space.boards?.[board] ?? {};
-    const epoch = Math.max(-1, ...Object.keys(epochs).map(Number));
-    if (epoch < 0) throw new Error(`you don't have the key for ${board} yet: someone who can read it needs to be online once`);
-    return sealForBoard(space, board, epoch, epochs[String(epoch)], inner);
-  }
-
-  /**
-   * Keep read-limited boards readable by exactly their readers: maintainers
-   * publish who of an invited group takes part (others can't see the group),
-   * anyone holding a board's key passes it to readers who lack it, and
-   * maintainers start a new key when someone may no longer read.
-   */
-  async #reconcileBoards(project: StoredSpace): Promise<number> {
-    const me = this.identity.author;
-    let state = this.#state(project);
-    if (!state.members.has(me)) return 0;
-    let entries = this.#entries(project);
-    let access = this.#access(project, state, entries);
-    if (!access.rules.size) return 0;
-    let changed = 0;
-    if (mayDo(state, me, 'curate').ok) {
-      const groups = new Set([...access.rules.values()].flatMap((r) => [...(r.read ?? []), ...(r.write ?? [])]).flatMap((g) => ('group' in g ? [g.group] : [])));
-      for (const id of groups) {
-        const group = this.#spaces.get(id);
-        if (!group) continue;
-        const roster = [...this.#state(group).members.keys()].filter((did) => state.members.has(did)).sort();
-        const known = [...(access.rosters.get(id) ?? [])].sort();
-        if (roster.join() === known.join()) continue;
-        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ROSTER, body: { group: id, members: roster } }));
-        changed++;
-      }
-      if (changed) {
-        state = this.#state(project);
-        entries = this.#entries(project);
-        access = this.#access(project, state, entries);
-      }
-    }
-    const holders = keyHolders(entries);
-    for (const [board, rules] of access.rules) {
-      if (!rules.read) continue;
-      const readers = readersOf(board, state, access);
-      const epochs = holders.get(board);
-      const mine = project.boards?.[board] ?? {};
-      const newKey = (epoch: number) => {
-        const key = newBoardKey();
-        ((project.boards ??= {})[board] ??= {})[String(epoch)] = key;
-        this.#saveSpace(project);
-        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), boardKeyFor(project, board, epoch, key, readers, this.#encryptionKeyOf)));
-        changed++;
-      };
-      if (!epochs?.size) {
-        if (mayDo(state, me, 'curate').ok && !Object.keys(mine).length) newKey(0);
-        continue;
-      }
-      const latest = Math.max(...epochs.keys());
-      if (!mine[String(latest)]) continue; // the newest key hasn't reached us yet
-      // Someone who may no longer read holds the current key: maintainers start a new one.
-      if (mayDo(state, me, 'curate').ok && [...epochs.get(latest)!].some((did) => !readers.includes(did))) newKey(latest + 1);
-      // Readers get every key we hold that they lack, older ones too, so they can read the board's history.
-      for (const [epoch, holding] of epochs) {
-        const key = mine[String(epoch)];
-        const missing = key ? readers.filter((did) => !holding.has(did)) : [];
-        if (!missing.length) continue;
-        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), boardKeyFor(project, board, epoch, key, missing, this.#encryptionKeyOf)));
-        changed++;
-      }
-    }
-    return changed;
-  }
-
-  /** An event by full id or a unique prefix (at least 6 characters), limited to some kinds. */
-  #find(ref: string, kinds: string[]): Decoded & { id: string } {
-    if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
-    const matches = this.#decodeAll().filter((d) => kinds.includes(d.inner.kind) && d.id.startsWith(ref));
-    if (matches.length === 0) throw new Error(`nothing found with id ${ref}`);
-    if (matches.length > 1) throw new Error(`id ${ref} is ambiguous — use more characters`);
-    return matches[0];
-  }
-
-  async #issueById(issue: Decoded & { id: string }): Promise<IssueInfo> {
-    if (issue.space?.kind !== 'project') throw new Error('issues live inside projects');
-    return (await this.issues(issue.space.id)).find((i) => i.id === issue.id)!;
-  }
-
-  #actor(author: Did, signer: Did, session?: SessionStamp): Actor {
-    const actor: Actor = { did: author };
-    const name = this.nameOf(author);
-    if (name) actor.name = name;
-    const agent = this.#agentName(signer, author);
-    if (agent) actor.agent = agent;
-    if (agent && session) actor.session = session;
-    return actor;
-  }
-
-  #reactionInfo = (r: Reaction): ReactionInfo => ({
-    emoji: r.emoji,
-    count: r.by.length,
-    mine: r.by.some((who) => who.author === this.identity.author),
-    by: r.by.map((who) => {
-      const actor = this.#actor(who.author, who.signer);
-      return `${actor.name ?? actor.did.slice(8, 16)}${actor.agent ? ` · ${actor.agent}` : ''}`;
-    }),
-  });
-
-  #messageInfo(m: Message, byId: Map<string, Message>): MessageInfo {
-    const parent = m.replyTo ? byId.get(m.replyTo) : undefined;
-    return {
-      id: m.id,
-      short: m.id.slice(0, 8),
-      by: this.#actor(m.author, m.signer, m.session),
-      text: m.text,
-      time: m.time,
-      channel: m.channel,
-      ...(parent ? { replyTo: { id: parent.id, by: this.#actor(parent.author, parent.signer), text: (parent.text || (parent.file ? `📎 ${parent.file.name}` : '')).slice(0, 140) } } : {}),
-      reactions: m.reactions.map(this.#reactionInfo),
-      ...(m.announce ? { announce: m.announce } : {}),
-      ...(m.file ? { file: m.file } : {}),
-    };
-  }
-
-  /**
-   * Announce something live in a project's chat (#general): a website opened, a version offered. A message like any
-   * (its text says it), carrying what it's about, so Weave shows it as a card that knows whether it's still on.
-   */
-  async #announce(project: string, announce: { kind: 'website' | 'release'; id: string }, text: string): Promise<void> {
-    try {
-      await this.publish({ kind: KIND_MSG, body: { text, announce }, space: project });
-    } catch (error) {
-      console.error(`weave: couldn't announce it: ${(error as Error).message}`);
-    }
-  }
-
-  #replyInfo = (r: Reply): ReplyInfo => ({ id: r.id, by: this.#actor(r.author, r.signer), text: r.text, time: r.time });
-
-  #threadInfo(t: Thread): ThreadInfo {
-    return { id: t.id, short: t.id.slice(0, 8), by: this.#actor(t.author, t.signer), title: t.title, text: t.text, time: t.time, active: t.active, replies: t.replies.map(this.#replyInfo) };
-  }
-
-  #issueInfo(i: Issue): IssueInfo {
-    return {
-      id: i.id,
-      short: i.id.slice(0, 8),
-      by: this.#actor(i.author, i.signer),
-      title: i.title,
-      text: i.text,
-      labels: i.labels,
-      status: i.status,
-      ...(i.assignee ? { assignee: this.#actor(i.assignee.author, i.assignee.signer) } : {}),
-      time: i.time,
-      replies: i.replies.map(this.#replyInfo),
-    };
-  }
-
-  #proposalInfo(p: Proposal): ProposalInfo {
-    const { votes, ...t } = p.tally;
-    const mine = votes.get(this.identity.author);
-    return {
-      id: p.id,
-      short: p.id.slice(0, 8),
-      by: this.#actor(p.author, p.signer),
-      title: p.title,
-      text: p.text,
-      deadline: p.deadline,
-      time: p.time,
-      ...t,
-      ...(mine ? { myVote: { choice: mine.choice, ...(mine.via ? { via: this.#actor(mine.via, mine.via) } : {}) } } : {}),
-      replies: p.replies.map(this.#replyInfo),
-    };
-  }
-
-  #toItem({ event, inner, space, private: isPrivate }: Decoded): FeedItem {
-    const item: FeedItem = {
-      id: event.id,
-      time: event.time,
-      kind: inner.kind,
-      scope: event.scope,
-      body: inner.body,
-      author: event.author,
-      signer: event.signer,
-      seq: event.seq,
-    };
-    const authorName = this.nameOf(event.author);
-    if (authorName) item.authorName = authorName;
-    const signerName = this.#agentName(event.signer, event.author);
-    if (signerName) item.signerName = signerName;
-    if (space) item.space = { id: space.id, kind: space.kind, name: this.#spaceName(space) };
-    if (isPrivate) item.private = true;
-    return item;
-  }
-
   // ---------------------------------------------------------------- modules: services and websites
 
   /** What services.ts reaches of the node: exactly what it uses. */
+  /** What the kernel sees of the node: the modules, and the host through its ports (kernel.ts). */
+  static kernelCore(n: WeaveNode): KernelCore {
+    return {
+      agentMay: n.#agentMay.bind(n),
+      agentName: n.#agentName.bind(n),
+      boardFollows: n.#boardFollows.bind(n),
+      get companies() {
+        return n.#companies;
+      },
+      get content() {
+        return n.#content;
+      },
+      doorSecret: n.#doorSecret.bind(n),
+      get encryptionKeyOf() {
+        return n.#encryptionKeyOf;
+      },
+      farewells: n.#farewells.bind(n),
+      follows: n.#follows.bind(n),
+      frontDoor: n.#frontDoor.bind(n),
+      get holding() {
+        return n.#holding;
+      },
+      homeHidden: n.#homeHidden.bind(n),
+      looksOnly: n.#looksOnly.bind(n),
+      get managed() {
+        return n.#managed;
+      },
+      meetSecret: n.#meetSecret.bind(n),
+      meetingTopics: n.#meetingTopics.bind(n),
+      myEncryptionPairs: n.#myEncryptionPairs.bind(n),
+      get people() {
+        return n.#people;
+      },
+      prefix: n.#prefix.bind(n),
+      get retention() {
+        return n.#retention;
+      },
+      get seenAt() {
+        return n.#seenAt;
+      },
+      selfBodies: n.#selfBodies.bind(n),
+      selfSecret: n.#selfSecret.bind(n),
+      get services() {
+        return n.#services;
+      },
+      get spaces() {
+        return n.#spaces;
+      },
+      get network() {
+        return n.#swarm;
+      },
+      theirMeets: n.#theirMeets.bind(n),
+      tryOpen: n.#tryOpen.bind(n),
+      spaceStorage: {
+        load: () => loadSpaces(n.home),
+        save: (space) => saveSpace(n.home, space),
+        remove: (id) => removeSpace(n.home, id),
+      },
+      saveConfig: () => saveConfig(n.home, n.config),
+    };
+  }
+
   /** What company accounts see of the node, and nothing more (companies.ts). */
   static companiesCore(n: WeaveNode): CompaniesCore {
     return {
       agentName: n.#agentName.bind(n),
-      anchor: n.#anchor.bind(n),
-      createSpace: n.#createSpace.bind(n),
-      decodeAll: n.#decodeAll.bind(n),
-      decodedIn: n.#decodedIn.bind(n),
+      anchor: n.#kernel.anchor.bind(n.#kernel),
+      createSpace: n.#kernel.createSpace.bind(n.#kernel),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
+      decodedIn: n.#kernel.decodedIn.bind(n.#kernel),
       get directs() {
-        return n.#directs;
+        return n.#kernel.directs;
       },
       get encryptionKeyOf() {
         return n.#encryptionKeyOf;
       },
-      entryPoint: n.#entryPoint.bind(n),
-      epochStarts: n.#epochStarts.bind(n),
+      entryPoint: n.#kernel.entryPoint.bind(n.#kernel),
+      epochStarts: n.#kernel.epochStarts.bind(n.#kernel),
       // Lazily: retention is built after this module.
       held: (state) => n.#retention.held(state),
-      keysForNewcomers: n.#keysForNewcomers.bind(n),
+      keysForNewcomers: n.#kernel.keysForNewcomers.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
-      memo: n.#memo.bind(n),
-      space: n.#space.bind(n),
+      memo: n.#kernel.memo.bind(n.#kernel),
+      space: n.#kernel.space.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
       get sqlite() {
         return n.#sqlite;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       tryOpen: n.#tryOpen.bind(n),
-      upTo: n.#upTo.bind(n),
+      upTo: n.#kernel.upTo.bind(n.#kernel),
     };
   }
 
@@ -4989,21 +3295,21 @@ export class WeaveNode implements Backend {
   static appsCore(n: WeaveNode): AppsCore {
     return {
       agentMay: n.#agentMay.bind(n),
-      announce: n.#announce.bind(n),
-      entries: n.#entries.bind(n),
+      announce: n.#kernel.announce.bind(n.#kernel),
+      entries: n.#kernel.entries.bind(n.#kernel),
       get fetchers() {
         return n.#fetchers;
       },
-      maintainerState: n.#maintainerState.bind(n),
-      project: n.#project.bind(n),
+      maintainerState: n.#kernel.maintainerState.bind(n.#kernel),
+      project: n.#kernel.project.bind(n.#kernel),
       get services() {
         return n.#services;
       },
-      spaceName: n.#spaceName.bind(n),
+      spaceName: n.#kernel.spaceName.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get updates() {
         return n.#updates;
       },
@@ -5013,37 +3319,37 @@ export class WeaveNode implements Backend {
   /** What content sees of the node, and nothing more (content.ts). */
   static contentCore(n: WeaveNode): ContentCore {
     return {
-      access: n.#access.bind(n),
-      actor: n.#actor.bind(n),
+      access: n.#kernel.access.bind(n.#kernel),
+      actor: n.#kernel.actor.bind(n.#kernel),
       agentMay: n.#agentMay.bind(n),
       get agents() {
         return n.#agents;
       },
       allPosts: n.#allPosts.bind(n),
-      board: n.#board.bind(n),
+      board: n.#kernel.board.bind(n.#kernel),
       chatOf: n.#chatOf.bind(n),
-      decodeAll: n.#decodeAll.bind(n),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
       get directs() {
-        return n.#directs;
+        return n.#kernel.directs;
       },
-      entries: n.#entries.bind(n),
-      find: n.#find.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      find: n.#kernel.find.bind(n.#kernel),
       follows: n.#follows.bind(n),
-      friends: n.#friends.bind(n),
+      friends: n.#kernel.friends.bind(n.#kernel),
       get holding() {
         return n.#holding;
       },
-      homePosts: n.#homePosts.bind(n),
-      issueById: n.#issueById.bind(n),
-      issueInfo: n.#issueInfo.bind(n),
-      knownGroup: n.#knownGroup.bind(n),
-      maintainerState: n.#maintainerState.bind(n),
+      homePosts: n.#kernel.homePosts.bind(n.#kernel),
+      issueById: n.#kernel.issueById.bind(n.#kernel),
+      issueInfo: n.#kernel.issueInfo.bind(n.#kernel),
+      knownGroup: n.#kernel.knownGroup.bind(n.#kernel),
+      maintainerState: n.#kernel.maintainerState.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
-      managers: n.#managers.bind(n),
-      messageInfo: n.#messageInfo.bind(n),
-      page: n.#page.bind(n),
+      managers: n.#kernel.managers.bind(n.#kernel),
+      messageInfo: n.#kernel.messageInfo.bind(n.#kernel),
+      page: n.#kernel.page.bind(n.#kernel),
       get payments() {
         return n.#payments;
       },
@@ -5051,39 +3357,39 @@ export class WeaveNode implements Backend {
       get prefetched() {
         return n.#prefetched;
       },
-      project: n.#project.bind(n),
-      projectPost: n.#projectPost.bind(n),
-      proposalInfo: n.#proposalInfo.bind(n),
-      reconcileBoards: n.#reconcileBoards.bind(n),
-      ruleInfo: n.#ruleInfo.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
+      project: n.#kernel.project.bind(n.#kernel),
+      projectPost: n.#kernel.projectPost.bind(n.#kernel),
+      proposalInfo: n.#kernel.proposalInfo.bind(n.#kernel),
+      reconcileBoards: n.#kernel.reconcileBoards.bind(n.#kernel),
+      ruleInfo: n.#kernel.ruleInfo.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
       get seenAt() {
         return n.#seenAt;
       },
       get sessions() {
         return n.#sessions;
       },
-      space: n.#space.bind(n),
-      spaceInfo: n.#spaceInfo.bind(n),
-      spacePosts: n.#spacePosts.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceInfo: n.#kernel.spaceInfo.bind(n.#kernel),
+      spacePosts: n.#kernel.spacePosts.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get swarm() {
         return n.#swarm;
       },
-      threadInfo: n.#threadInfo.bind(n),
-      voters: n.#voters.bind(n),
+      threadInfo: n.#kernel.threadInfo.bind(n.#kernel),
+      voters: n.#kernel.voters.bind(n.#kernel),
     };
   }
 
   /** What people see of the node, and nothing more (people.ts). */
   static peopleCore(n: WeaveNode): PeopleCore {
     return {
-      access: n.#access.bind(n),
-      actor: n.#actor.bind(n),
-      adoptBootstrap: n.#adoptBootstrap.bind(n),
+      access: n.#kernel.access.bind(n.#kernel),
+      actor: n.#kernel.actor.bind(n.#kernel),
+      adoptBootstrap: n.#kernel.adoptBootstrap.bind(n.#kernel),
       agentMay: n.#agentMay.bind(n),
       get agents() {
         return n.#agents;
@@ -5093,33 +3399,33 @@ export class WeaveNode implements Backend {
         return n.#companies;
       },
       get contactCache() {
-        return n.#contactCache;
+        return n.#kernel.contactCache;
       },
       setContactCache: (value) => {
-        n.#contactCache = value;
+        n.#kernel.contactCache = value;
       },
-      decodeAll: n.#decodeAll.bind(n),
-      decodedIn: n.#decodedIn.bind(n),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
+      decodedIn: n.#kernel.decodedIn.bind(n.#kernel),
       get decodedRevision() {
-        return n.#decodedRevision;
+        return n.#kernel.decodedRevision;
       },
-      direct: n.#direct.bind(n),
+      direct: n.#kernel.direct.bind(n.#kernel),
       doorSecret: n.#doorSecret.bind(n),
-      entries: n.#entries.bind(n),
-      entryPoint: n.#entryPoint.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      entryPoint: n.#kernel.entryPoint.bind(n.#kernel),
       eventsOf: n.#eventsOf.bind(n),
-      graph: n.#graph.bind(n),
+      graph: n.#kernel.graph.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
-      projectPost: n.#projectPost.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
+      projectPost: n.#kernel.projectPost.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
       selfBodies: n.#selfBodies.bind(n),
-      space: n.#space.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get verifiers() {
         return n.#verifiers;
       },
@@ -5133,13 +3439,13 @@ export class WeaveNode implements Backend {
         return n.#agents;
       },
       allPosts: n.#allPosts.bind(n),
-      board: n.#board.bind(n),
+      board: n.#kernel.board.bind(n.#kernel),
       // Lazily: people are built after sessions.
       contacts: () => n.#people.contacts(),
-      decodeAll: n.#decodeAll.bind(n),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
       emitLive: n.#emitLive.bind(n),
-      entries: n.#entries.bind(n),
-      hiddenAuthors: n.#hiddenAuthors.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      hiddenAuthors: n.#kernel.hiddenAuthors.bind(n.#kernel),
       get hints() {
         return n.#hints;
       },
@@ -5157,7 +3463,7 @@ export class WeaveNode implements Backend {
         return n.#liveListeners;
       },
       looksOnly: n.#looksOnly.bind(n),
-      maintainerState: n.#maintainerState.bind(n),
+      maintainerState: n.#kernel.maintainerState.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
@@ -5170,14 +3476,14 @@ export class WeaveNode implements Backend {
       },
       noticeFor: n.#noticeFor.bind(n),
       postAt: n.#postAt.bind(n),
-      project: n.#project.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
-      space: n.#space.bind(n),
-      spacePosts: n.#spacePosts.bind(n),
+      project: n.#kernel.project.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
+      space: n.#kernel.space.bind(n.#kernel),
+      spacePosts: n.#kernel.spacePosts.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get swarm() {
         return n.#swarm;
       },
@@ -5187,75 +3493,75 @@ export class WeaveNode implements Backend {
   /** What retention sees of the node, and nothing more (retention.ts). */
   static retentionCore(n: WeaveNode): RetentionCore {
     return {
-      aroundPosts: n.#aroundPosts.bind(n),
-      board: n.#board.bind(n),
+      aroundPosts: n.#kernel.aroundPosts.bind(n.#kernel),
+      board: n.#kernel.board.bind(n.#kernel),
       get companies() {
         return n.#companies;
       },
-      decodeAll: n.#decodeAll.bind(n),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
       invalidateDecoded: () => {
-        n.#decoded = undefined;
+        n.#kernel.invalidateDecoded();
       },
-      decodedIn: n.#decodedIn.bind(n),
-      entries: n.#entries.bind(n),
-      epochStarts: n.#epochStarts.bind(n),
-      expandCarry: n.#expandCarry.bind(n),
+      decodedIn: n.#kernel.decodedIn.bind(n.#kernel),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      epochStarts: n.#kernel.epochStarts.bind(n.#kernel),
+      expandCarry: n.#kernel.expandCarry.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
       get payments() {
         return n.#payments;
       },
-      saveSpace: n.#saveSpace.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
-      space: n.#space.bind(n),
-      spaceInfo: n.#spaceInfo.bind(n),
-      spacePosts: n.#spacePosts.bind(n),
+      saveSpace: n.#kernel.saveSpace.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceInfo: n.#kernel.spaceInfo.bind(n.#kernel),
+      spacePosts: n.#kernel.spacePosts.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
     };
   }
 
   /** What holding sees of the node, and nothing more (holding.ts). */
   static holdingCore(n: WeaveNode): HoldingCore {
     return {
-      actor: n.#actor.bind(n),
-      addSpace: n.#addSpace.bind(n),
+      actor: n.#kernel.actor.bind(n.#kernel),
+      addSpace: n.#kernel.addSpace.bind(n.#kernel),
       get companies() {
         return n.#companies;
       },
       invalidateDecoded: () => {
-        n.#decoded = undefined;
+        n.#kernel.invalidateDecoded();
       },
-      decodedIn: n.#decodedIn.bind(n),
+      decodedIn: n.#kernel.decodedIn.bind(n.#kernel),
       get directs() {
-        return n.#directs;
+        return n.#kernel.directs;
       },
-      ensureDirects: n.#ensureDirects.bind(n),
+      ensureDirects: n.#kernel.ensureDirects.bind(n.#kernel),
       follows: n.#follows.bind(n),
-      friends: n.#friends.bind(n),
+      friends: n.#kernel.friends.bind(n.#kernel),
       // Lazily: retention is built after this module.
       held: (state) => n.#retention.held(state),
       get isLinkedNode() {
         return n.#isLinkedNode;
       },
-      keysOnly: n.#keysOnly.bind(n),
+      keysOnly: n.#kernel.keysOnly.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
-      managers: n.#managers.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
+      managers: n.#kernel.managers.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
       selfBodies: n.#selfBodies.bind(n),
       selfSecret: n.#selfSecret.bind(n),
-      space: n.#space.bind(n),
-      spaceName: n.#spaceName.bind(n),
-      spacePosts: n.#spacePosts.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceName: n.#kernel.spaceName.bind(n.#kernel),
+      spacePosts: n.#kernel.spacePosts.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get swarm() {
         return n.#swarm;
       },
@@ -5265,34 +3571,34 @@ export class WeaveNode implements Backend {
   /** What money sees of the node, and nothing more (payments.ts). */
   static paymentsCore(n: WeaveNode): PaymentsCore {
     return {
-      anchor: n.#anchor.bind(n),
-      createSpace: n.#createSpace.bind(n),
-      direct: n.#direct.bind(n),
+      anchor: n.#kernel.anchor.bind(n.#kernel),
+      createSpace: n.#kernel.createSpace.bind(n.#kernel),
+      direct: n.#kernel.direct.bind(n.#kernel),
       get encryptionKeyOf() {
         return n.#encryptionKeyOf;
       },
-      entries: n.#entries.bind(n),
-      entryPoint: n.#entryPoint.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      entryPoint: n.#kernel.entryPoint.bind(n.#kernel),
       eventsOf: n.#eventsOf.bind(n),
-      keysForNewcomers: n.#keysForNewcomers.bind(n),
-      maintainerState: n.#maintainerState.bind(n),
+      keysForNewcomers: n.#kernel.keysForNewcomers.bind(n.#kernel),
+      maintainerState: n.#kernel.maintainerState.bind(n.#kernel),
       get managed() {
         return n.#managed;
       },
-      project: n.#project.bind(n),
-      saveSpace: n.#saveSpace.bind(n),
-      sealForSelf: n.#sealForSelf.bind(n),
+      project: n.#kernel.project.bind(n.#kernel),
+      saveSpace: n.#kernel.saveSpace.bind(n.#kernel),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
       get seenAt() {
         return n.#seenAt;
       },
       selfBodies: n.#selfBodies.bind(n),
-      space: n.#space.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       tryOpen: n.#tryOpen.bind(n),
-      upTo: n.#upTo.bind(n),
+      upTo: n.#kernel.upTo.bind(n.#kernel),
     };
   }
 
@@ -5300,27 +3606,27 @@ export class WeaveNode implements Backend {
   static managedCore(n: WeaveNode): ManagedCore {
     return {
       invalidateDecoded: () => {
-        n.#decoded = undefined;
+        n.#kernel.invalidateDecoded();
       },
       // Lazily: the key service is built before company accounts are.
       delegated: (scope) => n.#companies.delegated(scope),
       // Lazily: retention is built after this module.
       held: (state) => n.#retention.held(state),
-      rotateKey: n.#rotateKey.bind(n),
-      saveSpace: n.#saveSpace.bind(n),
-      space: n.#space.bind(n),
-      spaceInfo: n.#spaceInfo.bind(n),
+      rotateKey: n.#kernel.rotateKey.bind(n.#kernel),
+      saveSpace: n.#kernel.saveSpace.bind(n.#kernel),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceInfo: n.#kernel.spaceInfo.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
       ssoToken: () => n.#companies.ssoToken(),
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
     };
   }
 
   static servicesHost(n: WeaveNode) {
     return {
-      actor: n.#actor.bind(n),
+      actor: n.#kernel.actor.bind(n.#kernel),
       get agents() {
         return n.#agents;
       },
@@ -5328,14 +3634,14 @@ export class WeaveNode implements Backend {
         n.#agents = value;
       },
       cipher: n.#managed.cipher.bind(n.#managed),
-      decode: n.#decode.bind(n),
-      decodeAll: n.#decodeAll.bind(n),
+      decode: n.#kernel.decode.bind(n.#kernel),
+      decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
       emitLive: n.#emitLive.bind(n),
-      entries: n.#entries.bind(n),
-      find: n.#find.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
+      find: n.#kernel.find.bind(n.#kernel),
       marksChanged: n.#marksChanged.bind(n),
       hintsChanged: n.#hintsChanged.bind(n),
-      memo: n.#memo.bind(n),
+      memo: n.#kernel.memo.bind(n.#kernel),
       get home() {
         return n.home;
       },
@@ -5359,7 +3665,7 @@ export class WeaveNode implements Backend {
       /** The Weave project: where Weave announces itself (and its new versions); its maintainers speak for Weave. */
       weaveProject: () => n.config.updates?.project ?? UPDATE_SOURCE.project,
       clock: () => n.clock(),
-      project: n.#project.bind(n),
+      project: n.#kernel.project.bind(n.#kernel),
       publish: n.publish.bind(n),
       get releases() {
         return n.#releases;
@@ -5370,17 +3676,17 @@ export class WeaveNode implements Backend {
       get runtime() {
         return n.#runtime;
       },
-      sealForSelf: n.#sealForSelf.bind(n),
+      sealForSelf: n.#kernel.sealForSelf.bind(n.#kernel),
       /** The key to seal something to a person with, and opening what was sealed to me. */
       encryptionKeyOf: (person: Did) => n.#encryptionKeyOf(person),
       tryOpen: n.#tryOpen.bind(n),
-      space: n.#space.bind(n),
-      spaceName: n.#spaceName.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceName: n.#kernel.spaceName.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
-      toItem: n.#toItem.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
+      toItem: n.#kernel.toItem.bind(n.#kernel),
       /** Accounts elsewhere said in a space, checked. */
       accounts: (space: StoredSpace, platform: string) => n.accounts({ space: space.id }).then((all) => all.filter((a) => a.platform === platform)),
       /** My keyvaults: what my services get access through. */
@@ -5388,9 +3694,9 @@ export class WeaveNode implements Backend {
       /** Your own account on a platform, proven (on your hub or in any space of yours): its handle. */
       myAccount: (platform: string) => n.myAccounts().then((all) => all.find((a) => a.platform === platform && a.verified)?.handle),
       /** Who reads a board of a project (everyone, for a board nobody limited). */
-      boardReaders: (space: StoredSpace, board: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
+      boardReaders: (space: StoredSpace, board: string) => n.#kernel.readersOf(space, n.#kernel.state(space), n.#kernel.entries(space), board),
       /** Who reads a space (or one of its boards). */
-      readers: (space: StoredSpace, board?: string) => n.#readersOf(space, n.#state(space), n.#entries(space), board),
+      readers: (space: StoredSpace, board?: string) => n.#kernel.readersOf(space, n.#kernel.state(space), n.#kernel.entries(space), board),
     };
   }
 
@@ -5408,7 +3714,7 @@ export class WeaveNode implements Backend {
         return n.clock;
       },
       emitLive: n.#emitLive.bind(n),
-      entries: n.#entries.bind(n),
+      entries: n.#kernel.entries.bind(n.#kernel),
       get home() {
         return n.home;
       },
@@ -5423,7 +3729,7 @@ export class WeaveNode implements Backend {
       },
       myTickets: n.#payments.myTickets.bind(n.#payments),
       nameOf: n.nameOf.bind(n),
-      project: n.#project.bind(n),
+      project: n.#kernel.project.bind(n.#kernel),
       get releases() {
         return n.#releases;
       },
@@ -5436,12 +3742,12 @@ export class WeaveNode implements Backend {
       },
       selfSecret: n.#selfSecret.bind(n),
       showRef: n.#payments.showRef.bind(n.#payments),
-      space: n.#space.bind(n),
-      spaceName: n.#spaceName.bind(n),
+      space: n.#kernel.space.bind(n.#kernel),
+      spaceName: n.#kernel.spaceName.bind(n.#kernel),
       get spaces() {
         return n.#spaces;
       },
-      state: n.#state.bind(n),
+      state: n.#kernel.state.bind(n.#kernel),
       get swarm() {
         return n.#swarm;
       },
@@ -5582,9 +3888,9 @@ export class WeaveNode implements Backend {
     const { announce, ...rest } = input;
     const service = await this.#services.launchWebsite(rest);
     // Said once its website is there: the announcement names that website, not its website service.
-    const project = this.#project(input.project).id;
+    const project = this.#kernel.project(input.project).id;
     if (announce !== false)
-      void this.#services.launchedWebsite(service.name).then((room) => (room ? this.#announce(project, { kind: 'website', id: room }, `started ${service.artifact?.name ?? service.name}: come and join`) : undefined)).catch(() => {});
+      void this.#services.launchedWebsite(service.name).then((room) => (room ? this.#kernel.announce(project, { kind: 'website', id: room }, `started ${service.artifact?.name ?? service.name}: come and join`) : undefined)).catch(() => {});
     return service;
   }
 
@@ -5598,19 +3904,19 @@ export class WeaveNode implements Backend {
 
   async releaseFile(input: { project: string; tag: string; file: string; repo?: string; name?: string; type?: string; as?: string }): Promise<ArtifactInfo> {
     if (input.as) this.#agentMay(input.as, KIND_SERVICE_REQUEST);
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
+    const project = this.#kernel.project(input.project);
+    this.#kernel.maintainerState(project);
     const from = this.#apps.releaseLine(project, input.repo ? { source: input.repo } : {});
     const data = (await this.#services.askProvider(project, 'publish', { source: from.ref, tag: input.tag.trim(), file: input.file, ...(input.name ? { name: input.name } : {}), ...(input.type ? { type: input.type } : {}) }, input.as, from.provider)) as { id?: string };
     const found = (await this.artifacts(project.id)).find((a) => a.id === data.id);
     if (!found) throw new Error(`${input.file} was published, but isn't an artifact of ${project.name} here: is its provider's person a maintainer?`);
-    await this.#announce(project.id, { kind: 'release', id: found.id }, `${found.name} ${found.tag} is available`);
+    await this.#kernel.announce(project.id, { kind: 'release', id: found.id }, `${found.name} ${found.tag} is available`);
     return found;
   }
 
   async getArtifactFile(input: { project: string; artifact: string }): Promise<{ path: string; by: string }> {
-    const project = this.#project(input.project);
-    const a = artifactsOf(this.#entries(project), this.#state(project).maintainers).find((x) => x.id === input.artifact);
+    const project = this.#kernel.project(input.project);
+    const a = artifactsOf(this.#kernel.entries(project), this.#kernel.state(project).maintainers).find((x) => x.id === input.artifact);
     if (!a) throw new Error(`${project.name} has no such artifact`);
     if (a.kind !== 'file') throw new Error(`${a.manifest.name} is a ${a.kind.replace('-', ' ')}: something to use, not a file to get`);
     // How far it got, for the app to show while it waits (artifactFileJob); gone once the file is here.
@@ -5629,7 +3935,7 @@ export class WeaveNode implements Backend {
   }
 
   async artifactFileJob(input: { project: string; artifact: string }): Promise<InstallJob | undefined> {
-    return this.#releases.jobs.get(`file:${this.#project(input.project).id}:${input.artifact}`);
+    return this.#releases.jobs.get(`file:${this.#kernel.project(input.project).id}:${input.artifact}`);
   }
 
   /** My fetchers: client apps that fetch artifacts for me (fetchers.ts). */
@@ -5638,7 +3944,7 @@ export class WeaveNode implements Backend {
   }
 
   #fetcherInfo(f: StoredFetcherInfo, added = true): FetcherInfo {
-    const projects = f.projects === 'all' ? ('all' as const) : f.projects.flatMap((id) => (this.#spaces.has(id) ? [{ id, name: this.#spaceName(this.#spaces.get(id)!) }] : []));
+    const projects = f.projects === 'all' ? ('all' as const) : f.projects.flatMap((id) => (this.#spaces.has(id) ? [{ id, name: this.#kernel.spaceName(this.#spaces.get(id)!) }] : []));
     return { ...f, projects, added };
   }
 
@@ -5649,7 +3955,7 @@ export class WeaveNode implements Backend {
   }
 
   #projectIds(projects: string[] | 'all'): string[] | 'all' {
-    return projects === 'all' ? 'all' : projects.map((p) => this.#project(p).id);
+    return projects === 'all' ? 'all' : projects.map((p) => this.#kernel.project(p).id);
   }
 
   async addFetcher(input: { shipped: string; projects: string[] | 'all' }): Promise<FetcherInfo> {
@@ -5666,7 +3972,7 @@ export class WeaveNode implements Backend {
 
   /** A keyvault as the app shows it: projects by name, and which of my services use it. */
   #keyvaultInfo(k: KeyvaultState, added = true): KeyvaultInfo {
-    const ref = (id: string) => ({ id, name: this.#spaces.has(id) ? this.#spaceName(this.#spaces.get(id)!) : id });
+    const ref = (id: string) => ({ id, name: this.#spaces.has(id) ? this.#kernel.spaceName(this.#spaces.get(id)!) : id });
     const users = this.#services.storedServices().filter((s) => s.contract.uses?.[k.platform]).map((s) => ({ service: s.name, rights: s.contract.uses![k.platform], projects: s.spaces.filter((id) => this.#spaces.has(id)).map(ref) }));
     const apps = k.apps.map((a) => ({ ...a, handed: Object.entries(a.handed).map(([id, resources]) => ({ project: ref(id), resources })) }));
     return { name: k.name, title: k.title, ...(k.about ? { about: k.about } : {}), platform: k.platform, ...(k.resources ? { resources: k.resources } : {}), settings: k.settings, apps, users, log: k.log.map((l) => ({ ...l, project: ref(l.project) })).reverse(), ...(k.problem ? { problem: k.problem } : {}), added };
@@ -5695,7 +4001,7 @@ export class WeaveNode implements Backend {
     const kind = artifact.kind === 'keyvault' || artifact.kind === 'fetcher' ? artifact.kind : undefined;
     if (!kind) throw new Error(`${artifact.manifest.name} ${artifact.tag} is a ${artifact.kind}, not a keyvault or fetcher: add it where it goes (a project's services)`);
     const reaches = (artifact.manifest.keyvault?.net ?? artifact.manifest.fetcher?.net ?? []).join(', ') || 'nothing';
-    if (!input.approve) throw new Error(`approve it first: Weave would run ${artifact.manifest.name} ${artifact.tag}, released in ${this.#spaceName(project)}, as your ${kind}${kind === 'keyvault' ? ` for ${artifact.manifest.keyvault!.platform} (it holds your access there)` : ''}; it reaches ${reaches} over HTTPS`);
+    if (!input.approve) throw new Error(`approve it first: Weave would run ${artifact.manifest.name} ${artifact.tag}, released in ${this.#kernel.spaceName(project)}, as your ${kind}${kind === 'keyvault' ? ` for ${artifact.manifest.keyvault!.platform} (it holds your access there)` : ''}; it reaches ${reaches} over HTTPS`);
     const taken = new Set([...this.#keyvaults.shipped(), ...this.#fetchers.shipped()].filter((s) => !this.#clientApps.list().some((c) => c.name === s.name)).map((s) => s.name));
     // One keyvault per platform: said before anything is fetched.
     const already = kind === 'keyvault' ? this.#keyvaults.forPlatform(artifact.manifest.keyvault!.platform) : undefined;
@@ -5722,7 +4028,7 @@ export class WeaveNode implements Backend {
     const k = this.#keyvaults.list().find((x) => x.name === input.name);
     // Named for whose it is: the account you proved there, else your name here.
     const proven = k ? (await this.myAccounts().catch(() => [])).find((a) => a.platform === k.platform && a.verified)?.handle : undefined;
-    return this.#keyvaults.startApp({ ...input, account: proven ?? this.#actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
+    return this.#keyvaults.startApp({ ...input, account: proven ?? this.#kernel.actor(this.identity.author, this.identity.author).name ?? 'your', fetch: this.oauthSetup.fetch });
   }
 
   /**
@@ -5756,7 +4062,7 @@ export class WeaveNode implements Backend {
   }
 
   async handKeyvault(input: { name: string; app?: string; project: string; resources: string[] }): Promise<KeyvaultInfo> {
-    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, ...(input.app ? { app: input.app } : {}), project: this.#project(input.project).id, resources: input.resources }));
+    const k = this.#keyvaultInfo(this.#keyvaults.hand({ name: input.name, ...(input.app ? { app: input.app } : {}), project: this.#kernel.project(input.project).id, resources: input.resources }));
     // Its users bring their projects in step with what they're handed now.
     for (const u of k.users) this.#services.restartSoon(u.service);
     return k;
@@ -5839,7 +4145,7 @@ export class WeaveNode implements Backend {
   async openWebsite(input: Parameters<Website['openWebsite']>[0] & { announce?: boolean }): Promise<WebsiteInfo> {
     const { announce, ...rest } = input;
     const site = await this.#website.openWebsite(rest);
-    if (announce !== false) await this.#announce(site.project.id, { kind: 'website', id: site.id }, `opened ${site.name}: come and join`);
+    if (announce !== false) await this.#kernel.announce(site.project.id, { kind: 'website', id: site.id }, `opened ${site.name}: come and join`);
     return site;
   }
 }
