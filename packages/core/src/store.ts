@@ -70,6 +70,8 @@ export interface LogStore {
   keepItems(stream: string): Array<{ tag: string; data: string }>;
   /** Bytes kept for others: of one stream, or in all. */
   keepBytes(stream?: string): number;
+  /** Let a stream go: its owner no longer wants it kept here (it chose another keeper, or stopped keeping the space). */
+  keepDrop(stream: string): void;
 }
 
 /** The v2 part of a store, in memory: for MemoryStore, and for FileStore to keep beside its files. */
@@ -198,6 +200,15 @@ export class MemoryV2 {
   keepBytes(stream?: string): number {
     const streams = stream ? [this.#kept.get(stream) ?? new Map<string, string>()] : [...this.#kept.values()];
     return streams.reduce((sum, items) => sum + [...items.values()].reduce((s, d) => s + d.length, 0), 0);
+  }
+
+  keepDrop(stream: string): void {
+    this.#kept.delete(stream);
+  }
+
+  /** Every stream kept, for a store that writes them out again. */
+  keepStreams(): string[] {
+    return [...this.#kept.keys()];
   }
 }
 

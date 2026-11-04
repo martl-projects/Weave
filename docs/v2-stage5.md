@@ -56,3 +56,9 @@ Both people of a direct chat can recover it this way, each from their own keeper
 - **Kept spaces:** your own space, direct chats, and groups and projects of 3 people or fewer. The keep index (your kept spaces and their keys) is written to your own space when it changes.
 - Tested as a total loss: both people of a direct chat and a small group lose everything, restore from their recovery words, and get both back from three friends who never saw either.
 - Shown in Keys & devices and in `weave keepers`.
+
+## Amended 4.11.2026 (the keepers review, issue nn5l)
+
+- **"Last seen" survives a restart:** it's written to disk at most once an hour as friends come by (`keepers.json`), not only when keepers or the keep index change; before, every update of Weave made keepers look long gone after 14 days of memory-only updates, and they were replaced, each new one getting everything again.
+- **An empty direct chat gets no keepers:** a direct chat is derived for everyone whose log a node holds (so a message can be sent), but one with nothing in it has nothing to keep, chooses no keepers and isn't listed. Its stream is still asked for on every connection with a friend, because a chat you lost looks just the same: that's how recovery finds it (nothing is stored for an empty one).
+- **A keeper no longer chosen lets the stream go:** `drop {id}` from the owner, sent once the owner holds everything that keeper has (never while something is still to be taken back), for a stream another keeper took over or of a space that isn't kept any more (a group that grew). Only the owner can name a stream's id.

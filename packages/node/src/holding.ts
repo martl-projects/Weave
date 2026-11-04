@@ -38,6 +38,9 @@ const KEPT_UP_TO = 3;
 
 const KEEPER_GONE_MS = 14 * 24 * 3600 * 1000;
 
+/** How often at most a keeper's "last seen" is written to disk (every connection would be too often). */
+const SEEN_SAVE_MS = 3600 * 1000;
+
 const KEEP_QUOTA = 500 * 1024 * 1024;
 
 const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
@@ -166,12 +169,16 @@ export class Holding {
     writeSecretJson(this.node.home, joinPath(this.node.home.dir, 'keepers.json'), this.#keeping);
   }
 
-  /** The spaces keepers keep for us: our own space, direct chats, and groups and projects of 3 people or fewer. */
-  #keptSpaces(): Array<{ scope: string; space?: StoredSpace; peer?: Did }> {
+  /**
+   * The spaces keepers keep for us: our own space, direct chats, and groups and projects of 3 people or fewer. A direct
+   * chat is derived for everyone whose log we hold (kernel.ts ensureDirects): one with nothing in it (`empty`) gets no
+   * keepers and isn't listed, but its stream is still asked for, since a chat we lost looks the same (recovery).
+   */
+  #keptSpaces(): Array<{ scope: string; space?: StoredSpace; peer?: Did; empty?: true }> {
     this.core.ensureDirects();
     return [
       { scope: SELF_SCOPE },
-      ...[...this.core.directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer })),
+      ...[...this.core.directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer, ...(this.node.replica.events((r) => r.scope === spaceScope(space)).length ? {} : { empty: true as const }) })),
       // A company's spaces are kept by its own archive, never by friends (stage 13).
       ...[...this.core.spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.core.state(s).members.size <= KEPT_UP_TO && !this.core.managed.managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
     ];
@@ -210,16 +217,52 @@ export class Holding {
     return new Map(this.node.replica.events((r) => r.scope === scope).map((r) => [keepTag(key, r.id), r]));
   }
 
+  /** A friend is here: written down, and to disk at most once an hour, so a restart doesn't make keepers look long gone. */
+  #sawFriend(friend: Did): void {
+    const state = this.#keeping;
+    const now = this.node.clock();
+    const before = Date.parse(state.seen[friend] ?? '');
+    state.seen[friend] = new Date(now).toISOString();
+    if (Number.isNaN(before) || now - before >= SEEN_SAVE_MS) this.#saveKeeping();
+  }
+
+  /**
+   * Streams a keeper once held for us of spaces no longer kept (a group that grew, a space we left) or that another
+   * keeper took over: offered with `keeper: false`, so the session tells it to let them go once we hold everything.
+   * A space gone from this node altogether is forgotten here: nothing of it to compare, so nothing to say.
+   */
+  #retiredStreams(friend: Did, kept: Array<{ scope: string }>): Array<{ id: string; tags: string[]; keeper: boolean }> {
+    const state = this.#keeping;
+    const current = new Set(kept.map((k) => k.scope));
+    const retired: Array<{ id: string; tags: string[]; keeper: boolean }> = [];
+    for (const scope of Object.keys(state.spaces)) {
+      if (current.has(scope)) continue;
+      const id = parseScope(scope)?.id;
+      if (!(scope === SELF_SCOPE || (id && (this.core.spaces.has(id) || this.core.directs.has(id))))) {
+        delete state.spaces[scope];
+        this.#saveKeeping();
+        continue;
+      }
+      retired.push({ id: keepStreamId(this.core.selfSecret(), scope, friend), tags: [...this.#keepItems(scope).keys()], keeper: false });
+    }
+    return retired;
+  }
+
   keepAccess: KeepAccess = {
     streams: (shared) => {
       const friend = this.#friendOn(shared);
       if (!friend) return [];
-      this.#keeping.seen[friend] = new Date(this.node.clock()).toISOString();
-      return this.#keptSpaces().map(({ scope, peer }) => ({
-        id: keepStreamId(this.core.selfSecret(), scope, friend),
-        tags: [...this.#keepItems(scope).keys()],
-        keeper: this.#keepersOf(scope, peer).includes(friend),
-      }));
+      this.#sawFriend(friend);
+      const kept = this.#keptSpaces();
+      return [
+        ...kept.map(({ scope, peer, empty }) => ({
+          id: keepStreamId(this.core.selfSecret(), scope, friend),
+          tags: [...this.#keepItems(scope).keys()],
+          // An empty direct chat has no keepers; asked for all the same, in case a keeper holds what we lost.
+          keeper: !empty && this.#keepersOf(scope, peer).includes(friend),
+        })),
+        ...this.#retiredStreams(friend, kept),
+      ];
     },
     wrapped: (id, tags) => {
       const found = this.#streamScope(id);
@@ -246,10 +289,11 @@ export class Holding {
     accepts: (shared, id, bytes) => !!this.#friendOn(shared) && this.node.replica.store.keepBytes() + bytes <= KEEP_QUOTA && this.node.replica.store.keepBytes(id) + bytes <= KEEP_STREAM_QUOTA,
   };
 
-  /** The kept space a stream of ours is, whichever friend keeps it. */
+  /** The kept space a stream of ours is, whichever friend keeps it (a retired one too: its items are still ours). */
   #streamScope(id: string): string | undefined {
     const friends = this.core.friends();
-    for (const { scope } of this.#keptSpaces()) for (const friend of friends) if (keepStreamId(this.core.selfSecret(), scope, friend) === id) return scope;
+    const scopes = new Set([...this.#keptSpaces().map((k) => k.scope), ...Object.keys(this.#keeping.spaces)]);
+    for (const scope of scopes) for (const friend of friends) if (keepStreamId(this.core.selfSecret(), scope, friend) === id) return scope;
     return undefined;
   }
 
@@ -284,7 +328,7 @@ export class Holding {
 
   async keepers(): Promise<KeepersInfo> {
     return {
-      spaces: this.#keptSpaces().map(({ scope, space, peer }) => ({
+      spaces: this.#keptSpaces().filter((k) => !k.empty).map(({ scope, space, peer }) => ({
         space: space ? { id: space.id, kind: space.kind, name: this.core.spaceName(space) } : { id: SELF_SCOPE, kind: 'group' as const, name: 'your own space' },
         keepers: this.#keepersOf(scope, peer).map((k) => this.core.actor(k, k)),
       })),

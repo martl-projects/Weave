@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MemoryStore, type ControlEventV2, type Did, type Json, type LogStore, type StoredV2, type WeaveEvent } from '@weave/core';
 
@@ -153,6 +153,13 @@ export class FileStore implements LogStore {
 
   keepBytes(stream?: string): number {
     return this.#memory.keepBytes(stream);
+  }
+
+  /** Dropped: the file is written again without it (it's appended to otherwise). */
+  keepDrop(stream: string): void {
+    this.#memory.keepDrop(stream);
+    const lines = this.#memory.keepStreams().flatMap((s) => this.#memory.keepItems(s).map(({ tag, data }) => JSON.stringify({ stream: s, tag, data })));
+    writeFileSync(join(this.dir, KEEP_FILE), lines.length ? lines.join('\n') + '\n' : '');
   }
 }
 

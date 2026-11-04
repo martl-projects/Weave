@@ -39,9 +39,10 @@ import type { BlobSource } from './session.ts';
  *   never wrote v2 (frozen history) and root keys (the identity foundation).
  * - `want` / `blob`: blobs by hash, as before.
  * - `keeping? {ids}` → `keeping {streams: {id: tags}}`, `keep {id, items}`,
- *   `kept? {id}` → `kept {id, items}`: keepers (stage 5). A friend keeps
- *   wrapped, padded items of our small spaces under ids only we can make;
- *   the node decides who keeps what (`access.keep`).
+ *   `kept? {id}` → `kept {id, items}`, `drop {id}`: keepers (stage 5). A friend
+ *   keeps wrapped, padded items of our small spaces under ids only we can
+ *   make; the node decides who keeps what (`access.keep`), and a keeper no
+ *   longer chosen is told to let the stream go once we hold all of it.
  *
  * `public` is shared with everyone, unless the node has a firewall
  * (`access.firewall`: trust starts before the first packet): then
@@ -75,6 +76,7 @@ export type Message2 =
   | { t: 'keep'; id: string; items: Array<{ tag: string; data: string }> }
   | { t: 'kept?'; id: string }
   | { t: 'kept'; id: string; items: Array<{ tag: string; data: string }> }
+  | { t: 'drop'; id: string }
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
@@ -437,8 +439,15 @@ export class PeerSession2 {
             }
             // It holds what we don't: we lost it, it's ours to take back.
             if ([...theirs].some((t) => !ours.has(t))) this.#send({ t: 'kept?', id });
+            // It keeps a stream we no longer want kept there (another keeper took its place, or the space isn't kept any
+            // more), and nothing of it is ours to take back: it lets the stream go. Never while we're missing something.
+            else if (!stream.keeper && theirs.size) this.#send({ t: 'drop', id });
           }
         }
+        break;
+      case 'drop':
+        // Only the owner can name a stream's id (it comes from their secret and our key): theirs to let go.
+        if (v2 && typeof message.id === 'string' && this.#access.keep) this.replica.store.keepDrop(message.id);
         break;
       case 'keep':
         if (v2 && typeof message.id === 'string' && Array.isArray(message.items) && this.#access.keep) {
