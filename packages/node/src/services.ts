@@ -205,6 +205,8 @@ export class Services {
   async artifacts(ref: string): Promise<ArtifactInfo[]> {
     const project = this.h.project(ref);
     const access = artifactAccessOf(this.h.entries(project), this.h.state(project).maintainers);
+    // The consents given here, read once for the list (artifacts() runs on every live event in the app).
+    let consents: Record<string, StoredProgramConsent> | undefined;
     return artifactsOf(this.h.entries(project), this.h.state(project).maintainers).map((a) => {
       const runs = this.h.runtime.runs(a.manifest);
       const who = access.get(a.id) ?? 'members';
@@ -233,7 +235,7 @@ export class Services {
         ...(a.manifest.service ? { applet: a.manifest.service } : {}),
         ...(a.manifest.install?.image?.packaged ? { packaged: true as const } : {}),
         ...(runs ? { runs, command: this.h.runtime.command(`weave-service-${a.manifest.app}`, a.manifest) } : {}),
-        ...(runs === 'program' ? { program: this.programInfo(a) } : {}),
+        ...(runs === 'program' ? { program: this.programInfo(a, (consents ??= this.storedConsents())) } : {}),
         ...(a.manifest.client ? { lens: true as const } : {}),
       };
     });
@@ -258,11 +260,11 @@ export class Services {
   }
 
   /** A release's program for this computer, as the app shows it before asking: the file, its hash, what would run, and whether it was allowed before. */
-  programInfo(a: { id: string; manifest: AppManifest }): ProgramInfo | undefined {
+  programInfo(a: { id: string; manifest: AppManifest }, consents = this.storedConsents()): ProgramInfo | undefined {
     const program = this.h.runtime.program(a.manifest);
     if (!program) return undefined;
     const consent = programConsent(a, program);
-    const allowed = this.storedConsents()[consent]?.allowed;
+    const allowed = consents[consent]?.allowed;
     return { platform: program.platform, file: program.asset.file, sha256: program.asset.sha256, ...(program.asset.size ? { size: program.asset.size } : {}), command: program.command, consent, ...(allowed ? { allowed } : {}) };
   }
 
@@ -288,13 +290,16 @@ export class Services {
       }));
   }
 
-  /** Take a consent back: what runs under it ends (its websites close), and it's as if the warning was never accepted. */
+  /**
+   * Take a consent back: it's as if the warning was never accepted, and what runs under it ends (its websites close).
+   * The consent goes first: should closing one fail midway, nothing runs under it again either way.
+   */
   async withdrawProgramConsent(consent: string): Promise<void> {
     const consents = this.storedConsents();
     if (!consents[consent]) throw new WeaveError('daemon.program.consent.none', {}, 'no such consent: nothing to withdraw');
-    for (const s of this.#underConsent(consent)) await this.removeService(s.name);
     delete consents[consent];
     this.saveConsents(consents);
+    for (const s of this.#underConsent(consent)) await this.removeService(s.name);
   }
 
   /** One release of a project: the one with this tag, or the latest. */
@@ -1145,19 +1150,23 @@ export class Services {
     if (!this.h.runtime.runs(manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const found = this.artifact(from.id, a.id);
     if (!input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest)}" from ${manifest.name} ${found.artifact.tag}, released in ${from.name}, as a website in ${project.name} that reads nothing and writes nothing`);
-    // A program: only with the person's consent to exactly this release and file, given in the app (consent: true,
-    // which only the app sends: an agent's or a service's yes isn't one), or given there before and not withdrawn.
+    // A program: only with the person's consent to exactly this release and file, given in the app's warning dialog
+    // (consent: true), every time: a program never starts without someone saying so right then, so a consent given
+    // before only spares the person a second reading (the dialog says they allowed it) and is what they withdraw.
+    // The flag separates the app's dialog from the tools agents get (no MCP tool, no CLI command, nothing on the
+    // phone passes it), not from a process on this computer that reads the home: daemon.json and programs.json are
+    // the user's files, and a process with their rights has them anyway, like everything in the home.
     const program = this.h.runtime.runs(manifest) === 'program' ? this.h.runtime.program(manifest)! : undefined;
     const consent = program ? programConsent(found.artifact, program) : undefined;
     if (program && consent) {
       const consents = this.storedConsents();
-      if (!input.consent && !consents[consent])
+      if (!input.consent)
         throw new WeaveError(
           'daemon.program.needs.consent',
           { name: manifest.name, tag: found.artifact.tag, file: program.asset.file },
           `${manifest.name} ${found.artifact.tag} brings no container image and no WebAssembly, only the program ${program.asset.file}: it would run on this computer with your rights, and Weave can't contain it. Only you can allow that, in the Weave app (Launch…), after its warning, for exactly this release and file; no agent or service can`,
         );
-      if (input.consent && !consents[consent]) {
+      if (!consents[consent]) {
         consents[consent] = { consent, project: from.id, release: found.artifact.id, tag: found.artifact.tag, app: manifest.app, name: manifest.name, platform: program.platform, file: program.asset.file, sha256: program.asset.sha256, command: program.command, allowed: new Date(this.h.clock()).toISOString() };
         this.saveConsents(consents);
       }

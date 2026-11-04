@@ -898,7 +898,8 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
 /** A platform a program is built for (never wasm or file: those aren't programs). */
 const PROGRAM_PLATFORM = /^(win32|darwin|linux)-(x64|arm64|ia32|arm)$/;
 
-const ARCHIVE_FILE = /\.(zip|tar|tar\.gz|tgz|tar\.xz|txz|tar\.bz2)$/i;
+/** A release file that isn't a program to start as it is: an archive to unpack (unpack() knows the first group), or an installer. */
+const ARCHIVE_FILE = /\.(zip|tar|tar\.gz|tgz|tar\.xz|txz|tar\.bz2|7z|rar|dmg|msi|pkg|deb|rpm)$/i;
 
 /** The program a release brings for a platform, and what runs it; undefined without one. */
 export interface ReleaseProgram {

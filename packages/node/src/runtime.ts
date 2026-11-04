@@ -521,8 +521,9 @@ export const releaseApproval = (a: { id: string; manifest: AppManifest }): strin
 
 /**
  * What a person consents to when they let a release's program run on their computer: this release (its event) and
- * exactly this file by its SHA-256, with the command that runs it. Another version, or the same file name with other
- * bytes, is another consent.
+ * exactly this file by its SHA-256, with the command that runs it, all read from the signed release. Another version,
+ * or the same file name with other bytes, is another consent. The settings they give it aren't part of it: those are
+ * their own, given per website, and change nothing about what runs.
  */
 export const programConsent = (a: { id: string; manifest: AppManifest }, program: ReleaseProgram): string =>
   launchFingerprint(['program', program.platform, program.asset.file, program.asset.sha256, ...program.command], a.id);

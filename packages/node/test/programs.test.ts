@@ -140,8 +140,11 @@ describe('a program from a release', { timeout: 120_000 }, () => {
       syncAll([martl, lena]);
       expect((await martl.websites('Horses')).find((r) => r.id === site.id)?.program).toBeUndefined();
 
-      // The same release again: the consent given stands, no new yes needed; a new version asks again.
-      const again = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true });
+      // The same release again: the yes is said in the dialog every time (the consent kept only says it was allowed before,
+      // and is what's withdrawn); without it nothing starts, whoever asks. A new version is a new consent.
+      await expect(lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true })).rejects.toThrow(/Only you can allow that/);
+      const again = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true, consent: true });
+      expect((await lena.programConsents()).map((c) => c.tag)).toEqual(['v1.0']);
       await expect(lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: second.id }, approve: true })).rejects.toThrow(/Only you can allow that/);
       await lena.removeService(again.name);
 
@@ -164,7 +167,7 @@ describe('a program from a release', { timeout: 120_000 }, () => {
       await lena.removeService(launched.name);
 
       // Withdrawn: what runs under the consent ends, and it's as if the warning was never accepted.
-      const third = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true });
+      const third = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true, consent: true });
       await lena.serviceReady(third.name);
       await answers(racePort);
       await lena.withdrawProgramConsent(first.program!.consent);
@@ -172,7 +175,8 @@ describe('a program from a release', { timeout: 120_000 }, () => {
       expect((await lena.programConsents()).map((c) => c.tag)).toEqual(['v1.1']);
       expect((await lena.websites('Party')).filter((r) => r.name === 'Horse race')).toEqual([]);
       expect((await lena.services()).map((s) => s.name)).toEqual(['website']);
-      await expect(lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: first.id }, approve: true })).rejects.toThrow(/Only you can allow that/);
+      // The dialog asks afresh: nothing says it was allowed before.
+      expect((await lena.artifacts('Horses')).find((a) => a.tag === 'v1.0')!.program!.allowed).toBeUndefined();
       await expect(lena.withdrawProgramConsent(first.program!.consent)).rejects.toThrow(/no such consent/);
     } finally {
       await api.close();
@@ -226,7 +230,9 @@ describe('a program from a release', { timeout: 120_000 }, () => {
       expect(site.launching).toMatchObject([{ id: launched!, tag: 'v1.0', error: expect.stringMatching(/Weave restarted: Horse race v1\.0 is a program, and isn't started again by itself/) }]);
       expect((await lena.programConsents()).map((c) => c.running)).toEqual([0]);
       await lena.removeService(launched!);
-      const once = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: artifact.id }, approve: true });
+      // Launched again by its person: the consent from before is still the one (one dialog, saying it was allowed before).
+      expect((await lena.artifacts('Horses'))[0].program!.allowed).toBeTruthy();
+      const once = await lena.launchWebsite({ project: 'Party', artifact: { project: 'Horses', id: artifact.id }, approve: true, consent: true });
       await lena.serviceReady(once.name);
       expect((await answers(racePort)).version).toBe('v1.0');
     } finally {
