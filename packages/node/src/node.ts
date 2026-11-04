@@ -5,7 +5,6 @@ import {
   mayDoAt,
   b64u,
   attachmentOf,
-  BLOB_TYPES,
   boardKeyFor,
   boardOfEvents,
   boardOfInner,
@@ -14,7 +13,6 @@ import {
   inviteRightsOf,
   isKnockLink,
   keyHolders,
-  KIND_BOARD_ACCESS,
   KIND_BOARD_KEY,
   KIND_BOARD_SEALED,
   KIND_KNOCK,
@@ -66,98 +64,53 @@ import {
   sealForBoard,
   type Access,
   type BoardRight,
-  type Grantee,
-  blobRefsIn,
   createSubKey,
-  decryptBlob,
-  encryptBlob,
-  formatBlobRef,
   parseBlobRef,
-  type Attachment,
-  type BlobType,
-  fileName,
-  isMediaType,
   boardName,
   boardsOf,
   canonicalKind,
   classOf,
-  channelName,
-  channelsOf,
-  CHOICES,
-  COMMUNITY_BOARD,
   currentEpoch,
-  decodeContact,
   decodeInvite,
   isInviteLink,
   peekInvite,
   peekKnock,
   directSpace,
-  DEFAULT_CHANNEL,
   delegation,
-  edgeBody,
   EDGE_KINDS,
   encodeContact,
   encodeInvite,
   findRecoveryIndex,
-  followersOf,
   friendsOf,
   gift,
   isDid,
-  ISSUE_STATUSES,
   issuesOf,
   inception,
   KIND_ADMIT,
   KIND_APP,
-  KIND_ACCOUNT,
-  accountClaimsOf,
-  type AccountClaim,
-  accountProofText,
-  isPlatform,
-  KIND_IMPRINT,
-  imprintOf,
   KIND_SERVICE_REQUEST,
   artifactsOf,
   type Artifact,
-  KIND_BOARD,
-  KIND_CURATE,
-  KIND_BLOCK,
-  KIND_CHANNEL,
   KIND_CONTACT,
   KIND_DECLINE,
-  KIND_FOLLOW,
   KIND_GIFT,
   KIND_INVITE,
   KIND_INVITE_CLOSE,
   KIND_ISSUE,
-  KIND_ISSUE_CLAIM,
-  KIND_ISSUE_STATUS,
   KIND_JOIN,
   KIND_MAINTAINER,
   KIND_MEMBERSHIP_PENDING,
   KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
-  KIND_MUTE,
   KIND_POST,
-  KIND_POST_DELETE,
-  KIND_POST_COAUTHOR,
   coauthorsOf,
-  MAX_COAUTHORS,
-  postRefOf,
   type SessionStamp,
   postTargetOf,
   postUrl,
-  personKeyOf,
-  personTargetOf,
-  personUrl,
   shortPrefixes,
   type PostTarget,
-  type KeyFacts,
-  KIND_POST_EDIT,
   KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
-  KIND_PROPOSAL_CLOSE,
-  closingUpTo,
-  KIND_REACT,
   KIND_REKEY,
   KIND_REMOVE,
   KIND_REPLY,
@@ -171,10 +124,6 @@ import {
   KIND_BADGE_TRANSFER,
   KIND_MARKS_PIN,
   KIND_OFFICIAL,
-  type Badge,
-  KIND_UPVOTE,
-  KIND_VOTE,
-  KIND_VOTE_DELEGATE,
   messagesOf,
   newRecoveryWords,
   newSpace,
@@ -190,20 +139,16 @@ import {
   type RoomPages,
   parseScope,
   permits,
-  POST_SORTS,
   postsOf,
   proposalsOf,
-  sceneOf,
   randomBytes,
   recoveryEncryptionKey,
   recoveryIdentity,
   recoveryRoot,
-  rank,
   rekey,
   revocation,
   rotation,
   Replica,
-  SAVE_MODES,
   savesOf,
   scoresOf,
   seal,
@@ -213,14 +158,11 @@ import {
   spaceScope,
   spaceState,
   spaceTopics,
-  threadsOf,
   visibleIn,
   type AppManifest,
   type AppSetting,
   type Board,
   type Member,
-  type BoardType,
-  type Choice,
   type Did,
   type EdgeEvent,
   type Entry,
@@ -229,11 +171,9 @@ import {
   type Recipient,
   type Invite,
   type Issue,
-  type IssueStatus,
   type Json,
   type Message,
   type Post,
-  type PostSort,
   type Proposal,
   type Reaction,
   type Reply,
@@ -263,7 +203,6 @@ import {
   compareVersions,
   formatVersion,
   parseVersion,
-  TEXT_LIMITS,
   tooLong,
   SERVICE_PREFIX,
   type ServiceContract,
@@ -279,7 +218,6 @@ import { checkServicePackage, KIND_APP_TEXTS, WeaveError } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type HeldSpace, type SpaceAccess } from '@weave/net';
 import {
-  HOME_SOURCES,
   PROJECT_STATUSES,
   noAgentError,
   type Actor,
@@ -293,43 +231,28 @@ import {
   type BoardInfo,
   type BoardViewInfo,
   type ChatInfo,
-  type CoauthorRequest,
-  type SessionRef,
-  type ChannelInfo,
   type CommunityInfo,
-  type EdgeInput,
   type FeedItem,
   type IdentityInfo,
   type KeyInfo,
   type FeedQuery,
   type HomeSource,
-  type GranteeInfo,
   type InviteLook,
   type InviteOptions,
   type KnockInfo,
-  type InProject,
-  type InSpace,
   type IssueInfo,
   type MemberInfo,
   type MessageInfo,
   type Person,
   type Notice,
   type PostInfo,
-  type PostsQuery,
-  type Profile,
-  type Found,
-  type FoundKind,
-  type ImprintInfo,
-  type ProfileInput,
   type ProjectInfo,
   type ProjectPage,
   type ProjectStatus,
   type ProposalInfo,
-  type PublicProject,
   type PublishInput,
   type ReactionInfo,
   type ReplyInfo,
-  type Social,
   type SpaceInfo,
   type SpaceRef,
   type ThreadInfo,
@@ -338,8 +261,6 @@ import {
   type ShippedServiceInfo,
   type ArtifactInfo,
   type ReachInfo,
-  type AccountInfo,
-  type MyAccountInfo,
   type FetcherInfo,
   type ServiceInfo,
   type WebsiteInfo,
@@ -380,8 +301,7 @@ import { Updates } from './update.ts';
 import { Fetchers, type FetcherInfo as StoredFetcherInfo } from './fetchers.ts';
 import { Keyvaults, type ForgottenApp, type KeyvaultState } from './keyvaults.ts';
 import { ClientApps } from './clientapps.ts';
-import { Verifiers, type PlatformInfo } from './verifiers.ts';
-import { startDeviceSignIn, type DeviceOAuth } from './devicecode.ts';
+import { Verifiers } from './verifiers.ts';
 import type { Grant as ServiceGrant } from './servicesettings.ts';
 import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
@@ -391,8 +311,6 @@ import { Marks } from './marks.ts';
 import { Hints, type HeldNotice } from './hints.ts';
 import { RemoteAccess } from './remote.ts';
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
-import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
-import { KIND_AVATAR, sanitizeFigure, type AvatarFigure } from './avatar.ts';
 import { ManagedKeys, type ManagedCore } from './managed.ts';
 import { CARRIED_STATE, KIND_NODE_INDEX, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
 import { Companies, KIND_GENERATION, type CompaniesCore } from './companies.ts';
@@ -400,6 +318,8 @@ import { Payments, type PaymentsCore } from './payments.ts';
 import { Holding, type HoldingCore } from './holding.ts';
 import { Forgetting, type RetentionCore } from './retention.ts';
 import { Sessions, type SessionsCore } from './sessions.ts';
+import { Content, type ContentCore } from './content.ts';
+import { People, type PeopleCore } from './people.ts';
 
 
 export const KIND_PROFILE = 'weave.profile';
@@ -547,10 +467,10 @@ export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
  * A person's meeting point: the DHT topic their node is found on, from a secret that only their links carry (so a
  * DID, which is public, never tells where a computer is). The topic is a hash, so it never shows the secret.
  */
-const meetTopic = (secret: Uint8Array): string => `meet:${b64u.encode(new Uint8Array(createHash('sha256').update('weave/meet-topic/v1').update(secret).digest()))}`;
+export const meetTopic = (secret: Uint8Array): string => `meet:${b64u.encode(new Uint8Array(createHash('sha256').update('weave/meet-topic/v1').update(secret).digest()))}`;
 
 /** A meeting point's secret from a link (base64url, 32 bytes), if it carries a valid one. */
-function meetSecretOf(entry: { meet?: unknown } | undefined): Uint8Array | undefined {
+export function meetSecretOf(entry: { meet?: unknown } | undefined): Uint8Array | undefined {
   if (typeof entry?.meet !== 'string') return undefined;
   try {
     const secret = b64u.decode(entry.meet);
@@ -593,7 +513,6 @@ const photoPosesOf = (value: unknown): Record<Did, string> =>
       )
     : {};
 
-const EDGE_KIND: Record<EdgeInput['edge'], string> = { follow: KIND_FOLLOW, block: KIND_BLOCK, mute: KIND_MUTE };
 const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
 
 
@@ -1123,6 +1042,10 @@ export class WeaveNode implements Backend {
   #retention: Forgetting = new Forgetting(this, WeaveNode.retentionCore(this));
   /** Agents, their harnesses and permissions, sessions and their stacks, mentions, the desk (sessions.ts). */
   #sessions: Sessions = new Sessions(this, WeaveNode.sessionsCore(this));
+  /** Content: posts, boards, pages, images, chat, issues, proposals (content.ts). */
+  #content: Content = new Content(this, WeaveNode.contentCore(this));
+  /** People: profiles, names, the social graph, avatars, accounts elsewhere (people.ts). */
+  #people: People = new People(this, WeaveNode.peopleCore(this));
   /** Company accounts: their group and spaces, sign-in, attestor, policy, escrow, audit, SCIM, console (companies.ts). */
   #companies: Companies = new Companies(this, WeaveNode.companiesCore(this));
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
@@ -2505,124 +2428,154 @@ export class WeaveNode implements Backend {
     this.#appoint(this.#space(input.community, 'community'), input.who, input.on);
   }
 
-  // ---------------------------------------------------------------- posts, boards and upvotes
+  // Content (content.ts): the node delegates.
 
-  async posts(query: PostsQuery = {}): Promise<PostInfo[]> {
-    const sort = query.sort ?? 'hot';
-    if (!POST_SORTS.includes(sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);
-    let posts: PostInfo[];
-    let pinned: string[] = [];
-    if (query.space) {
-      const space = this.#space(query.space);
-      if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
-      const { posts: all, boards } = this.#spacePosts(space);
-      const board = query.board ? this.#board(space, boards, query.board) : undefined;
-      posts = board ? all.filter((p) => p.board === board.name) : all;
-      pinned = board?.pinned ?? boards.flatMap((b) => b.pinned);
-      if (board && !query.sort) return rank(posts, board.sort, pinned).slice(0, query.limit ?? 200);
-    } else if (query.saved) {
-      posts = this.#allPosts().filter((p) => p.saved);
-    } else {
-      const from = query.from ?? 'all';
-      if (!HOME_SOURCES.includes(from)) throw new Error(`show posts from ${HOME_SOURCES.join(', ')}`);
-      posts = this.#homePosts(from);
-      pinned = posts.filter((p) => p.saved === 'pinned').map((p) => p.id);
-    }
-    if (query.saved) posts = posts.filter((p) => p.saved);
-    return rank(posts, sort, pinned).slice(0, query.limit ?? 200);
+  posts(...args: Parameters<Content['posts']>): ReturnType<Content['posts']> {
+    return this.#content.posts(...args);
   }
 
-  async post(ref: string): Promise<PostInfo> {
-    const target = postTargetOf(ref ?? '');
-    if (target) return this.#postAt(target);
-    ref = postRefOf(ref ?? '');
-    if (!ref || ref.length < 6) throw new Error('use at least 6 characters of the id');
-    const matches = this.#allPosts().filter((p) => p.id.startsWith(ref));
-    if (matches.length === 0) throw new WeaveError('daemon.post.not.found', { id: ref }, `no post found with id ${ref}`);
-    if (matches.length > 1) throw new WeaveError('daemon.post.ambiguous', { id: ref }, `id ${ref} is ambiguous — use more characters`);
-    const space = matches[0].space && this.#spaces.get(matches[0].space.id);
-    if (space && this.#holding.pulled(space)) {
-      // Opened: kept for 30 days, like anything you read.
-      this.#holding.kept.ids[matches[0].id] = new Date(this.clock()).toISOString();
-      this.#holding.saveKept();
-    }
-    return matches[0];
+  post(...args: Parameters<Content['post']>): ReturnType<Content['post']> {
+    return this.#content.post(...args);
   }
 
-  /** What an agent writes in a session says which one (by its name, once it has one); the session itself stays yours. */
-  #sessionStamp(session: SessionRef | undefined, as: string | undefined): Json | undefined {
-    if (!session || !as) return undefined;
-    const record = this.#sessions.sessionRecord(session);
-    return record.name ? { name: record.name } : undefined;
+  submit(...args: Parameters<Content['submit']>): ReturnType<Content['submit']> {
+    return this.#content.submit(...args);
   }
 
-  async submit(input: { space: string; board?: string; title: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string; session?: SessionRef }): Promise<PostInfo> {
-    const title = input.title?.trim();
-    if (!title) throw new WeaveError('daemon.post.title', undefined, 'a post needs a title');
-    if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
-    const link = input.link?.trim();
-    if (link && !/^https?:\/\//.test(link)) throw new WeaveError('daemon.post.link', undefined, 'links start with http:// or https://');
-    const image = input.image?.trim();
-    if (image && !parseBlobRef(image)) throw new WeaveError('daemon.post.image', undefined, 'attach an uploaded image (a wblob: reference)');
-    const scene = input.scene?.trim();
-    if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
-    const space = this.#space(input.space);
-    if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
-    const body: Record<string, Json> = { title, text: input.text ?? '' };
-    if (link) body.link = link;
-    if (image) body.image = image;
-    if (scene) body.scene = scene;
-    const stamp = this.#sessionStamp(input.session, input.as);
-    if (stamp) body.session = stamp;
-    if (input.with?.length) body.with = this.#coauthorList(space, input.with);
-    const prompt = input.prompt?.trim();
-    if (prompt && prompt.length > TEXT_LIMITS.prompt) throw tooLong('The starting prompt', prompt.length, TEXT_LIMITS.prompt);
-    if (prompt) body.prompt = prompt;
-    if (space.kind === 'project') {
-      const board = this.#board(space, this.#spacePosts(space).boards, input.board ?? 'ideas');
-      if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name, prompt })).id);
-      if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
-      body.board = board.name;
-    }
-    const { id } = await this.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
-    return this.post(id);
+  confirmCoauthor(...args: Parameters<Content['confirmCoauthor']>): ReturnType<Content['confirmCoauthor']> {
+    return this.#content.confirmCoauthor(...args);
   }
 
-  async confirmCoauthor(input: { post: string; on: boolean; as?: string }): Promise<PostInfo> {
-    const post = await this.post(input.post);
-    const agent = input.as ? this.#agents.find((a) => a.name === input.as) : undefined;
-    if (input.as && !agent) throw noAgentError(input.as, this.#agents.map((a) => a.name));
-    const me = agent?.did ?? this.identity.author;
-    const named = this.#namedIn(post.id);
-    if (!named) throw new WeaveError('daemon.coauthor.none', undefined, "that post doesn't name any co-authors");
-    if (!named.includes(me) && !named.some((did) => this.replica.authority.personOf(did) === this.identity.author && !agent)) {
-      throw agent
-        ? new WeaveError('daemon.coauthor.not.agent', { agent: agent.name }, `that post doesn't name ${agent.name} as a co-author`)
-        : new WeaveError('daemon.coauthor.not.you', undefined, "that post doesn't name you as a co-author");
-    }
-    await this.publish({ kind: KIND_POST_COAUTHOR, body: { target: post.id, on: input.on }, space: post.space?.id, as: input.as });
-    return this.post(post.id);
+  coauthorRequests(...args: Parameters<Content['coauthorRequests']>): ReturnType<Content['coauthorRequests']> {
+    return this.#content.coauthorRequests(...args);
   }
 
-  async coauthorRequests(): Promise<CoauthorRequest[]> {
-    const me = this.identity.author;
-    const mine = new Map(this.#agents.map((a) => [a.did, a.name]));
-    const out: CoauthorRequest[] = [];
-    for (const { posts, entries, space } of this.#postSources()) {
-      for (const p of posts) {
-        if (!p.with || p.author === me) continue;
-        for (const c of coauthorsOf(p, entries, this.#keyFacts)) {
-          if (c.state !== 'asked' || (c.did !== me && !mine.has(c.did))) continue;
-          out.push({
-            post: { id: p.id, short: p.id.slice(0, 8), title: p.title, ...(space ? { space: { id: space.id, kind: space.kind, name: space.name } } : {}) },
-            by: this.#actor(p.author, p.signer),
-            ...(mine.has(c.did) ? { agent: mine.get(c.did)! } : {}),
-            time: p.time,
-          });
-        }
-      }
-    }
-    return out.sort((a, b) => b.time.localeCompare(a.time));
+  editPost(...args: Parameters<Content['editPost']>): ReturnType<Content['editPost']> {
+    return this.#content.editPost(...args);
+  }
+
+  deletePost(...args: Parameters<Content['deletePost']>): ReturnType<Content['deletePost']> {
+    return this.#content.deletePost(...args);
+  }
+
+  upvote(...args: Parameters<Content['upvote']>): ReturnType<Content['upvote']> {
+    return this.#content.upvote(...args);
+  }
+
+  save(...args: Parameters<Content['save']>): ReturnType<Content['save']> {
+    return this.#content.save(...args);
+  }
+
+  share(...args: Parameters<Content['share']>): ReturnType<Content['share']> {
+    return this.#content.share(...args);
+  }
+
+  boards(...args: Parameters<Content['boards']>): ReturnType<Content['boards']> {
+    return this.#content.boards(...args);
+  }
+
+  setBoardAccess(...args: Parameters<Content['setBoardAccess']>): ReturnType<Content['setBoardAccess']> {
+    return this.#content.setBoardAccess(...args);
+  }
+
+  setBoard(...args: Parameters<Content['setBoard']>): ReturnType<Content['setBoard']> {
+    return this.#content.setBoard(...args);
+  }
+
+  curate(...args: Parameters<Content['curate']>): ReturnType<Content['curate']> {
+    return this.#content.curate(...args);
+  }
+
+  project(...args: Parameters<Content['project']>): ReturnType<Content['project']> {
+    return this.#content.project(...args);
+  }
+
+  setProjectPage(...args: Parameters<Content['setProjectPage']>): ReturnType<Content['setProjectPage']> {
+    return this.#content.setProjectPage(...args);
+  }
+
+  putBlob(...args: Parameters<Content['putBlob']>): ReturnType<Content['putBlob']> {
+    return this.#content.putBlob(...args);
+  }
+
+  putFile(...args: Parameters<Content['putFile']>): ReturnType<Content['putFile']> {
+    return this.#content.putFile(...args);
+  }
+
+  blob(...args: Parameters<Content['blob']>): ReturnType<Content['blob']> {
+    return this.#content.blob(...args);
+  }
+
+  channels(...args: Parameters<Content['channels']>): ReturnType<Content['channels']> {
+    return this.#content.channels(...args);
+  }
+
+  createChannel(...args: Parameters<Content['createChannel']>): ReturnType<Content['createChannel']> {
+    return this.#content.createChannel(...args);
+  }
+
+  messages(...args: Parameters<Content['messages']>): ReturnType<Content['messages']> {
+    return this.#content.messages(...args);
+  }
+
+  say(...args: Parameters<Content['say']>): ReturnType<Content['say']> {
+    return this.#content.say(...args);
+  }
+
+  deleteMessage(...args: Parameters<Content['deleteMessage']>): ReturnType<Content['deleteMessage']> {
+    return this.#content.deleteMessage(...args);
+  }
+
+  react(...args: Parameters<Content['react']>): ReturnType<Content['react']> {
+    return this.#content.react(...args);
+  }
+
+  threads(...args: Parameters<Content['threads']>): ReturnType<Content['threads']> {
+    return this.#content.threads(...args);
+  }
+
+  startThread(...args: Parameters<Content['startThread']>): ReturnType<Content['startThread']> {
+    return this.#content.startThread(...args);
+  }
+
+  reply(...args: Parameters<Content['reply']>): ReturnType<Content['reply']> {
+    return this.#content.reply(...args);
+  }
+
+  issues(...args: Parameters<Content['issues']>): ReturnType<Content['issues']> {
+    return this.#content.issues(...args);
+  }
+
+  openIssue(...args: Parameters<Content['openIssue']>): ReturnType<Content['openIssue']> {
+    return this.#content.openIssue(...args);
+  }
+
+  claimIssue(...args: Parameters<Content['claimIssue']>): ReturnType<Content['claimIssue']> {
+    return this.#content.claimIssue(...args);
+  }
+
+  setIssueStatus(...args: Parameters<Content['setIssueStatus']>): ReturnType<Content['setIssueStatus']> {
+    return this.#content.setIssueStatus(...args);
+  }
+
+  proposals(...args: Parameters<Content['proposals']>): ReturnType<Content['proposals']> {
+    return this.#content.proposals(...args);
+  }
+
+  propose(...args: Parameters<Content['propose']>): ReturnType<Content['propose']> {
+    return this.#content.propose(...args);
+  }
+
+  vote(...args: Parameters<Content['vote']>): ReturnType<Content['vote']> {
+    return this.#content.vote(...args);
+  }
+
+  delegateVote(...args: Parameters<Content['delegateVote']>): ReturnType<Content['delegateVote']> {
+    return this.#content.delegateVote(...args);
+  }
+
+  votingDelegate(...args: Parameters<Content['votingDelegate']>): ReturnType<Content['votingDelegate']> {
+    return this.#content.votingDelegate(...args);
   }
 
   async updateAgent(input: { name: string; permissions: string[] }): Promise<AgentInfo> {
@@ -2638,348 +2591,6 @@ export class WeaveNode implements Backend {
 
 
   /** What co-authorship needs to know about keys. */
-  #keyFacts: KeyFacts = {
-    personOf: (key) => this.replica.authority.personOf(key),
-    isAgent: (key) => this.replica.authority.grant(key)?.role === 'agent',
-  };
-
-  /** A co-author by name, did:key, your agent's name, or someone's agent as "person·agent". */
-  /** Co-authors to name in a space: resolved, each one a member who can confirm. */
-  #coauthorList(space: StoredSpace, refs: string[]): Did[] {
-    if (refs.length > MAX_COAUTHORS) throw new Error(`name at most ${MAX_COAUTHORS} co-authors`);
-    const state = this.#state(space);
-    const named = [...new Set(refs.map((ref) => this.#resolveCoauthor(ref)))];
-    for (const did of named) {
-      const person = this.replica.authority.personOf(did);
-      if (!state.members.has(person)) throw new Error(`${this.nameOf(person) ?? did} isn't in ${space.name}, so they can't confirm`);
-    }
-    return named;
-  }
-
-  #resolveCoauthor(ref: string): Did {
-    const text = ref.trim();
-    if (isDid(text)) return text;
-    const split = /^(.+?)\s*[·/]\s*([a-z0-9-]+)$/.exec(text);
-    if (split) {
-      const person = this.resolve(split[1]);
-      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.name === split[2] && g.revokedAfter === undefined);
-      if (!grant) throw new Error(`${split[1]} has no agent named "${split[2]}"`);
-      return grant.subject;
-    }
-    const mine = this.#agents.find((a) => a.name === text);
-    return mine ? mine.did : this.resolve(text);
-  }
-
-  /** A key as an actor: an agent shows with its person. */
-  #keyActor(did: Did) {
-    const grant = this.replica.authority.grant(did);
-    if (grant?.role === 'agent') return { did: grant.author, ...(this.nameOf(grant.author) ? { name: this.nameOf(grant.author) } : {}), ...(grant.name ? { agent: grant.name } : {}) };
-    return { did, ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}) };
-  }
-
-  /** The co-authors a post names, wherever it is. */
-  #namedIn(postId: string): Did[] | undefined {
-    for (const { posts } of this.#postSources()) {
-      const post = posts.find((p) => p.id === postId);
-      if (post) return post.with;
-    }
-    return undefined;
-  }
-
-  /** Every post this node can read, with the entries around it: per project and community, and the public ones. */
-  #postSources(): Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> {
-    const out: Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> = [];
-    for (const space of this.#spaces.values()) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
-      const entries = this.#entries(space);
-      out.push({ posts: postsOf(space.kind, entries, this.#state(space).maintainers), entries, space });
-    }
-    const entries = this.#decodeAll()
-      .filter((d) => !d.space && !d.private)
-      .map((d) => ({ id: d.id, event: d.event, kind: d.inner.kind, body: d.inner.body }));
-    out.push({ posts: postsOf(undefined, entries), entries });
-    return out;
-  }
-
-  async editPost(input: { post: string; title?: string; text?: string; link?: string; image?: string; scene?: string; with?: string[]; prompt?: string; as?: string }): Promise<PostInfo> {
-    const post = await this.#ownPost(input.post, 'edit');
-    const body: Record<string, Json> = { target: post.id };
-    if (input.title !== undefined) {
-      const title = input.title.trim();
-      if (!title) throw new WeaveError('daemon.post.title', undefined, 'a post needs a title');
-      if (title.length > TEXT_LIMITS.title) throw tooLong('The title', title.length, TEXT_LIMITS.title);
-      body.title = title;
-    }
-    if (input.text !== undefined) body.text = input.text;
-    if (input.link !== undefined) {
-      const link = input.link.trim();
-      if (link && !/^https?:\/\//.test(link)) throw new WeaveError('daemon.post.link', undefined, 'links start with http:// or https://');
-      body.link = link;
-    }
-    if (input.prompt !== undefined) body.prompt = input.prompt.trim();
-    if (input.image !== undefined) {
-      const image = input.image.trim();
-      if (image && !parseBlobRef(image)) throw new WeaveError('daemon.post.image', undefined, 'attach an uploaded image (a wblob: reference)');
-      body.image = image;
-    }
-    if (input.scene !== undefined) {
-      const scene = input.scene.trim();
-      if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
-      body.scene = scene;
-    }
-    if (input.with !== undefined) {
-      const space = post.space && this.#spaces.get(post.space.id);
-      if (!space) throw new Error("co-authors are named in the space a post is in, and you aren't in it");
-      body.with = this.#coauthorList(space, input.with);
-    }
-    if (Object.keys(body).length === 1) throw new Error('nothing to change: give a new title, text, link, image, scene or co-authors');
-    await this.publish({ kind: KIND_POST_EDIT, body, space: post.space?.id, as: input.as });
-    return this.post(post.id);
-  }
-
-  async deletePost(input: { post: string; as?: string }): Promise<void> {
-    const post = await this.#ownPost(input.post, 'delete');
-    await this.publish({ kind: KIND_POST_DELETE, body: { target: post.id }, space: post.space?.id, as: input.as });
-  }
-
-  /** A post you may edit (yours) or delete (yours, or any in a space you maintain or moderate). */
-  async #ownPost(ref: string, action: 'edit' | 'delete'): Promise<PostInfo> {
-    const post = await this.post(ref);
-    if (post.type !== 'post') throw new Error(`only posts can be changed this way; this is a ${post.type}`);
-    // Old ideas threads show up as posts too, but are weave.thread events.
-    if (!this.#decodeAll().some((d) => d.inner.kind === KIND_POST && d.id === post.id)) throw new Error('only posts can be changed this way; this is an older thread');
-    if (post.by.did === this.identity.author) return post;
-    const space = post.space && this.#spaces.get(post.space.id);
-    if (action === 'delete' && space && mayDo(this.#state(space), this.identity.author, 'curate').ok) return post;
-    throw new Error(action === 'edit' ? 'only its author can edit a post' : `only its author${space ? ` or the ${space.kind === 'community' ? 'moderators' : 'maintainers'}` : ''} can delete a post`);
-  }
-
-  async upvote(input: { target: string; value: number; as?: string }): Promise<PostInfo> {
-    if (![1, 0, -1].includes(input.value)) throw new Error('upvote with 1, -1, or 0 to take it back');
-    const post = await this.post(input.target);
-    await this.publish({ kind: KIND_UPVOTE, body: { target: post.id, value: input.value }, space: post.space?.id, as: input.as });
-    return this.post(post.id);
-  }
-
-  async save(input: { target: string; mode: SaveMode | null }): Promise<void> {
-    if (input.mode !== null && !SAVE_MODES.includes(input.mode)) throw new Error(`save as ${SAVE_MODES.join(' or ')}, or null to forget`);
-    const post = await this.post(input.target);
-    this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_SAVE, body: { target: post.id, mode: input.mode } }));
-  }
-
-  async share(input: { post: string; to: string; text?: string }): Promise<PostInfo> {
-    const post = await this.post(input.post);
-    const project = post.project ? { id: post.project.id, name: post.project.name, description: post.project.description, status: post.project.status, ...(post.project.icon ? { icon: post.project.icon } : {}) } : undefined;
-    const text = input.text?.trim() || post.text;
-    if (input.to === 'followers') {
-      const page = project && this.#spaces.has(project.id) ? this.#page(this.#spaces.get(project.id)!, this.#state(this.#spaces.get(project.id)!)) : undefined;
-      if (!project || !page?.public) throw new Error('only projects with a public page can be shared with your followers; share other posts into a community');
-      const { id } = await this.publish({ kind: KIND_POST, body: { title: post.title, text, share: { post: post.id, project } } });
-      return this.post(id);
-    }
-    const target = this.#space(input.to);
-    if (target.kind !== 'community') throw new Error(`share into a community (or "followers"); ${target.name} is a ${target.kind}`);
-    const share: Record<string, Json> = { post: post.id, ...(post.space ? { space: { ...post.space } } : {}), ...(project ? { project } : {}) };
-    const body: Record<string, Json> = { title: post.title, text, share };
-    if (post.link) body.link = post.link;
-    if (post.image) body.image = post.image;
-    const { id } = await this.publish({ kind: KIND_POST, body, space: target.id });
-    return this.post(id);
-  }
-
-  async boards(ref: string): Promise<BoardInfo[]> {
-    const space = this.#space(ref);
-    const { posts, boards } = this.#spacePosts(space);
-    const state = this.#state(space);
-    const access = space.kind === 'project' ? this.#access(space, state, this.#entries(space)) : undefined;
-    const me = this.identity.author;
-    const forgetting = boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt);
-    return boards
-      .filter((b) => !access || mayUse('read', b.name, me, state, access) || !state.members.has(me))
-      .map(({ lens, ...b }) => {
-        const inBoard = posts.filter((p) => p.board === b.name);
-        const active = inBoard.reduce<string | undefined>((latest, p) => (!latest || p.active > latest ? p.active : latest), undefined);
-        const rules = access?.rules.get(b.name);
-        const info = (list?: Grantee[]) => list?.map((g) => this.#granteeInfo(g, state));
-        return {
-          ...b,
-          count: inBoard.length,
-          ...(active ? { active } : {}),
-          access: { ...(rules?.read ? { read: info(rules.read) } : {}), ...(rules?.write ? { write: info(rules.write) } : {}) },
-          canWrite: !access || !rules?.write || mayUse('write', b.name, me, state, access),
-          ...(space.kind === 'project' ? { following: this.#follows(space.id, b.name) } : {}),
-          ...(forgetting.get(b.name) ? { rule: this.#ruleInfo(forgetting.get(b.name)!) } : {}),
-          ...(lens ? { lens: { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release } } : {}),
-        };
-      });
-  }
-
-  async setBoardAccess(input: { project: string; board: string; read?: string[] | null; write?: string[] | null }): Promise<BoardInfo[]> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    const board = this.#board(project, this.#spacePosts(project).boards, input.board);
-    const before = this.#access(project, state, this.#entries(project)).rules.get(board.name) ?? {};
-    const grantees = (list: string[] | null | undefined, keep?: Grantee[]): Grantee[] | null => {
-      if (list === null) return null;
-      if (list === undefined) return keep ?? null;
-      return list.map((ref) => {
-        if (ref.startsWith('group:')) return { group: this.#knownGroup(project, ref.slice(6)).id };
-        const did = this.resolve(ref);
-        if (!state.members.has(did)) throw new Error(`${ref} isn't in ${project.name}`);
-        return { person: did };
-      });
-    };
-    const read = grantees(input.read, before.read);
-    const write = grantees(input.write, before.write);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD_ACCESS, body: { board: board.name, read: read as unknown as Json, write: write as unknown as Json } }));
-    await this.#reconcileBoards(project);
-    return this.boards(project.id);
-  }
-
-  #granteeInfo(g: Grantee, state: SpaceState): GranteeInfo {
-    if ('person' in g) return { person: g.person, ...(this.nameOf(g.person) ? { name: this.nameOf(g.person) } : {}) };
-    return { group: g.group, name: this.#spaces.get(g.group)?.name ?? state.groups.get(g.group)?.name ?? 'group' };
-  }
-
-  async setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]> {
-    const project = this.#project(input.project);
-    this.#maintainerState(project);
-    const name = boardName(input.name);
-    if (!name) throw new Error('board names use letters, digits and dashes');
-    if (input.sort !== undefined && !POST_SORTS.includes(input.sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);
-    const body: Record<string, Json> = { name };
-    const isNew = !(await this.boards(project.id)).some((b) => b.name === name);
-    const title = input.title ?? (isNew ? input.name : undefined);
-    if (title !== undefined) body.title = title.trim().slice(0, 40);
-    if (input.type !== undefined) body.type = input.type;
-    if (input.sort !== undefined) body.sort = input.sort;
-    if (input.position !== undefined) body.position = input.position;
-    if (input.on === false) body.on = false;
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD, body }));
-    return this.boards(project.id);
-  }
-
-  async curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]> {
-    const space = this.#space(input.space);
-    this.#maintainerState(space);
-    const { posts, boards } = this.#spacePosts(space);
-    const board = this.#board(space, boards, input.board ?? (space.kind === 'community' ? COMMUNITY_BOARD : ''));
-    const pinned = (input.pinned ?? []).map((ref) => {
-      const match = posts.filter((p) => p.board === board.name && p.id.startsWith(ref));
-      if (match.length !== 1) throw new Error(`no single post ${ref} in ${board.title}`);
-      return match[0].id;
-    });
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CURATE, body: { board: board.name, pinned } }));
-    return this.boards(space.id);
-  }
-
-  // ---------------------------------------------------------------- projects
-
-  async project(ref: string): Promise<ProjectInfo> {
-    const project = this.#project(ref);
-    const state = this.#state(project);
-    const post = this.#projectPost(project);
-    return {
-      ...this.#spaceInfo(project),
-      kind: 'project',
-      page: this.#page(project, state),
-      maintainers: [...state.maintainers].map((did) => this.#actor(did, did)),
-      groups: [...state.groups.values()].map((g) => ({ id: g.id, name: this.#spaces.get(g.id)?.name ?? g.name, auto: g.auto })),
-      maintainer: state.maintainers.has(this.identity.author),
-      ...(post ? { post } : {}),
-    };
-  }
-
-  async setProjectPage(input: { project: string; as?: string } & Partial<ProjectPage>): Promise<ProjectInfo> {
-    const project = this.#project(input.project);
-    const state = this.#maintainerState(project);
-    if (input.as) this.#agentMay(input.as, KIND_PAGE);
-    if (input.status !== undefined && !PROJECT_STATUSES.includes(input.status)) throw new Error(`status is one of ${PROJECT_STATUSES.join(', ')}`);
-    for (const image of [input.icon, input.banner]) if (image && !parseBlobRef(image)) throw new Error('icons and banners are uploaded images (wblob: references)');
-    const before = this.#page(project, state);
-    // Older callers set only the description: that is the body.
-    const pageBody = input.body ?? (input.description !== undefined && input.subtitle === undefined ? input.description : before.body);
-    const subtitle = (input.subtitle ?? before.subtitle).trim();
-    const pageTitle = (input.title ?? before.title).trim();
-    if (pageBody.length > TEXT_LIMITS.page) throw tooLong('The page', pageBody.length, TEXT_LIMITS.page);
-    if (subtitle.length > TEXT_LIMITS.pageSubtitle) throw tooLong('The subtitle', subtitle.length, TEXT_LIMITS.pageSubtitle);
-    if (pageTitle.length > TEXT_LIMITS.pageTitle) throw tooLong('The title', pageTitle.length, TEXT_LIMITS.pageTitle);
-    // An empty string removes an image; undefined keeps it.
-    const icon = input.icon === undefined ? before.icon : input.icon || undefined;
-    const banner = input.banner === undefined ? before.banner : input.banner || undefined;
-    const page: ProjectPage = {
-      title: pageTitle,
-      subtitle,
-      body: pageBody,
-      ...(icon ? { icon } : {}),
-      ...(banner ? { banner } : {}),
-      description: subtitle || summary(pageBody),
-      status: input.status ?? before.status,
-      public: input.public ?? before.public,
-    };
-    if (input.as && (page.public || before.public)) this.#agentMay(input.as, KIND_PUBLIC_PROJECT);
-    await this.publish({ kind: KIND_PAGE, body: { ...page }, space: project.id, as: input.as });
-    // Public projects keep a public copy of their page; making it private publishes a withdrawal.
-    if (page.public || before.public) {
-      const body: Record<string, Json> = page.public
-        ? { project: project.id, name: project.name, title: page.title, subtitle: page.subtitle, ...(page.icon ? { icon: page.icon } : {}), description: page.description, status: page.status, public: true }
-        : { project: project.id, public: false };
-      await this.publish({ kind: KIND_PUBLIC_PROJECT, body, as: input.as });
-    }
-    return this.project(project.id);
-  }
-
-  // ---------------------------------------------------------------- images
-
-  async putBlob(input: { data: string; type: string }): Promise<string> {
-    if (!BLOB_TYPES.includes(input.type as BlobType)) throw new Error(`images are ${BLOB_TYPES.map((t) => t.slice(6).toUpperCase()).join(', ')}`);
-    const { data, ref } = encryptBlob(new Uint8Array(Buffer.from(input.data, 'base64')), input.type as BlobType);
-    this.blobs.put(data);
-    return `wblob:${ref.hash}.${ref.key}`;
-  }
-
-  /** A file of any type, to attach to a chat message: encrypted and stored here, where the others fetch it from. */
-  async putFile(input: { data: string; name: string; type: string }): Promise<Attachment> {
-    const name = fileName(input.name);
-    if (!name) throw new Error('a file needs a name (no path, at most 200 characters)');
-    if (!isMediaType(input.type)) throw new Error('a file needs a media type, like image/png or application/pdf');
-    const bytes = new Uint8Array(Buffer.from(input.data, 'base64'));
-    const { data, ref } = encryptBlob(bytes, input.type);
-    this.blobs.put(data);
-    return { ref: formatBlobRef(ref), name, size: bytes.length, type: input.type };
-  }
-
-  async blob(text: string): Promise<{ data: string; type: string }> {
-    const ref = parseBlobRef(text);
-    if (!ref) throw new Error('not a file reference (wblob:…)');
-    const stored = await this.blobs.fetch(ref.hash, (hashes) => this.#swarm?.want(hashes));
-    const { bytes, type } = decryptBlob(stored, ref.key);
-    return { data: Buffer.from(bytes).toString('base64'), type };
-  }
-
-  /** Ask peers ahead of time for images in what we can read, so they show at once and we can pass them on. */
-  #prefetchBlobs(): void {
-    if (!this.#swarm) return;
-    const missing: string[] = [];
-    for (const d of this.#decodeAll()) {
-      if (!d.space) continue;
-      for (const ref of blobRefsIn(JSON.stringify(d.inner.body ?? ''))) {
-        if (this.#prefetched.has(ref.hash) || this.blobs.has(ref.hash)) continue;
-        this.#prefetched.add(ref.hash);
-        missing.push(ref.hash);
-      }
-    }
-    // Badge pictures are public: holders show them next to their name.
-    for (const series of this.#payments.allBadges().series) {
-      const ref = parseBlobRef(series.image);
-      if (!ref || this.#prefetched.has(ref.hash) || this.blobs.has(ref.hash)) continue;
-      this.#prefetched.add(ref.hash);
-      missing.push(ref.hash);
-    }
-    for (const hash of missing.slice(0, 64)) {
-      this.blobs.fetch(hash, (hashes) => this.#swarm?.want(hashes), 120_000).catch(() => this.#prefetched.delete(hash));
-    }
-  }
 
   async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
     this.#appoint(this.#project(input.project), input.who, input.on);
@@ -3059,10 +2670,10 @@ export class WeaveNode implements Backend {
     if (generation && !this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author && (e.body as { generation?: unknown } | null)?.generation === generation).length) {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
-    this.#prefetchBlobs();
-    let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#tellContacts();
+    this.#content.prefetchBlobs();
+    let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts();
     for (const space of [...this.#spaces.values()]) changed += this.#settleEpochKeys(space);
-    changed += await this.#closeProposals();
+    changed += await this.#content.closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
     for (const space of [...this.#spaces.values()]) changed += this.#rotateAfterLeaving(space, this.#state(space));
     for (const space of [...this.#spaces.values()]) changed += this.#handMissedKeys(space, this.#state(space));
@@ -3114,390 +2725,98 @@ export class WeaveNode implements Backend {
     return changed;
   }
 
-  // ---------------------------------------------------------------- accounts elsewhere
+  // People (people.ts): the node delegates.
 
-  /**
-   * Who reads a space: its members, or in a project the readers of one of its boards (everyone, for a board nobody
-   * limited).
-   */
-  #readersOf(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
-    if (!board || space.kind !== 'project') return [...state.members.keys()];
-    return readersOf(board, state, this.#access(space, state, entries));
+  platforms(...args: Parameters<People['platforms']>): ReturnType<People['platforms']> {
+    return this.#people.platforms(...args);
   }
 
-  /** The platforms accounts can be proven on here (a verifier checks each), and how. */
-  async platforms(): Promise<PlatformInfo[]> {
-    return this.#verifiers.platforms();
+  accountProof(...args: Parameters<People['accountProof']>): ReturnType<People['accountProof']> {
+    return this.#people.accountProof(...args);
   }
 
-  /** What a proof of an account must hold (your Weave id), and how to make one on that platform. */
-  async accountProof(input: { platform: string }): Promise<{ text: string; howto?: string }> {
-    const p = this.#verifiers.platforms().find((x) => x.platform === input.platform);
-    if (!p) throw new Error(`nothing here checks accounts on ${input.platform}${this.#verifiers.platforms().length ? ` (only on ${this.#verifiers.platforms().map((x) => x.platform).join(', ')})` : ''}`);
-    return { text: accountProofText(this.identity.author), ...(p.howto ? { howto: p.howto } : {}) };
+  linkAccount(...args: Parameters<People['linkAccount']>): ReturnType<People['linkAccount']> {
+    return this.#people.linkAccount(...args);
   }
 
-  /**
-   * Say an account elsewhere is yours, with its proof (or take it back, on: false): on your hub for everyone, or in a
-   * space for its members (whose services may give access by it). Checked here first, by its platform's verifier.
-   */
-  async linkAccount(input: { platform: string; handle?: string; proof?: string; space?: string; on?: boolean; as?: string }): Promise<AccountInfo[]> {
-    if (input.as) this.#agentMay(input.as, KIND_ACCOUNT);
-    const space = input.space ? this.#space(input.space) : undefined;
-    if (space && (space.kind === 'direct' || !this.#state(space).members.has(this.identity.author))) throw new Error(`you are not a member of ${space.name}`);
-    if (!isPlatform(input.platform)) throw new Error('a platform: lowercase letters, digits and dashes, like github');
-    let body: Json = { platform: input.platform, on: false };
-    if (input.on !== false) {
-      const handle = input.handle?.trim().replace(/^@/, '');
-      const proof = input.proof?.trim();
-      if (!handle || !proof) throw new Error(`your account on ${input.platform}, and where its proof is (weave account proof ${input.platform})`);
-      const claim = { platform: input.platform, handle, proof };
-      const ok = await this.#verifiers.verify(claim, this.identity.author);
-      if (ok === undefined) throw new Error(this.#verifiers.platforms().some((p) => p.platform === input.platform) ? `${input.platform} can't be asked right now: try again in a moment` : `nothing here checks accounts on ${input.platform}`);
-      if (!ok) throw new Error(`that proof doesn't hold: it has to be ${handle}'s, on ${input.platform}, and hold "${accountProofText(this.identity.author)}"`);
-      body = { ...claim, on: true };
-    }
-    if (space) await this.publish({ kind: KIND_ACCOUNT, body, space: space.id, as: input.as });
-    else this.replica.write(this.identity, { kind: KIND_ACCOUNT, body });
-    return this.accounts({ ...(space ? { space: space.id } : {}) });
+  startAccountProof(...args: Parameters<People['startAccountProof']>): ReturnType<People['startAccountProof']> {
+    return this.#people.startAccountProof(...args);
   }
 
-  /** Proofs its verifier makes, under way: each waits for its sign-in with a code. */
-  #proving = new Map<string, Promise<AccountInfo[]>>();
-
-  /**
-   * Prove an account elsewhere in one go: a sign-in with a code there (its verifier's), used once for the verifier to
-   * make the proof (a secret gist naming you, on GitHub), then forgotten; the account is then yours on your hub, or in
-   * a space. finishAccountProof waits for it.
-   */
-  async startAccountProof(input: { platform: string; space?: string }): Promise<{ id: string; url: string; code: string }> {
-    const oauth = this.#verifiers.prover(input.platform);
-    if (!oauth?.device) throw new Error(`${input.platform}'s verifier can't make a proof itself: make one by hand (weave account proof ${input.platform})`);
-    if (input.space) this.#space(input.space);
-    const started = await startDeviceSignIn(oauth as DeviceOAuth, this.oauthSetup.fetch, input.platform);
-    const id = b64u.encode(randomBytes(12));
-    const done = started.grant
-      .then((grant) => this.#verifiers.prove(input.platform, grant.access, this.identity.author))
-      .then(({ handle, proof }) => this.linkAccount({ platform: input.platform, handle, proof, ...(input.space ? { space: input.space } : {}) }))
-      .finally(() => setTimeout(() => this.#proving.delete(id), 60_000).unref());
-    done.catch(() => {});
-    this.#proving.set(id, done);
-    return { id, url: started.url, code: started.code };
+  finishAccountProof(...args: Parameters<People['finishAccountProof']>): ReturnType<People['finishAccountProof']> {
+    return this.#people.finishAccountProof(...args);
   }
 
-  async finishAccountProof(input: { id: string }): Promise<AccountInfo[]> {
-    const proving = this.#proving.get(input.id);
-    if (!proving) throw new Error('no proof under way with that id');
-    return proving;
+  accounts(...args: Parameters<People['accounts']>): ReturnType<People['accounts']> {
+    return this.#people.accounts(...args);
   }
 
-  /** Accounts elsewhere people said are theirs: on their hubs (who), or in a space; each checked by its platform's verifier. */
-  async accounts(input: { space?: string; who?: string } = {}): Promise<AccountInfo[]> {
-    // On hubs: public events, signed by the person. In a space: sealed for its members.
-    const claims = input.space ? accountClaimsOf(this.#entries(this.#space(input.space))) : accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } })));
-    const only = input.who ? this.resolve(input.who) : undefined;
-    // Each checked by its verifier, all at once (known ones aren't asked again for an hour).
-    const all = [...claims].filter(([did]) => !only || did === only).flatMap(([did, mine]) => [...mine.values()].map((claim) => ({ did, claim })));
-    return Promise.all(
-      all.map(async ({ did, claim }): Promise<AccountInfo> => {
-        const verified = await this.#verifiers.verify(claim, did);
-        const page = this.#verifiers.page(claim);
-        return { who: this.#actor(did, did), platform: claim.platform, handle: claim.handle, proof: claim.proof, ...(page ? { url: page } : {}), ...(verified !== undefined ? { verified } : {}) };
-      }),
-    );
+  myAccounts(...args: Parameters<People['myAccounts']>): ReturnType<People['myAccounts']> {
+    return this.#people.myAccounts(...args);
   }
 
-  async myAccounts(): Promise<MyAccountInfo[]> {
-    const me = this.identity.author;
-    const byAccount = new Map<string, MyAccountInfo>();
-    const said = (claim: AccountClaim | undefined, where: { hub: true } | { space: StoredSpace }) => {
-      if (!claim) return;
-      const key = JSON.stringify([claim.platform, claim.handle.toLowerCase(), claim.proof]);
-      const page = this.#verifiers.page(claim);
-      const a = byAccount.get(key) ?? { ...claim, ...(page ? { url: page } : {}), hub: false, spaces: [] };
-      if ('hub' in where) a.hub = true;
-      else a.spaces.push({ id: where.space.id, kind: where.space.kind, name: where.space.name });
-      byAccount.set(key, a);
-    };
-    for (const claim of accountClaimsOf(this.replica.events((e) => e.kind === KIND_ACCOUNT && e.author === me).map((e) => ({ kind: e.kind, body: e.body as Json, event: { author: e.author, time: e.time } }))).get(me)?.values() ?? []) said(claim, { hub: true });
-    for (const space of this.#spaces.values()) {
-      if (space.kind === 'direct' || !this.#state(space).members.has(me)) continue;
-      for (const claim of accountClaimsOf(this.#entries(space)).get(me)?.values() ?? []) said(claim, { space });
-    }
-    return Promise.all(
-      [...byAccount.values()].map(async (a) => {
-        const verified = await this.#verifiers.verify(a, me);
-        return { ...a, ...(verified !== undefined ? { verified } : {}) };
-      }),
-    );
+  setEdge(...args: Parameters<People['setEdge']>): ReturnType<People['setEdge']> {
+    return this.#people.setEdge(...args);
   }
 
-  // ---------------------------------------------------------------- people
-
-  async setEdge(input: EdgeInput): Promise<void> {
-    const subject = this.resolve(input.who);
-    if (subject === this.identity.author) throw new Error('that is you');
-    const inner: Inner = { kind: EDGE_KIND[input.edge], body: edgeBody(subject, input.on) };
-    const isPrivate = input.private ?? input.edge !== 'follow';
-    this.replica.write(this.identity, isPrivate ? this.#sealForSelf(inner) : inner);
-    // A follow they were told of in our direct chat ends there too, or they'd still count us as a friend.
-    if (input.edge === 'follow' && !input.on && this.#toldFollow(subject)) this.#tellFollow(subject, false);
+  social(...args: Parameters<People['social']>): ReturnType<People['social']> {
+    return this.#people.social(...args);
   }
 
-  /** Whether we told someone in our direct chat that we follow them (or since, that we don't). */
-  #toldFollow(peer: Did): boolean {
-    if (!this.#keysHere(peer)) return false;
-    const direct = this.#direct(peer);
-    return this.#decodedIn(direct.id).some((d) => d.event.author === this.identity.author && d.inner.kind === KIND_FOLLOW && (d.inner.body as { subject?: unknown } | null)?.subject === peer);
+  profile(...args: Parameters<People['profile']>): ReturnType<People['profile']> {
+    return this.#people.profile(...args);
   }
 
-  /** Their log is here, with their encryption keys: before it, our direct chat's key would be made from their DID alone. */
-  #keysHere(peer: Did): boolean {
-    return this.#eventsOf(peer).length > 0;
+  setProfile(...args: Parameters<People['setProfile']>): ReturnType<People['setProfile']> {
+    return this.#people.setProfile(...args);
   }
 
-  /** Follow someone where only the two of us read it: sealed in our direct chat. Friends without a public follow. */
-  #tellFollow(peer: Did, on: boolean): void {
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(this.#direct(peer)), { kind: KIND_FOLLOW, body: edgeBody(peer, on) }));
+  imprint(...args: Parameters<People['imprint']>): ReturnType<People['imprint']> {
+    return this.#people.imprint(...args);
   }
 
-  /**
-   * Contacts we follow, told so in our direct chat once their keys are here (adding a contact may come before
-   * their log does). Returns how many were told.
-   */
-  #tellContacts(): number {
-    const following = this.#graph().get(this.identity.author)?.following;
-    let told = 0;
-    for (const did of this.#contacts().keys()) {
-      if (!following?.has(did) || !this.#keysHere(did) || this.#toldFollow(did)) continue;
-      this.#tellFollow(did, true);
-      told++;
-    }
-    return told;
+  setImprint(...args: Parameters<People['setImprint']>): ReturnType<People['setImprint']> {
+    return this.#people.setImprint(...args);
   }
 
-  async social(): Promise<Social> {
-    const graph = this.#graph();
-    const me = this.identity.author;
-    const mine = graph.get(me);
-    const people = (dids: Iterable<Did>): Person[] => [...dids].map((did) => ({ did, name: this.nameOf(did) }));
-    return {
-      following: people(mine?.following ?? []),
-      followers: people(followersOf(graph, me)),
-      friends: people(friendsOf(graph, me)),
-      blocked: people(mine?.blocked ?? []),
-      muted: people(mine?.muted ?? []),
-    };
+  directory(...args: Parameters<People['directory']>): ReturnType<People['directory']> {
+    return this.#people.directory(...args);
   }
 
-  async profile(who?: string): Promise<Profile> {
-    const did = who ? this.resolve(who) : this.identity.author;
-    // The accounts elsewhere on their hub, those that hold (a false proof isn't shown at all).
-    const accounts = (await this.accounts({ who: did })).filter((a) => a.verified !== false).map(({ platform, handle, url, verified }) => ({ platform, handle, ...(url ? { url } : {}), ...(verified ? { verified } : {}) }));
-    return { ...this.#profile(did), ...(accounts.length ? { accounts } : {}) };
+  find(...args: Parameters<People['find']>): ReturnType<People['find']> {
+    return this.#people.find(...args);
   }
 
-  #profile(did: Did): Profile {
-    const graph = this.#graph();
-    const me = this.identity.author;
-    const mine = graph.get(me);
-    const name = this.nameOf(did);
-    return {
-      did,
-      name,
-      url: personUrl(name, did),
-      theme: this.themeOf(did),
-      ...((figure) => (figure ? { avatar: figure } : {}))(this.avatarOf(did)),
-      ...((agents) => (Object.keys(agents).length ? { agentAvatars: agents } : {}))(this.#agentAvatars(did)),
-      me: did === me,
-      following: mine?.following.has(did) ?? false,
-      followsMe: graph.get(did)?.following.has(me) ?? false,
-      blocked: mine?.blocked.has(did) ?? false,
-      muted: mine?.muted.has(did) ?? false,
-      contact: this.#contacts().has(did),
-      posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
-      projects: this.publicProjectsOf(did),
-      ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.#companies.companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.#companies.companyClaim(did)),
-      links: this.#companies.linksOf(did).filter((l) => l.state === 'linked'),
-    };
+  contactLink(...args: Parameters<People['contactLink']>): ReturnType<People['contactLink']> {
+    return this.#people.contactLink(...args);
   }
 
-  async setProfile(input: ProfileInput): Promise<Profile> {
-    if (input.name !== undefined) {
-      const name = input.name.trim();
-      if (!name || name.length > 40) throw new Error('names are 1 to 40 characters');
-      if (name !== this.nameOf(this.identity.author)) this.replica.write(this.identity, { kind: KIND_PROFILE, body: { name } });
-    }
-    if (input.theme) {
-      const theme = sanitizeTheme({ ...this.themeOf(this.identity.author), ...input.theme });
-      this.replica.write(this.identity, { kind: KIND_THEME, body: { ...theme } });
-    }
-    if (input.avatar !== undefined || input.agentAvatars !== undefined) {
-      const figure = input.avatar === undefined ? this.avatarOf(this.identity.author) : input.avatar === null ? undefined : sanitizeFigure(input.avatar);
-      if (input.avatar && !figure) throw new Error('an avatar is parts with whole numbers, like { "hair": 3 }');
-      // Your agents' figures: by their name, null takes one back (it shows as its default again).
-      const agents = { ...this.#agentAvatars(this.identity.author) };
-      for (const [name, f] of Object.entries(input.agentAvatars ?? {})) {
-        if (!this.#agents.some((a) => a.name === name)) throw new Error(`you have no agent named ${name}`);
-        const clean = f === null ? undefined : sanitizeFigure(f);
-        if (f !== null && !clean) throw new Error(`${name}'s avatar is parts with whole numbers, like { "head": 1 }`);
-        if (clean) agents[name] = clean;
-        else delete agents[name];
-      }
-      this.replica.write(this.identity, { kind: KIND_AVATAR, body: { figure: figure ?? null, ...(Object.keys(agents).length ? { agents: agents as unknown as Json } : {}) } });
-    }
-    return this.profile();
+  addContact(...args: Parameters<People['addContact']>): ReturnType<People['addContact']> {
+    return this.#people.addContact(...args);
   }
 
-  async imprint(who?: string): Promise<ImprintInfo | null> {
-    const did = who ? this.resolve(who) : this.identity.author;
-    const found = imprintOf(this.#eventsOf(did));
-    return found ? { did, ...found } : null;
+  avatarOf(...args: Parameters<People['avatarOf']>): ReturnType<People['avatarOf']> {
+    return this.#people.avatarOf(...args);
   }
 
-  async setImprint(input: { text: string }): Promise<ImprintInfo | null> {
-    if (typeof input?.text !== 'string') throw new Error('an imprint is text (Markdown); an empty text takes it back');
-    const text = input.text.trim();
-    if (text.length > TEXT_LIMITS.imprint) throw tooLong('The imprint', text.length, TEXT_LIMITS.imprint);
-    const current = imprintOf(this.#eventsOf(this.identity.author))?.text ?? '';
-    if (text !== current) this.replica.write(this.identity, { kind: KIND_IMPRINT, body: { text } });
-    return this.imprint();
+  avatars(...args: Parameters<People['avatars']>): ReturnType<People['avatars']> {
+    return this.#people.avatars(...args);
   }
 
-  async directory(query?: string): Promise<Profile[]> {
-    const authors = new Set([...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
-    authors.delete(this.identity.author);
-    const key = query && personTargetOf(query);
-    const q = query?.trim().toLowerCase();
-    const profiles = [...authors].map((did) => this.#profile(did));
-    return profiles
-      .filter((p) => (key ? personKeyOf(p.did).startsWith(key) : !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q))))
-      .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));
+  themeOf(...args: Parameters<People['themeOf']>): ReturnType<People['themeOf']> {
+    return this.#people.themeOf(...args);
   }
 
-  async find(query: string, limit = 30, only?: FoundKind): Promise<Found[]> {
-    const q = query.trim().toLowerCase();
-    // How well a name matches: whole name, its start, a word's start, anywhere (lower is better).
-    const rank = (text: string | undefined): number => {
-      const t = (text ?? '').toLowerCase();
-      if (!q) return 3; // after the people you follow
-      if (t === q) return 0;
-      if (t.startsWith(q)) return 1;
-      if (new RegExp(`(^|[^\\p{L}\\p{N}])${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u').test(t)) return 2;
-      return t.includes(q) ? 3 : -1;
-    };
-    const key = personTargetOf(query) ?? (q.length >= 4 ? query.trim() : undefined);
-    const found: Array<{ item: Found; rank: number; order: number; time: string }> = [];
-    for (const person of only && only !== 'people' ? [] : await this.directory()) {
-      // Without a query, the people you'd most likely mean: friends, then those you follow.
-      const r = !q ? (person.following && person.followsMe ? 0 : person.following ? 1 : 2) : key && personKeyOf(person.did).startsWith(key) ? 1 : rank(person.name);
-      if (r >= 0) found.push({ item: { person }, rank: r, order: 0, time: '' });
-    }
-    for (const space of this.#spaces.values()) {
-      if (space.kind !== 'project' || (only && only !== 'projects')) continue;
-      const post = this.#projectPost(space);
-      const r = post ? rank(post.title) : -1;
-      if (post && r >= 0) found.push({ item: { post }, rank: r, order: 1, time: post.active ?? post.time });
-    }
-    for (const post of only && only !== 'posts' ? [] : this.#allPosts()) {
-      if (post.type === 'project') continue;
-      const r = rank(post.title);
-      if (r >= 0) found.push({ item: { post }, rank: r, order: 2, time: post.active ?? post.time });
-    }
-    return found
-      .sort((a, b) => a.rank - b.rank || a.order - b.order || b.time.localeCompare(a.time) || (a.item.person?.name ?? '').localeCompare(b.item.person?.name ?? ''))
-      .slice(0, Math.max(1, Math.min(limit, 100)))
-      .map((f) => f.item);
+  publicProjectsOf(...args: Parameters<People['publicProjectsOf']>): ReturnType<People['publicProjectsOf']> {
+    return this.#people.publicProjectsOf(...args);
   }
 
-  /**
-   * Your contact link. `door`: through your front door instead, to give to anyone (a website, the app's bundle):
-   * whoever adds it reaches only your always-on node, never this computer, and learns only your public side.
-   */
-  async contactLink(input: { door?: boolean } = {}): Promise<string> {
-    const name = this.nameOf(this.identity.author);
-    const door = this.#doorSecret();
-    const entry = input.door ? { topics: [meetTopic(door)], bootstrap: this.config.bootstrap, meet: b64u.encode(door) } : this.#entryPoint();
-    return encodeContact({ v: 1, did: this.identity.author, ...(name ? { name } : {}), entry, ...(input.door ? { door: true as const } : {}) });
+  resolve(...args: Parameters<People['resolve']>): ReturnType<People['resolve']> {
+    return this.#people.resolve(...args);
   }
 
-  async addContact(link: string): Promise<Profile> {
-    const contact = decodeContact(link);
-    if (contact.did === this.identity.author) throw new Error("that's your own contact link");
-    this.#adoptBootstrap(contact.entry);
-    // Their meeting point, looked up only (a link from before meeting points names their DID there instead).
-    for (const topic of new Set(contact.entry.topics)) await this.join(topic);
-    const meet = meetSecretOf(contact.entry) && contact.entry.meet;
-    // Kept with the contact: holding it is how their node lets us in. A newer link of someone we have brings it.
-    if (!this.#contacts().has(contact.did) || (meet && !this.#selfBodies(KIND_CONTACT).some((b) => b.did === contact.did && b.meet === meet))) {
-      this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CONTACT, body: { did: contact.did, name: contact.name ?? null, ...(meet ? { meet } : {}) } }));
-    }
-    // Not a public follow: whom you know stays between the two of you (sealed to yourself, and in your direct chat
-    // once their keys are here).
-    if (!(await this.profile(contact.did)).following) await this.setEdge({ edge: 'follow', who: contact.did, on: true, private: true });
-    this.#tellContacts();
-    return this.profile(contact.did);
-  }
-
-  /** A space's theme: the latest theme event its author published. */
-  /** Someone's avatar: their figure, or none (they show as the figure their key makes). */
-  avatarOf(author: Did): AvatarFigure | undefined {
-    let body: unknown;
-    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
-    return sanitizeFigure((body as { figure?: unknown } | undefined)?.figure);
-  }
-
-  /** Someone's agents' avatars, by the agent's name, as they set them. */
-  #agentAvatars(author: Did): Record<string, AvatarFigure> {
-    let body: unknown;
-    for (const event of this.#eventsOf(author)) if (event.kind === KIND_AVATAR) body = event.body;
-    const agents = (body as { agents?: unknown } | undefined)?.agents;
-    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return {};
-    const out: Record<string, AvatarFigure> = {};
-    for (const [name, f] of Object.entries(agents).slice(0, 50)) {
-      const figure = sanitizeFigure(f);
-      if (figure && name.length <= 40) out[name] = figure;
-    }
-    return out;
-  }
-
-  /**
-   * The avatars of these people (and of their agents, asked for as "did·agent"), those who have one: what the app
-   * draws for them.
-   */
-  async avatars(people: string[]): Promise<Record<string, AvatarFigure>> {
-    const out: Record<string, AvatarFigure> = {};
-    for (const ref of new Set(people.slice(0, 500))) {
-      const at = ref.indexOf('·');
-      const figure = at < 0 ? this.avatarOf(ref as Did) : this.#agentAvatars(ref.slice(0, at) as Did)[ref.slice(at + 1)];
-      if (figure) out[ref] = figure;
-    }
-    return out;
-  }
-
-  themeOf(author: Did): Theme {
-    let theme: unknown;
-    for (const event of this.#eventsOf(author)) if (event.kind === KIND_THEME) theme = event.body;
-    return sanitizeTheme(theme);
-  }
-
-  /** Projects someone shows publicly: their latest public page per project, unless withdrawn. */
-  publicProjectsOf(author: Did): PublicProject[] {
-    const latest = new Map<string, { body: Record<string, unknown>; time: string }>();
-    for (const event of this.#eventsOf(author)) {
-      const body = event.body as Record<string, unknown> | null;
-      if (event.kind === KIND_PUBLIC_PROJECT && typeof body?.project === 'string') latest.set(body.project, { body, time: event.time });
-    }
-    return [...latest.values()]
-      .filter(({ body }) => body.public === true && typeof body.name === 'string')
-      .map(({ body, time }) => ({
-        id: body.project as string,
-        name: body.name as string,
-        description: typeof body.description === 'string' ? body.description : '',
-        ...(parseBlobRef(body.icon) ? { icon: body.icon as string } : {}),
-        status: PROJECT_STATUSES.includes(body.status as ProjectStatus) ? (body.status as ProjectStatus) : 'active',
-        time,
-      }));
+  nameOf(...args: Parameters<People['nameOf']>): ReturnType<People['nameOf']> {
+    return this.#people.nameOf(...args);
   }
 
   // ---------------------------------------------------------------- rooms and shared apps
@@ -4201,155 +3520,6 @@ export class WeaveNode implements Backend {
     return this.#spaceInfo(space);
   }
 
-  // ---------------------------------------------------------------- chat
-
-  async channels(ref: string): Promise<ChannelInfo[]> {
-    return channelsOf(this.#entries(this.#space(ref)));
-  }
-
-  async createChannel(input: InSpace & { name: string; topic?: string }): Promise<ChannelInfo> {
-    const name = channelName(input.name);
-    if (!name) throw new Error('channel names use letters, digits and dashes');
-    if ((await this.channels(input.space)).some((c) => c.name === name)) throw new Error(`#${name} already exists`);
-    await this.publish({ kind: KIND_CHANNEL, body: { name, topic: input.topic ?? '' }, space: input.space, as: input.as });
-    return (await this.channels(input.space)).find((c) => c.name === name)!;
-  }
-
-  async messages(ref: string | undefined, options: { channel?: string; post?: string; limit?: number; since?: string; until?: string; people?: boolean } = {}): Promise<MessageInfo[]> {
-    const chat = options.post ? await this.#chatOf(options.post) : undefined;
-    const space = chat?.space ?? this.#space(ref ?? '');
-    const entries = this.#entries(space);
-    const maintainers = this.#state(space).maintainers;
-    const byId = new Map(messagesOf(entries, {}, maintainers).concat(chat?.post ? messagesOf(entries, { post: chat.post }, maintainers) : []).map((m) => [m.id, m]));
-    const channel = options.channel ? (channelName(options.channel) ?? DEFAULT_CHANNEL) : undefined;
-    const time = (what: string, value: string | undefined) => {
-      if (value === undefined) return undefined;
-      const at = Date.parse(value);
-      if (Number.isNaN(at)) throw new Error(`${what} is a time, like 2026-11-02T12:00:00Z`);
-      return new Date(at).toISOString();
-    };
-    const [since, until] = [time('since', options.since), time('until', options.until)];
-    return messagesOf(entries, chat?.post ? { post: chat.post } : { channel }, maintainers)
-      .filter((m) => (!since || m.time >= since) && (!until || m.time <= until))
-      .map((m) => this.#messageInfo(m, byId))
-      // What people wrote themselves: not their agents (nor their services, which sign as agents too).
-      .filter((m) => !options.people || !m.by.agent)
-      .slice(-(options.limit ?? 200));
-  }
-
-  async say(input: { space?: string; as?: string; text?: string; channel?: string; post?: string; replyTo?: string; file?: Attachment; session?: SessionRef }): Promise<MessageInfo> {
-    const text = input.text?.trim() ?? '';
-    const file = input.file ? attachmentOf({ file: input.file }) : undefined;
-    if (input.file && !file) throw new Error('a file goes with its wblob: reference, a name, its size in bytes and a media type (use putFile)');
-    if (!text && !file) throw new Error('a message needs text or a file');
-    // The sender holds the blob: that's where the others fetch it from.
-    if (file && !this.blobs.has(parseBlobRef(file.ref)!.hash)) throw new Error("that file isn't stored here: upload it first (putFile)");
-    const body: Record<string, Json> = { text };
-    if (file) body.file = { ...file };
-    const chat = input.post ? await this.#chatOf(input.post) : undefined;
-    const space = chat?.space ?? this.#space(input.space ?? '');
-    const peer = this.#directs.get(space.id)?.peer;
-    if (peer && !this.#friends().includes(peer)) throw new Error(`${this.nameOf(peer) ?? 'they'} and you aren't friends any more, so this chat is read-only`);
-    if (chat?.post) body.post = chat.post;
-    else {
-      const channel = input.channel ? channelName(input.channel) : undefined;
-      if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
-      if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
-    }
-    if (input.replyTo) body.replyTo = this.#find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
-    const stamp = this.#sessionStamp(input.session, input.as);
-    if (stamp) body.session = stamp;
-    const { id } = await this.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
-    return (await this.messages(space.id, chat?.post ? { post: chat.post } : { channel: input.channel })).find((m) => m.id === id)!;
-  }
-
-  /** Take a chat message down: yours, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
-  async deleteMessage(input: { message: string; as?: string }): Promise<void> {
-    const message = this.#find(input.message, [KIND_MSG, KIND_REPLY]);
-    const space = message.space && this.#spaces.get(message.space.id);
-    const mine = message.event.author === this.identity.author;
-    if (!mine && !(space && mayDo(this.#state(space), this.identity.author, 'curate').ok))
-      throw new Error(`only its author${space && space.kind !== 'direct' ? ` or the ${space.kind === 'community' ? 'moderators' : space.kind === 'project' ? 'maintainers' : 'owner'}` : ''} can delete a message`);
-    await this.publish({ kind: KIND_POST_DELETE, body: { target: message.id }, space: space?.id, as: input.as });
-  }
-
-  async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
-    const emoji = input.emoji?.trim();
-    if (!emoji || emoji.length > 16) throw new Error('react with one emoji');
-    const target = this.#find(input.target, [KIND_MSG, KIND_POST, KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
-    await this.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, space: target.space?.id, as: input.as });
-  }
-
-  // ---------------------------------------------------------------- working together, in projects
-
-  async threads(ref: string): Promise<ThreadInfo[]> {
-    return threadsOf(this.#entries(this.#project(ref))).map((t) => this.#threadInfo(t));
-  }
-
-  async startThread(input: InProject & { title: string; text?: string }): Promise<ThreadInfo> {
-    if (!input.title?.trim()) throw new Error('a thread needs a title');
-    const project = this.#project(input.project);
-    const { id } = await this.publish({ kind: KIND_THREAD, body: { title: input.title.trim(), text: input.text ?? '' }, space: project.id, as: input.as });
-    return (await this.threads(project.id)).find((t) => t.id === id)!;
-  }
-
-  async reply(input: { target: string; text: string; as?: string }): Promise<ReplyInfo> {
-    if (!input.text?.trim()) throw new Error('a reply needs text');
-    const target = this.#find(input.target, [KIND_THREAD, KIND_ISSUE, KIND_PROPOSAL]);
-    const item = await this.publish({ kind: KIND_REPLY, body: { target: target.id, text: input.text.trim() }, space: target.space?.id, as: input.as });
-    return { id: item.id, by: this.#actor(item.author, item.signer), text: input.text.trim(), time: item.time };
-  }
-
-  async issues(ref: string): Promise<IssueInfo[]> {
-    return issuesOf(this.#entries(this.#project(ref))).map((i) => this.#issueInfo(i));
-  }
-
-  async openIssue(input: InProject & { title: string; text?: string; labels?: string[]; board?: string; prompt?: string }): Promise<IssueInfo> {
-    if (!input.title?.trim()) throw new Error('an issue needs a title');
-    const project = this.#project(input.project);
-    const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', labels: input.labels ?? [] };
-    if (input.board) body.board = input.board;
-    if (input.prompt?.trim()) body.prompt = input.prompt.trim();
-    const { id } = await this.publish({ kind: KIND_ISSUE, body, space: project.id, as: input.as });
-    return (await this.issues(project.id)).find((i) => i.id === id)!;
-  }
-
-  async claimIssue(input: { issue: string; as?: string }): Promise<IssueInfo> {
-    const issue = this.#find(input.issue, [KIND_ISSUE]);
-    await this.publish({ kind: KIND_ISSUE_CLAIM, body: { issue: issue.id }, space: issue.space?.id, as: input.as });
-    return this.#issueById(issue);
-  }
-
-  async setIssueStatus(input: { issue: string; status: IssueStatus; as?: string }): Promise<IssueInfo> {
-    if (!ISSUE_STATUSES.includes(input.status)) throw new Error(`status must be one of ${ISSUE_STATUSES.join(', ')}`);
-    const issue = this.#find(input.issue, [KIND_ISSUE]);
-    await this.publish({ kind: KIND_ISSUE_STATUS, body: { issue: issue.id, status: input.status }, space: issue.space?.id, as: input.as });
-    return this.#issueById(issue);
-  }
-
-  async proposals(ref: string): Promise<ProposalInfo[]> {
-    const project = this.#project(ref);
-    return proposalsOf(this.#entries(project), this.#voters(project)).map((p) => this.#proposalInfo(p));
-  }
-
-  async propose(input: InProject & { title: string; text?: string; hours?: number; quorum?: number; board?: string }): Promise<ProposalInfo> {
-    if (!input.title?.trim()) throw new Error('a proposal needs a title');
-    const project = this.#project(input.project);
-    const deadline = new Date(Date.now() + (input.hours ?? 72) * 3600_000).toISOString();
-    const body: Record<string, Json> = { title: input.title.trim(), text: input.text ?? '', deadline };
-    if (input.quorum) body.quorum = input.quorum;
-    if (input.board) body.board = input.board;
-    const { id } = await this.publish({ kind: KIND_PROPOSAL, body, space: project.id, as: input.as });
-    return (await this.proposals(project.id)).find((p) => p.id === id)!;
-  }
-
-  async vote(input: { proposal: string; choice: Choice; as?: string }): Promise<ProposalInfo> {
-    if (!CHOICES.includes(input.choice)) throw new Error(`vote ${CHOICES.join(', ')}`);
-    const proposal = this.#find(input.proposal, [KIND_PROPOSAL]);
-    if (proposal.space?.kind !== 'project') throw new Error('votes happen inside projects');
-    await this.publish({ kind: KIND_VOTE, body: { proposal: proposal.id, choice: input.choice }, space: proposal.space.id, as: input.as });
-    return (await this.proposals(proposal.space.id)).find((p) => p.id === proposal.id)!;
-  }
 
   /**
    * Close our invites that expired, naming who came in with each: later joins
@@ -4377,89 +3547,7 @@ export class WeaveNode implements Backend {
     return n;
   }
 
-  /**
-   * Close our proposals whose deadline passed: name the last number of each
-   * voting key we hold, so votes signed later don't count, whatever date they
-   * claim. Votes still on their way when we close don't count either.
-   */
-  async #closeProposals(): Promise<number> {
-    const now = new Date(this.clock()).toISOString();
-    let closed = 0;
-    for (const space of [...this.#spaces.values()]) {
-      if (space.kind !== 'project') continue;
-      const entries = this.#entries(space);
-      for (const p of entries) {
-        if (p.kind !== KIND_PROPOSAL || p.event.author !== this.identity.author) continue;
-        const deadline = typeof (p.body as { deadline?: unknown } | null)?.deadline === 'string' ? (p.body as { deadline: string }).deadline : '';
-        if (!deadline || deadline > now) continue;
-        if (entries.some((e) => e.kind === KIND_PROPOSAL_CLOSE && e.event.author === this.identity.author && (e.body as { proposal?: unknown } | null)?.proposal === p.id)) continue;
-        await this.publish({ kind: KIND_PROPOSAL_CLOSE, body: { proposal: p.id, upTo: closingUpTo(p, entries) }, space: space.id });
-        closed++;
-      }
-    }
-    return closed;
-  }
 
-  async delegateVote(input: { project: string; who?: string }): Promise<void> {
-    const project = this.#project(input.project);
-    const to = input.who ? this.resolve(input.who) : null;
-    if (to === this.identity.author) throw new Error('you cannot delegate to yourself');
-    await this.publish({ kind: KIND_VOTE_DELEGATE, body: { to }, space: project.id });
-  }
-
-  async votingDelegate(ref: string): Promise<Actor | null> {
-    let to: unknown = null;
-    for (const entry of this.#entries(this.#project(ref))) {
-      if (entry.kind === KIND_VOTE_DELEGATE && entry.event.author === this.identity.author) to = (entry.body as { to?: unknown } | null)?.to ?? null;
-    }
-    return isDid(to) ? this.#actor(to, to) : null;
-  }
-
-  /** A did:key, a person's address (personUrl), or the name of someone whose profile this node has seen or who is in your address book. */
-  resolve(who: string): Did {
-    if (isDid(who)) return who;
-    const key = personTargetOf(who);
-    if (key) {
-      const known = new Set([this.identity.author, ...this.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.#contacts().keys()]);
-      const found = [...known].filter((did) => personKeyOf(did).startsWith(key));
-      if (found.length === 0) throw new Error(`nobody with that address (${key}) is known here yet`);
-      if (found.length > 1) throw new Error(`several people start with ${key} — use their did:key`);
-      return found[0];
-    }
-    const matches = new Set<Did>();
-    for (const event of this.replica.events((e) => e.kind === KIND_PROFILE)) {
-      const name = (event.body as { name?: unknown } | null)?.name;
-      if (typeof name === 'string' && name.toLowerCase() === who.toLowerCase()) matches.add(event.author);
-    }
-    for (const [did, name] of this.#contacts()) if (name?.toLowerCase() === who.toLowerCase()) matches.add(did);
-    if (matches.size === 0) throw new Error(`nobody named "${who}" is known yet — use their did:key`);
-    if (matches.size > 1) throw new Error(`several people are named "${who}" — use their did:key`);
-    return [...matches][0];
-  }
-
-  /** Display name for an author: the name in their latest profile, else the one their contact link gave. */
-  nameOf(author: Did): string | undefined {
-    let name: string | undefined;
-    for (const event of this.#eventsOf(author)) {
-      const body = event.body as { name?: unknown } | null;
-      if (event.kind === KIND_PROFILE && typeof body?.name === 'string') name = body.name;
-    }
-    return name ?? this.#contacts().get(author);
-  }
-
-  /** Your address book: people added by contact link, with the name their link gave. */
-  #contacts(): Map<Did, string | undefined> {
-    const decoded = this.#decodeAll();
-    if (this.#contactCache?.from !== this.#decodedRevision) {
-      const map = new Map<Did, string | undefined>();
-      for (const d of decoded) {
-        const body = d.inner.body as { did?: unknown; name?: unknown } | null;
-        if (d.private && d.inner.kind === KIND_CONTACT && isDid(body?.did)) map.set(body.did, typeof body.name === 'string' ? body.name : undefined);
-      }
-      this.#contactCache = { from: this.#decodedRevision, map };
-    }
-    return this.#contactCache.map;
-  }
 
   /**
    * Whether a live event deserves a notification for you, and what it says.
@@ -4695,7 +3783,7 @@ export class WeaveNode implements Backend {
       ...(this.#spaces.has(space.id) && this.#holding.pulled(space as StoredSpace) ? { pulled: { windowMs: RECENT_HOLD_MS } } : {}),
     });
     // Anyone whose log we hold can make our direct chat's key: only with those we chose to know does it let them in.
-    const chosen = new Set<Did>([...this.#contacts().keys(), ...(this.#graph().get(this.identity.author)?.following ?? [])]);
+    const chosen = new Set<Did>([...this.#people.contacts().keys(), ...(this.#graph().get(this.identity.author)?.following ?? [])]);
     return [
       ...[...this.#spaces.values()].map(held),
       ...[...this.#directs.values()].map(({ space, peer }) => ({ ...held(space), admits: chosen.has(peer) })),
@@ -4953,7 +4041,7 @@ export class WeaveNode implements Backend {
     const describe = (list: Invite['entry']['bootstrap']) => (list.length ? `the private network at ${list.map((b) => `${b.host}:${b.port}`).join(', ')}` : 'the public network');
     // A brand-new node may follow its first link onto a private network (handy for test networks):
     // it has nothing there yet to lose. An established node never switches silently.
-    const fresh = this.config.bootstrap.length === 0 && this.#spaces.size === 0 && this.#contacts().size === 0 && !(this.#graph().get(this.identity.author)?.following.size);
+    const fresh = this.config.bootstrap.length === 0 && this.#spaces.size === 0 && this.#people.contacts().size === 0 && !(this.#graph().get(this.identity.author)?.following.size);
     if (fresh && entry.bootstrap.length) {
       this.config = { ...this.config, bootstrap: entry.bootstrap };
       saveConfig(this.home, this.config);
@@ -5406,9 +4494,9 @@ export class WeaveNode implements Backend {
     if (p.with && ctx.entries) {
       // Everyone sees confirmed co-authors; the post's author also sees who was asked and who declined.
       const own = p.author === this.identity.author;
-      const coauthors = coauthorsOf(p, ctx.entries, this.#keyFacts)
+      const coauthors = coauthorsOf(p, ctx.entries, this.#content.keyFacts)
         .filter((c) => own || c.state === 'confirmed')
-        .map((c) => ({ ...this.#keyActor(c.did), state: c.state }));
+        .map((c) => ({ ...this.#content.keyActor(c.did), state: c.state }));
       if (coauthors.length) info.coauthors = coauthors;
     }
     if (p.share) {
@@ -5819,6 +4907,11 @@ export class WeaveNode implements Backend {
 
   // ---------------------------------------------------------------- internals: board access
 
+  #readersOf(space: StoredSpace, state: SpaceState, entries: Entry[], board?: string): Did[] {
+    if (!board || space.kind !== 'project') return [...state.members.keys()];
+    return readersOf(board, state, this.#access(space, state, entries));
+  }
+
   #access(space: StoredSpace, state: SpaceState, entries: Entry[]): Access {
     // Cached only for the space's own state and entries (callers sometimes pass others).
     const slot = this.#cacheFor(space.id);
@@ -6100,6 +5193,122 @@ export class WeaveNode implements Backend {
     };
   }
 
+  /** What content sees of the node, and nothing more (content.ts). */
+  static contentCore(n: WeaveNode): ContentCore {
+    return {
+      access: n.#access.bind(n),
+      actor: n.#actor.bind(n),
+      agentMay: n.#agentMay.bind(n),
+      get agents() {
+        return n.#agents;
+      },
+      allPosts: n.#allPosts.bind(n),
+      board: n.#board.bind(n),
+      chatOf: n.#chatOf.bind(n),
+      decodeAll: n.#decodeAll.bind(n),
+      get directs() {
+        return n.#directs;
+      },
+      entries: n.#entries.bind(n),
+      find: n.#find.bind(n),
+      follows: n.#follows.bind(n),
+      friends: n.#friends.bind(n),
+      get holding() {
+        return n.#holding;
+      },
+      homePosts: n.#homePosts.bind(n),
+      issueById: n.#issueById.bind(n),
+      issueInfo: n.#issueInfo.bind(n),
+      knownGroup: n.#knownGroup.bind(n),
+      maintainerState: n.#maintainerState.bind(n),
+      get managed() {
+        return n.#managed;
+      },
+      managers: n.#managers.bind(n),
+      messageInfo: n.#messageInfo.bind(n),
+      page: n.#page.bind(n),
+      get payments() {
+        return n.#payments;
+      },
+      postAt: n.#postAt.bind(n),
+      get prefetched() {
+        return n.#prefetched;
+      },
+      project: n.#project.bind(n),
+      projectPost: n.#projectPost.bind(n),
+      proposalInfo: n.#proposalInfo.bind(n),
+      reconcileBoards: n.#reconcileBoards.bind(n),
+      ruleInfo: n.#ruleInfo.bind(n),
+      sealForSelf: n.#sealForSelf.bind(n),
+      get seenAt() {
+        return n.#seenAt;
+      },
+      get sessions() {
+        return n.#sessions;
+      },
+      space: n.#space.bind(n),
+      spaceInfo: n.#spaceInfo.bind(n),
+      spacePosts: n.#spacePosts.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      state: n.#state.bind(n),
+      get swarm() {
+        return n.#swarm;
+      },
+      threadInfo: n.#threadInfo.bind(n),
+      voters: n.#voters.bind(n),
+    };
+  }
+
+  /** What people see of the node, and nothing more (people.ts). */
+  static peopleCore(n: WeaveNode): PeopleCore {
+    return {
+      access: n.#access.bind(n),
+      actor: n.#actor.bind(n),
+      adoptBootstrap: n.#adoptBootstrap.bind(n),
+      agentMay: n.#agentMay.bind(n),
+      get agents() {
+        return n.#agents;
+      },
+      allPosts: n.#allPosts.bind(n),
+      get companies() {
+        return n.#companies;
+      },
+      get contactCache() {
+        return n.#contactCache;
+      },
+      setContactCache: (value) => {
+        n.#contactCache = value;
+      },
+      decodeAll: n.#decodeAll.bind(n),
+      decodedIn: n.#decodedIn.bind(n),
+      get decodedRevision() {
+        return n.#decodedRevision;
+      },
+      direct: n.#direct.bind(n),
+      doorSecret: n.#doorSecret.bind(n),
+      entries: n.#entries.bind(n),
+      entryPoint: n.#entryPoint.bind(n),
+      eventsOf: n.#eventsOf.bind(n),
+      graph: n.#graph.bind(n),
+      get managed() {
+        return n.#managed;
+      },
+      projectPost: n.#projectPost.bind(n),
+      sealForSelf: n.#sealForSelf.bind(n),
+      selfBodies: n.#selfBodies.bind(n),
+      space: n.#space.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      state: n.#state.bind(n),
+      get verifiers() {
+        return n.#verifiers;
+      },
+    };
+  }
+
   /** What agents and sessions see of the node, and nothing more (sessions.ts). */
   static sessionsCore(n: WeaveNode): SessionsCore {
     return {
@@ -6108,7 +5317,8 @@ export class WeaveNode implements Backend {
       },
       allPosts: n.#allPosts.bind(n),
       board: n.#board.bind(n),
-      contacts: n.#contacts.bind(n),
+      // Lazily: people are built after sessions.
+      contacts: () => n.#people.contacts(),
       decodeAll: n.#decodeAll.bind(n),
       emitLive: n.#emitLive.bind(n),
       entries: n.#entries.bind(n),
@@ -6840,7 +6050,7 @@ export interface Bundle {
 }
 
 /** The start of a Markdown text as one plain line, for shares and older clients. */
-function summary(markdown: string, max = 300): string {
+export function summary(markdown: string, max = 300): string {
   const plain = markdown
     .replace(/<[^>]*>/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
