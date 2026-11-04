@@ -1319,9 +1319,10 @@ export class Kernel {
     // A managed key used for these views ran out: decode again without it.
     if (this.decoded && this.node.clock() >= this.core.managed.decodedValidUntil) this.decoded = undefined;
     if (!this.decoded) this.core.managed.decodedValidUntil = Infinity;
-    // Board keys arrive inside the project: taking one makes more events readable, so decode again.
-    for (let round = 0; round < 4; round++) {
-      if (!this.decoded) {
+    // Board keys arrive inside the project: taking one makes more events readable, so decode again. Keys of what is
+    // decoded already were taken when it was (and decodedAdd takes those that arrive): a kept view isn't scanned again.
+    for (let round = 0; round < 4 && !this.decoded; round++) {
+      {
         this.ensureDirects();
         const plain = this.node.replica.events().flatMap((event) => {
           const d = this.decode(event);

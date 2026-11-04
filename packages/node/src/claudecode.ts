@@ -118,9 +118,10 @@ export function answerOf(line: string): SessionText | undefined {
 const transcriptIndex = new Map<string, { at: number; files: Map<string, string> }>();
 const INDEX_FOR_MS = 1000;
 
-function transcriptFiles(dir: string, now = Date.now()): Map<string, string> {
+function transcriptFiles(dir: string, keepFor = INDEX_FOR_MS): Map<string, string> {
+  const now = Date.now();
   const kept = transcriptIndex.get(dir);
-  if (kept && now - kept.at < INDEX_FOR_MS) return kept.files;
+  if (kept && now - kept.at < keepFor) return kept.files;
   const files = new Map<string, string>();
   for (const folder of readdirSync(dir, { withFileTypes: true })) {
     if (!folder.isDirectory()) continue;
@@ -133,7 +134,9 @@ function transcriptFiles(dir: string, now = Date.now()): Map<string, string> {
 /** A Claude Code session's transcript file, if it's on this computer. */
 export function transcriptOf(session: string, dir = claudeProjectsDir()): string | undefined {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(session) || !existsSync(dir)) return undefined;
-  const file = transcriptFiles(dir).get(session) ?? transcriptFiles(dir, Infinity).get(session);
+  // Not listed: a transcript that just appeared, or one that isn't on this computer (the Sessions view asks about
+  // those too, every time): the listing is taken again for it, but not more than a few times a second.
+  const file = transcriptFiles(dir).get(session) ?? transcriptFiles(dir, INDEX_FOR_MS / 4).get(session);
   return file && existsSync(file) ? file : undefined;
 }
 

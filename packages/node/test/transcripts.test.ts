@@ -23,14 +23,15 @@ const transcript = (dir: string, folder: string, id: string, cwd: string) => {
 };
 
 describe('Claude Code transcripts, asked about again and again', () => {
-  it('finds a transcript by its session, a new one at once, and the folder it works in', () => {
+  it('finds a transcript by its session, a new one within a moment, and the folder it works in', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'weave-transcripts-'));
     dirs.push(dir);
     const a = transcript(dir, 'C--Users-me-a', 'aaaaaaaa-1111-4222-8333-444444444444', 'C:\\Users\\me\\a');
     expect(transcriptOf('aaaaaaaa-1111-4222-8333-444444444444', dir)).toBe(a);
     expect(transcriptOf('bbbbbbbb-1111-4222-8333-444444444444', dir)).toBeUndefined();
-    // Appears right after the listing was taken: found without waiting for it to age.
+    // Appears right after the listing was taken: found once the listing may be taken again (a quarter second).
     const b = transcript(dir, 'C--Users-me-b', 'bbbbbbbb-1111-4222-8333-444444444444', 'C:\\Users\\me\\b');
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(transcriptOf('bbbbbbbb-1111-4222-8333-444444444444', dir)).toBe(b);
     expect(transcriptOf('not a session id!', dir)).toBeUndefined();
     const recent = recentSessions(Date.now() - 60_000, dir);
