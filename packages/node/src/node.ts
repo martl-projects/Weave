@@ -3,22 +3,9 @@ import {
   mayDoAt,
   b64u,
   attachmentOf,
-  decodeKnock,
-  encodeKnock,
-  inviteRightsOf,
-  isKnockLink,
   KIND_KNOCK,
-  KIND_KNOCK_HANDLED,
   KIND_KNOCK_PENDING,
-  KIND_CLOSE,
-  KIND_HISTORY,
-  joinProof,
-  inviteKeys,
   type RevokedHead,
-  KIND_AGENT_APPROVE,
-  KIND_VISITORS,
-  parseVisitorRule,
-  type VisitorRule,
   KIND_ORG_FREEZE,
   KIND_ORG_POLICY,
   didFromPublicKey,
@@ -26,52 +13,31 @@ import {
   boxTo,
   openBox,
   type Box,
-  HISTORIES,
-  type HistorySetting,
-  KIND_HANDOVER,
-  KIND_LEAVE,
-  knockFor,
-  openKnock,
-  type BoardRight,
   createSubKey,
   canonicalKind,
   classOf,
-  decodeInvite,
-  isInviteLink,
-  peekInvite,
-  peekKnock,
   delegation,
   encodeContact,
-  encodeInvite,
   findRecoveryIndex,
-  gift,
-  isDid,
   inception,
-  KIND_ADMIT,
   KIND_APP,
   KIND_SERVICE_REQUEST,
   artifactsOf,
   KIND_CONTACT,
-  KIND_DECLINE,
   KIND_GIFT,
   KIND_INVITE,
   KIND_INVITE_CLOSE,
   KIND_ISSUE,
-  KIND_JOIN,
   KIND_MEMBERSHIP_REQUEST,
   KIND_MSG,
   KIND_POST,
   postTargetOf,
   shortPrefixes,
   type PostTarget,
-  KIND_PROJECT_GROUP,
   KIND_PROPOSAL,
   KIND_REKEY,
-  KIND_REMOVE,
   KIND_REPLY,
-  KIND_RULE,
   KIND_SEALED,
-  KIND_SPACE_CREATE,
   KIND_THREAD,
   walletMessage,
   KIND_BADGE,
@@ -90,7 +56,6 @@ import {
   recoveryEncryptionKey,
   recoveryIdentity,
   recoveryRoot,
-  rekey,
   revocation,
   rotation,
   Replica,
@@ -107,7 +72,6 @@ import {
   type Json,
   type Sealed,
   type SigningIdentity,
-  type SpaceKind,
   type SpaceState,
   type KeyPair,
   type WeaveEvent,
@@ -136,25 +100,18 @@ import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type SpaceAccess } from '@weave/net';
 import {
   noAgentError,
-  type Admission,
   type AgentInfo,
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
   type ChatInfo,
-  type CommunityInfo,
   type FeedItem,
   type IdentityInfo,
   type KeyInfo,
   type FeedQuery,
-  type InviteLook,
-  type InviteOptions,
-  type KnockInfo,
-  type MemberInfo,
   type Person,
   type Notice,
   type PostInfo,
-  type ProjectInfo,
   type ProjectPage,
   type PublishInput,
   type SpaceInfo,
@@ -220,6 +177,7 @@ import { Content, type ContentCore } from './content.ts';
 import { People, type PeopleCore } from './people.ts';
 import { Apps, type AppsCore } from './apps.ts';
 import { Kernel, type KernelCore } from './kernel.ts';
+import { Membership, type MembershipCore } from './membership.ts';
 
 
 export const KIND_PROFILE = 'weave.profile';
@@ -950,6 +908,8 @@ export class WeaveNode implements Backend {
   #people: People = new People(this, WeaveNode.peopleCore(this));
   /** A project's app and artifacts, releases and release lines, this installation's updates (apps.ts). */
   #apps: Apps = new Apps(this, WeaveNode.appsCore(this));
+  /** Membership: spaces, invites and knocks, who is in, admissions (membership.ts). */
+  #membership: Membership = new Membership(this, WeaveNode.membershipCore(this));
   /** Company accounts: their group and spaces, sign-in, attestor, policy, escrow, audit, SCIM, console (companies.ts). */
   #companies: Companies = new Companies(this, WeaveNode.companiesCore(this));
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
@@ -1148,7 +1108,7 @@ export class WeaveNode implements Backend {
     node.#companies.saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
-    const { invite, proof } = await node.#takeInvite(enrollment.invite);
+    const { invite, proof } = await node.#membership.takeInvite(enrollment.invite);
     writeSecretJson(node.home, node.#companies.enrollFile, { group: enrollment.group, invite, ...(proof ? { proof } : {}), words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
     await node.#companies.continueEnrollment();
     return node;
@@ -1457,202 +1417,120 @@ export class WeaveNode implements Backend {
     return items.slice(-(query.limit ?? 50));
   }
 
-  // ---------------------------------------------------------------- groups and projects
+  // Membership (membership.ts): the node delegates.
 
-  async spaces(kind?: SpaceKind): Promise<SpaceInfo[]> {
-    return [...this.#spaces.values()].filter((s) => !kind || s.kind === kind).map((s) => this.#kernel.spaceInfo(s));
+  spaces(...args: Parameters<Membership['spaces']>): ReturnType<Membership['spaces']> {
+    return this.#membership.spaces(...args);
   }
 
-  async createGroup(name: string): Promise<SpaceInfo> {
-    return this.#kernel.spaceInfo(await this.#kernel.createSpace('group', name));
+  createGroup(...args: Parameters<Membership['createGroup']>): ReturnType<Membership['createGroup']> {
+    return this.#membership.createGroup(...args);
   }
 
-  async createProject(input: { name: string; description?: string; as?: string }): Promise<ProjectInfo> {
-    // An agent counts as its person: it may start a project for them, which is theirs, never its own.
-    if (input.as) this.#agentMay(input.as, KIND_SPACE_CREATE);
-    const project = await this.#kernel.createSpace('project', input.name);
-    if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
-    return this.project(project.id);
+  createProject(...args: Parameters<Membership['createProject']>): ReturnType<Membership['createProject']> {
+    return this.#membership.createProject(...args);
   }
 
-  async invite(ref: string, hours = 24 * 7, options: InviteOptions = {}): Promise<string> {
-    const space = this.#kernel.space(ref);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.invite.direct', undefined, 'a direct chat is between two people; start a group to talk with more');
-    if (state.closed) throw new WeaveError('daemon.invite.closed', { space: space.name }, `${space.name} is closed`);
-    if (state.tier && !mayDo(state, this.identity.author, 'invite').ok) {
-      const who = this.nameOf(state.founder);
-      throw who
-        ? new WeaveError('daemon.invite.founder.only', { who, space: space.name }, `only ${who} lets people into ${space.name}`)
-        : new WeaveError('daemon.invite.founder.only.unknown', { space: space.name }, `only its creator lets people into ${space.name}`);
-    }
-    // Our own new space, before its creation is folded in, is ours to invite to.
-    const allowed = mayDo(state, this.identity.author, 'invite').ok || (space.kind !== 'project' && this.#kernel.mineFounder(space));
-    if (!allowed)
-      throw space.kind === 'project'
-        ? new WeaveError('daemon.invite.maintainers.only', undefined, 'only maintainers can invite people into a project')
-        : new WeaveError('daemon.invite.not.member', { space: space.name }, `you are not a member of ${space.name}`);
-    if (options.access?.length && space.kind !== 'project') throw new WeaveError('daemon.invite.board.rights', undefined, 'board rights are for projects');
-    const boards = space.kind === 'project' ? this.#kernel.spacePosts(space).boards : [];
-    const access: BoardRight[] = (options.access ?? []).map((r) => ({ board: this.#kernel.board(space, boards, r.board).name, ...(r.read ? { read: true } : {}), ...(r.write ? { write: true } : {}) }));
-    // The space reads the link's public key as its id; the link keeps the secret one (inviteKeys).
-    const { invite, key } = inviteKeys();
-    const expires = new Date(Date.now() + hours * 3600_000).toISOString();
-    const body: Record<string, Json> = { invite, expires, key: true };
-    if (access.length) body.access = access as unknown as Json;
-    if (options.accept) body.accept = true;
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_INVITE, body }));
-    if (options.accept) {
-      return encodeKnock({
-        v: 1,
-        space: { kind: space.kind, id: space.id, name: space.name, founder: space.founder },
-        invite,
-        inviter: this.identity.author,
-        enc: this.#encryptionKeyOf(this.identity.author),
-        expires,
-        entry: this.#kernel.entryPoint(),
-      });
-    }
-    const boardKeys = this.#kernel.boardKeysFor(space, access);
-    return encodeInvite({ v: 2, space: this.#kernel.keysForNewcomers(space), invite, key, inviter: this.identity.author, expires, entry: this.#kernel.entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+  invite(...args: Parameters<Membership['invite']>): ReturnType<Membership['invite']> {
+    return this.#membership.invite(...args);
   }
 
-  async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
-    if (isKnockLink(text)) return this.#knock(text, note ?? '');
-    const { space, invite, proof } = await this.#takeInvite(text);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
-    return this.#kernel.spaceInfo(space);
+  joinSpace(...args: Parameters<Membership['joinSpace']>): ReturnType<Membership['joinSpace']> {
+    return this.#membership.joinSpace(...args);
   }
 
-  async lookAtInvite(text: string): Promise<InviteLook> {
-    const link = text.trim();
-    const knock = isKnockLink(link);
-    if (!knock && !isInviteLink(link)) throw new Error('not a Weave invite link');
-    let parsed: { space: { id: string; kind: SpaceKind; name: string; founder: Did }; inviter: Did; expires: string; boards?: Record<string, unknown>; key?: string };
-    try {
-      parsed = knock ? peekKnock(link) : peekInvite(link);
-    } catch (error) {
-      throw new Error((error as Error).message);
-    }
-    const me = this.identity.author;
-    const held = this.#spaces.get(parsed.space.id);
-    const look: InviteLook = {
-      kind: knock ? 'knock' : 'invite',
-      space: { id: parsed.space.id, kind: parsed.space.kind, name: held ? this.#kernel.spaceName(held) : parsed.space.name, founder: parsed.space.founder, ...(this.nameOf(parsed.space.founder) ? { founderName: this.nameOf(parsed.space.founder) } : {}) },
-      inviter: { did: parsed.inviter, ...(this.nameOf(parsed.inviter) ? { name: this.nameOf(parsed.inviter) } : {}) },
-      expires: parsed.expires,
-      boards: Object.keys(parsed.boards ?? {}),
-      standing: 'open',
-    };
-    const state = held ? this.#kernel.state(held) : undefined;
-    if (parsed.inviter === me) return { ...look, standing: 'mine', ...(state ? { members: state.members.size } : {}) };
-    // In already: we hold its keys and weren't removed (a join written here counts before the invite it cites has synced).
-    // Removed and asked back with a new link: open, as #takeInvite takes it.
-    if (state && (state.members.has(me) || !state.removed.has(me))) return { ...look, standing: 'member', members: state.members.size };
-    if (knock && this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === parsed.space.id && b.inviter === parsed.inviter)) return { ...look, standing: 'waiting' };
-    if (!knock && typeof parsed.key !== 'string') return { ...look, standing: 'old', problem: 'this link was made by an older Weave and no longer works: ask for a new one' };
-    if (Date.parse(parsed.expires) < this.clock()) return { ...look, standing: 'expired', problem: 'this link has expired: ask for a new one' };
-    const inside = this.#companies.insideOnly(parsed.space.founder);
-    if (inside) return { ...look, standing: 'elsewhere', problem: inside };
-    return look;
+  lookAtInvite(...args: Parameters<Membership['lookAtInvite']>): ReturnType<Membership['lookAtInvite']> {
+    return this.#membership.lookAtInvite(...args);
   }
 
-  /** An invite's space and keys, kept here; the join itself is written by the caller. */
-  async #takeInvite(text: string): Promise<{ space: StoredSpace; invite: string; proof?: string }> {
-    const invite = decodeInvite(text);
-    const held = this.#spaces.get(invite.space.id);
-    if (held) {
-      // Removed, and asked back with a new link (_Ak3UUmp): the space as it is now, keys added to the ones we kept.
-      const state = this.#kernel.state(held);
-      if (!state.removed.has(this.identity.author) || state.members.has(this.identity.author)) throw new WeaveError('daemon.join.already', { space: invite.space.name }, `you are already in ${invite.space.name}`);
-      for (const [epoch, key] of Object.entries(invite.space.keys)) if (!held.keys[epoch]) held.keys[epoch] = key;
-      held.via = invite.inviter;
-      if (invite.boards) for (const [board, epochs] of Object.entries(invite.boards)) held.boards = { ...held.boards, [board]: { ...held.boards?.[board], ...epochs } };
-      this.#kernel.saveSpace(held);
-      return { space: held, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(held), this.identity.author) } : {}) };
-    }
-    const inside = this.#companies.insideOnly(invite.space.founder);
-    if (inside) throw new Error(inside);
-    this.#kernel.adoptBootstrap(invite.entry);
-    const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
-    await this.#kernel.addSpace(space);
-    return { space, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(space), this.identity.author) } : {}) };
+  knocks(...args: Parameters<Membership['knocks']>): ReturnType<Membership['knocks']> {
+    return this.#membership.knocks(...args);
   }
 
-  /** Ask to be let in with a link that needs the inviter's OK. */
-  async #knock(text: string, note: string): Promise<SpaceInfo> {
-    const link = decodeKnock(text);
-    if (this.#spaces.has(link.space.id)) throw new WeaveError('daemon.join.already', { space: link.space.name }, `you are already in ${link.space.name}`);
-    if (link.inviter === this.identity.author) throw new WeaveError('daemon.join.own.link', undefined, "that's your own link");
-    this.#kernel.adoptBootstrap(link.entry);
-    // The meeting point the link holds (links from before meeting points hold the inviter's DID instead).
-    for (const topic of new Set(link.entry.topics)) await this.join(topic);
-    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_KNOCK_PENDING, body: { space: link.space.id, inviter: link.inviter, ...(link.entry.meet ? { meet: link.entry.meet } : {}) } }));
-    this.replica.write(this.identity, knockFor(link, note.trim(), this.#kernel.entryPoint()));
-    return { id: link.space.id, kind: link.space.kind, name: link.space.name, founder: link.space.founder, founderName: this.nameOf(link.space.founder), members: 0, epoch: 0, history: 'all', waiting: true };
+  answerKnock(...args: Parameters<Membership['answerKnock']>): ReturnType<Membership['answerKnock']> {
+    return this.#membership.answerKnock(...args);
   }
 
-  async knocks(): Promise<KnockInfo[]> {
-    return this.#openKnocks().map(({ id, event, space, note, rights }) => ({
-      id,
-      space: { id: space.id, kind: space.kind, name: space.name },
-      did: event.author,
-      name: this.nameOf(event.author),
-      note,
-      time: event.time,
-      access: rights,
-    }));
+  setVisitors(...args: Parameters<Membership['setVisitors']>): ReturnType<Membership['setVisitors']> {
+    return this.#membership.setVisitors(...args);
   }
 
-  async answerKnock(input: { knock: string; accept: boolean }): Promise<void> {
-    const matches = this.#openKnocks().filter((k) => k.id.startsWith(input.knock));
-    if (matches.length !== 1)
-      throw matches.length
-        ? new WeaveError('daemon.request.ambiguous', undefined, 'that id is ambiguous — use more characters')
-        : new WeaveError('daemon.request.none', undefined, 'no such request (maybe already answered)');
-    const { id, event, space, invite, rights } = matches[0];
-    if (input.accept) {
-      const member = event.author;
-      this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_ADMIT, body: { member, invite } }));
-      const boardKeys = this.#kernel.boardKeysFor(space, rights);
-      this.replica.write(this.identity, gift({ ...this.#kernel.keysForNewcomers(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#kernel.direct(member)), this.#kernel.entryPoint(), this.#encryptionKeyOf));
-    }
-    this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_KNOCK_HANDLED, body: { knock: id } }));
+  approveAgent(...args: Parameters<Membership['approveAgent']>): ReturnType<Membership['approveAgent']> {
+    return this.#membership.approveAgent(...args);
   }
 
-  /** Knocks with my live links that I haven't answered and whose senders aren't in yet. */
-  #openKnocks(): Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> {
-    const handled = new Set(this.#selfBodies(KIND_KNOCK_HANDLED).map((b) => b.knock));
-    const out: Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> = [];
-    for (const event of this.replica.events((e) => e.kind === KIND_KNOCK && e.author !== this.identity.author)) {
-      const id = event.id;
-      if (handled.has(id)) continue;
-      const opened = this.#tryOpen((me) => openKnock(event, me));
-      const space = opened && this.#spaces.get(opened.space);
-      if (!opened || !space) continue;
-      const state = this.#kernel.state(space);
-      if (state.members.has(event.author)) continue;
-      const entries = this.#kernel.entries(space);
-      const live = entries.some((e) => e.kind === KIND_INVITE && e.event.author === this.identity.author && (e.body as { invite?: unknown; expires?: unknown; accept?: unknown })?.invite === opened.invite && (e.body as { accept?: unknown }).accept === true && String((e.body as { expires?: unknown }).expires) >= new Date().toISOString());
-      if (!live) continue;
-      out.push({ id, event, space, invite: opened.invite, note: opened.note, rights: inviteRightsOf(entries, state).get(opened.invite) ?? [] });
-    }
-    return out.sort((x, y) => x.event.time.localeCompare(y.event.time));
+  agentBlocked(...args: Parameters<Membership['agentBlocked']>): ReturnType<Membership['agentBlocked']> {
+    return this.#membership.agentBlocked(...args);
   }
 
-
-  /** What people's agents and services may do in a space (those who manage it). Leaving one out keeps it as it is. */
-  async setVisitors(input: { space: string; agents?: VisitorRule; services?: VisitorRule }): Promise<SpaceInfo> {
-    const space = this.#kernel.space(input.space);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
-    if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.rules.manage.only', { space: space.name }, `only those who manage ${space.name} decide what agents and services may do there`);
-    const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
-    const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
-    if ((input.agents && !agents) || (input.services && !services)) throw new WeaveError('daemon.rules.who', undefined, 'a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
-    return this.#kernel.spaceInfo(space);
+  members(...args: Parameters<Membership['members']>): ReturnType<Membership['members']> {
+    return this.#membership.members(...args);
   }
+
+  leave(...args: Parameters<Membership['leave']>): ReturnType<Membership['leave']> {
+    return this.#membership.leave(...args);
+  }
+
+  handOver(...args: Parameters<Membership['handOver']>): ReturnType<Membership['handOver']> {
+    return this.#membership.handOver(...args);
+  }
+
+  setHistory(...args: Parameters<Membership['setHistory']>): ReturnType<Membership['setHistory']> {
+    return this.#membership.setHistory(...args);
+  }
+
+  closeSpace(...args: Parameters<Membership['closeSpace']>): ReturnType<Membership['closeSpace']> {
+    return this.#membership.closeSpace(...args);
+  }
+
+  removeMember(...args: Parameters<Membership['removeMember']>): ReturnType<Membership['removeMember']> {
+    return this.#membership.removeMember(...args);
+  }
+
+  createCommunity(...args: Parameters<Membership['createCommunity']>): ReturnType<Membership['createCommunity']> {
+    return this.#membership.createCommunity(...args);
+  }
+
+  community(...args: Parameters<Membership['community']>): ReturnType<Membership['community']> {
+    return this.#membership.community(...args);
+  }
+
+  setCommunity(...args: Parameters<Membership['setCommunity']>): ReturnType<Membership['setCommunity']> {
+    return this.#membership.setCommunity(...args);
+  }
+
+  setModerator(...args: Parameters<Membership['setModerator']>): ReturnType<Membership['setModerator']> {
+    return this.#membership.setModerator(...args);
+  }
+
+  setMaintainer(...args: Parameters<Membership['setMaintainer']>): ReturnType<Membership['setMaintainer']> {
+    return this.#membership.setMaintainer(...args);
+  }
+
+  inviteGroup(...args: Parameters<Membership['inviteGroup']>): ReturnType<Membership['inviteGroup']> {
+    return this.#membership.inviteGroup(...args);
+  }
+
+  uninviteGroup(...args: Parameters<Membership['uninviteGroup']>): ReturnType<Membership['uninviteGroup']> {
+    return this.#membership.uninviteGroup(...args);
+  }
+
+  setRule(...args: Parameters<Membership['setRule']>): ReturnType<Membership['setRule']> {
+    return this.#membership.setRule(...args);
+  }
+
+  admissions(...args: Parameters<Membership['admissions']>): ReturnType<Membership['admissions']> {
+    return this.#membership.admissions(...args);
+  }
+
+  admit(...args: Parameters<Membership['admit']>): ReturnType<Membership['admit']> {
+    return this.#membership.admit(...args);
+  }
+
+  decline(...args: Parameters<Membership['decline']>): ReturnType<Membership['decline']> {
+    return this.#membership.decline(...args);
+  }
+
 
   // Companies (companies.ts): the node delegates.
 
@@ -1801,173 +1679,8 @@ export class WeaveNode implements Backend {
   }
 
 
-  async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
-    const space = this.#kernel.space(input.space);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
-    if (!mayDo(state, this.identity.author, 'manage').ok) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
-    return this.#kernel.spaceInfo(space);
-  }
-
-  /** An agent key from `person/agent` (a person's name or id, the agent's name) or the key itself. */
-  #agentKey(ref: string): Did {
-    if (isDid(ref) && this.replica.authority.grant(ref)?.role === 'agent') return ref;
-    const at = ref.lastIndexOf('/');
-    if (at > 0) {
-      const person = this.resolve(ref.slice(0, at));
-      // An agent by its name, or a service by its own (its key is named service:<name>).
-      const name = ref.slice(at + 1);
-      const grant = this.replica.authority.grantsOf(person).find((g) => g.role === 'agent' && g.revokedAfter === undefined && (g.name === name || g.name === `${SERVICE_PREFIX}${name}`));
-      if (grant) return grant.subject;
-    }
-    throw new Error(`no agent "${ref}": name it as person/agent (e.g. Lena/claude) or by its key`);
-  }
-
-  async agentBlocked(agent: string): Promise<Array<{ id: string; name: string }>> {
-    const key = this.#agents.find((a) => a.name === agent)?.did;
-    if (!key) throw noAgentError(agent, this.#agents.map((a) => a.name));
-    // Where its key doesn't count at all (what it may write there is a matter of kinds).
-    return [...this.#spaces.values()]
-      .filter((s) => {
-        const state = this.#kernel.state(s);
-        if (state.managed) return !state.approvedAgents?.has(key);
-        const who = state.visitors?.agents?.who ?? 'everyone';
-        return !mayDo(state, this.identity.author, 'manage').ok && (who === 'nobody' || (who === 'approved' && !state.approvedAgents?.has(key)));
-      })
-      .map((s) => ({ id: s.id, name: s.name }));
-  }
 
 
-  async members(ref: string): Promise<MemberInfo[]> {
-    const space = this.#kernel.space(ref);
-    const state = this.#kernel.state(space);
-    const lastActive = new Map<Did, string>();
-    const agents = new Map<Did, Set<string>>();
-    const attested = state.managed?.attestor ? this.#companies.attestations(space, state.managed.attestor) : new Map();
-    for (const entry of this.#kernel.entries(space)) {
-      const { author, signer, time } = entry.event;
-      if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
-      const agent = this.#agentName(signer, author);
-      if (agent) agents.set(author, (agents.get(author) ?? new Set()).add(agent));
-    }
-    return [...state.members.values()].map((m) => ({
-      did: m.did,
-      name: this.nameOf(m.did),
-      since: m.since,
-      ...(m.invitedBy ? { invitedBy: m.invitedBy, invitedByName: this.nameOf(m.invitedBy) } : {}),
-      ...(m.via ? { via: this.#kernel.groupRef(m.via, state) } : {}),
-      ...(space.kind === 'project' && state.maintainers.has(m.did) ? { maintainer: true as const } : {}),
-      ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
-      agents: [...(agents.get(m.did) ?? [])],
-      ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
-      ...(this.#companies.companyVouchedOf(m.did) ? { company: this.nameOf(this.#companies.companyVouchedOf(m.did)!) ?? 'a company' } : {}),
-    }));
-  }
-
-  async leave(ref: string): Promise<void> {
-    const space = this.#kernel.space(ref);
-    if (space.kind === 'direct') throw new WeaveError('daemon.leave.direct', undefined, 'a direct chat has no leaving; unfollow or block the person instead');
-    const state = this.#kernel.state(space);
-    if (mayDo(state, this.identity.author, 'own').ok) {
-      const others = [...state.members.keys()].filter((did) => did !== this.identity.author);
-      throw others.length
-        ? new WeaveError('daemon.leave.owner', { space: space.name }, `you own ${space.name}: hand it over to someone first`)
-        : new WeaveError('daemon.leave.last', { space: space.name }, `you're the only one in ${space.name}: close it instead`);
-    }
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#kernel.upTo(this.identity.author), at: this.#kernel.anchor(this.identity.author, space) } }));
-    // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
-    this.#spaces.delete(space.id);
-    this.#kernel.invalidateDecoded();
-    removeSpace(this.home, space.id);
-    this.#kernel.announceNow();
-    for (const topic of spaceTopics(space, 0)) await this.#swarm?.leave(topic).catch(() => {});
-  }
-
-  async handOver(input: { space: string; to: string }): Promise<SpaceInfo> {
-    const space = this.#kernel.space(input.space);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.handover.direct', undefined, 'a direct chat has no owner');
-    if (!mayDo(state, this.identity.author, 'own').ok) throw new WeaveError('daemon.handover.owner.only', { space: space.name }, `only the owner, ${this.nameOf(state.founder) ?? 'someone else'}, can hand ${space.name} over`);
-    if (state.tier) throw new WeaveError('daemon.handover.tier', undefined, 'a membership tier stays with its creator; take it off your hub instead');
-    const to = this.resolve(input.to);
-    if (to === this.identity.author) throw new WeaveError('daemon.handover.self', undefined, "that's you");
-    if (!state.members.has(to)) throw new WeaveError('daemon.handover.not.member', { who: input.to, space: space.name }, `${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#kernel.upTo(this.identity.author), at: this.#kernel.anchor(this.identity.author, space) } }));
-    return this.#kernel.spaceInfo(space);
-  }
-
-  async setHistory(input: { space: string; history: HistorySetting }): Promise<SpaceInfo> {
-    const space = this.#kernel.space(input.space);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.history.direct', undefined, 'a direct chat is between two people: there are no newcomers');
-    if (!HISTORIES.includes(input.history)) throw new WeaveError('daemon.history.values', undefined, 'history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
-    if (!mayDo(state, this.identity.author, 'manage').ok)
-      throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
-    if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
-    return this.#kernel.spaceInfo(space);
-  }
-
-  async closeSpace(input: { space: string; closed: boolean }): Promise<SpaceInfo> {
-    const space = this.#kernel.space(input.space);
-    const state = this.#kernel.state(space);
-    if (space.kind === 'direct') throw new WeaveError('daemon.close.direct', undefined, "a direct chat can't be closed");
-    if (!mayDo(state, this.identity.author, 'manage').ok)
-      throw new WeaveError('daemon.close.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
-    if (!!state.closed === input.closed) return this.#kernel.spaceInfo(space);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
-    return this.#kernel.spaceInfo(space);
-  }
-
-
-  async removeMember(ref: string, who: string): Promise<void> {
-    const space = this.#kernel.space(ref);
-    const state = this.#kernel.state(space);
-    if (!mayDo(state, this.identity.author, 'manage').ok) {
-      throw new WeaveError('daemon.remove.manage.only', { kind: space.kind }, { project: 'only maintainers can remove people from a project', community: 'only moderators can remove people from a community', group: 'only the group founder can remove members', direct: 'nobody can be removed from a direct chat' }[space.kind]);
-    }
-    const member = this.resolve(who);
-    if (!state.members.has(member)) throw new WeaveError('daemon.remove.not.member', { who, space: space.name }, `${who} is not in ${space.name}`);
-    if (member === state.founder) throw new WeaveError('daemon.remove.owner', { space: space.name }, `the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(await this.#managed.cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#kernel.upTo(member), at: this.#kernel.anchor(member, space) } }));
-    const remaining = [...state.members.keys()].filter((did) => did !== member);
-    const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
-    space.keys[String(epoch)] = key;
-    this.#kernel.saveSpace(space);
-    this.replica.write(this.identity, fields);
-    this.#managed.afterRekey(space, epoch, key);
-  }
-
-  // ---------------------------------------------------------------- communities
-
-  async createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo> {
-    const community = await this.#kernel.createSpace('community', input.name);
-    if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description } }));
-    return this.community(community.id);
-  }
-
-  async community(ref: string): Promise<CommunityInfo> {
-    const community = this.#kernel.space(ref, 'community');
-    const state = this.#kernel.state(community);
-    return {
-      ...this.#kernel.spaceInfo(community),
-      kind: 'community',
-      description: this.#kernel.page(community, state).description,
-      moderators: [...state.maintainers].map((did) => this.#kernel.actor(did, did)),
-      moderator: state.maintainers.has(this.identity.author),
-    };
-  }
-
-  async setCommunity(input: { community: string; description: string }): Promise<CommunityInfo> {
-    const community = this.#kernel.space(input.community, 'community');
-    this.#kernel.maintainerState(community);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
-    return this.community(community.id);
-  }
-
-  async setModerator(input: { community: string; who: string; on: boolean }): Promise<void> {
-    this.#kernel.appoint(this.#kernel.space(input.community, 'community'), input.who, input.on);
-  }
 
   // Content (content.ts): the node delegates.
 
@@ -2130,72 +1843,6 @@ export class WeaveNode implements Backend {
     return agentInfo(agent);
   }
 
-
-  /** What co-authorship needs to know about keys. */
-
-  async setMaintainer(input: { project: string; who: string; on: boolean }): Promise<void> {
-    this.#kernel.appoint(this.#kernel.project(input.project), input.who, input.on);
-  }
-
-  async inviteGroup(input: { project: string; group: string }): Promise<void> {
-    const project = this.#kernel.project(input.project);
-    const state = this.#kernel.maintainerState(project);
-    const group = this.#kernel.space(input.group, 'group');
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: true } }));
-    // Inviting the group is the consent for everyone in it right now.
-    const newcomers = [...this.#kernel.state(group).members.keys()].filter((did) => !state.members.has(did));
-    this.#kernel.admitAll(project, group, newcomers);
-  }
-
-  async uninviteGroup(input: { project: string; group: string }): Promise<void> {
-    const project = this.#kernel.project(input.project);
-    this.#kernel.maintainerState(project);
-    const group = this.#kernel.knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: false } }));
-  }
-
-  async setRule(input: { project: string; group: string; auto: boolean }): Promise<void> {
-    const project = this.#kernel.project(input.project);
-    this.#kernel.maintainerState(project);
-    const group = this.#kernel.knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_RULE, body: { group: group.id, auto: input.auto } }));
-  }
-
-  async admissions(ref?: string): Promise<Admission[]> {
-    const projects = ref ? [this.#kernel.project(ref)] : [...this.#spaces.values()].filter((s) => s.kind === 'project');
-    const out: Admission[] = [];
-    for (const project of projects) {
-      const state = this.#kernel.state(project);
-      if (!mayDo(state, this.identity.author, 'group').ok) continue;
-      for (const change of this.#kernel.changes(project, state)) out.push(change);
-    }
-    return out;
-  }
-
-  async admit(input: { project: string; who: string; group: string; always?: boolean }): Promise<void> {
-    const project = this.#kernel.project(input.project);
-    const state = this.#kernel.maintainerState(project);
-    const group = this.#kernel.space(input.group, 'group');
-    if (!state.groups.has(group.id)) throw new Error(`${group.name} is not invited to ${project.name}`);
-    // "Allow for all projects with this group": a standing rule in every project we maintain that invited it.
-    if (input.always) {
-      for (const other of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
-        const otherState = this.#kernel.state(other);
-        if (mayDo(otherState, this.identity.author, 'group').ok && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
-          this.replica.write(this.identity, sealFor(this.#managed.cipher(other), { kind: KIND_RULE, body: { group: group.id, auto: true } }));
-        }
-      }
-    }
-    const did = this.resolve(input.who);
-    if (!state.members.has(did)) this.#kernel.admitAll(project, group, [did]);
-  }
-
-  async decline(input: { project: string; who: string; group: string }): Promise<void> {
-    const project = this.#kernel.project(input.project);
-    this.#kernel.maintainerState(project);
-    const group = this.#kernel.knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_DECLINE, body: { member: this.resolve(input.who), via: group.id } }));
-  }
 
   /**
    * Carry out standing rules: admit newcomers of auto-admitted groups (any
@@ -3193,6 +2840,37 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- modules: services and websites
 
   /** What services.ts reaches of the node: exactly what it uses. */
+  /** What membership sees of the node, and nothing more (membership.ts). */
+  static membershipCore(n: WeaveNode): MembershipCore {
+    return {
+      agentMay: n.#agentMay.bind(n),
+      agentName: n.#agentName.bind(n),
+      get agents() {
+        return n.#agents;
+      },
+      get companies() {
+        return n.#companies;
+      },
+      get encryptionKeyOf() {
+        return n.#encryptionKeyOf;
+      },
+      get kernel() {
+        return n.#kernel;
+      },
+      get managed() {
+        return n.#managed;
+      },
+      selfBodies: n.#selfBodies.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      get network() {
+        return n.#swarm;
+      },
+      tryOpen: n.#tryOpen.bind(n),
+    };
+  }
+
   /** What the kernel sees of the node: the modules, and the host through its ports (kernel.ts). */
   static kernelCore(n: WeaveNode): KernelCore {
     return {
