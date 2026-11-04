@@ -53,9 +53,9 @@ export { BUCKETS, compact, expand, fingerprint, HIGHEST, LEAF, LOWEST, openRange
 export { keepStreamId, keepTag, keepWrapKey, padded, unwrapFromKeeper, wrapForKeeper } from './keep.ts';
 export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
+export { canManage, managersOf, mayDo, mayDoAt, rekeyCounts, type Decision, type SpaceAction } from './authz.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {
-  canManage,
   canonicalKind,
   currentEpoch,
   decodeInvite,
@@ -125,7 +125,6 @@ export {
   joinProven,
   isPast,
   type Anchor,
-  rekeyCounts,
   type Cutoff,
   spaceTopic,
   spaceTopics,

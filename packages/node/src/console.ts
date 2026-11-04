@@ -7,7 +7,7 @@ import type { CompanyAction } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
 import type { ConsoleRole } from './backend.ts';
 import type { WeaveNode } from './node.ts';
-import { verifyIdToken } from './node.ts';
+import { verifyIdToken } from './companies.ts';
 
 /*
  * The admin console (stage 12): a web app the company's node serves for the
