@@ -143,7 +143,16 @@ Steps 1, 3, 4 and 6 are independent of each other and of step 2; they could run 
 | members | 1 |
 | heap after reads | 27 MB |
 
-## 6. What "done" looks like
+## 6. As built
+
+Notes per step, where the build differed from the plan above.
+
+- **Steps 1–7 cut into flat modules** (`packages/node/src/companies.ts`, not `core/companies.ts`): a module that still needs `node:fs` or a loopback server cannot sit in `core/` before the ports of step 8 exist. The `layers.test.ts` list names each new module explicitly; moving what can move into `core/` is step 9's job, as planned.
+- **The cut is scripted.** A script takes the line ranges of node.ts, writes the module with its `…Core` interface generated from what the moved code reaches (`this.#x` → `this.core.x`, public members → `this.node.x`), leaves one-line delegations on `WeaveNode` for the Backend methods, and turns `this.#x` into `this.#module.x` elsewhere in node.ts. What the script can't know (field types in the interface, members reached as `n.#x` from the static host objects, import cycles) the type checker lists and a hand fixes. One cut takes an hour, not a day.
+- **`shared.ts`** holds `DAY_MS`, `SECRET_FIELDS` and `withoutSecrets`; `verifyIdToken` moved with the companies (console.ts imports it from there); `KIND_GENERATION` is exported by companies.ts for the node's append hook.
+- **Step 1 (companies and the key service):** `managed.ts` (`ManagedKeys`, 347 lines, `ManagedCore` with 10 members) and `companies.ts` (`Companies`, 1,492 lines, `CompaniesCore` with 19 members); node.ts 10,783 → 9,233. Two things to know: a module built in a field initializer must reach later modules lazily (`delegated: (scope) => n.#companies.delegated(scope)`), and `#settleLosses`/`#anchorRemovals`, which sat in the SSO section, stay in node.ts under their own marker: they are membership, not company, code.
+
+## 7. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.
 - `packages/node/src/core/` imports no `node:*` and nothing from `host/`, enforced by `layers.test.ts`; an esbuild browser bundle of the kernel resolves.

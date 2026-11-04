@@ -1,6 +1,5 @@
 import {
   accessOf,
-  canManage as mayManageSpace,
   b64u,
   attachmentOf,
   BLOB_TYPES,
@@ -40,32 +39,19 @@ import {
   KIND_SHRED,
   KIND_MANAGED,
   KIND_KMS,
-  KIND_ATTEST,
   KIND_HOLD,
   KIND_AGENT_APPROVE,
   KIND_VISITORS,
   parseVisitorRule,
   visitorCounts,
   type VisitorRule,
-  KIND_ESCROW,
-  KIND_ESCROW_OPENED,
-  KIND_LINK,
-  KIND_ORG_CHAT,
-  KIND_ORG_CONSOLE,
-  KIND_ORG_DONE,
   KIND_ORG_FREEZE,
-  KIND_ORG_MAP,
   KIND_ORG_POLICY,
-  KIND_ORG_SETTINGS,
-  KIND_ORG_START,
-  KIND_ORG_REQUEST,
   didFromPublicKey,
   generateKeyPair,
   boxTo,
   openBox,
   type Box,
-  KIND_SIGNIN,
-  type ManagedSetting,
   HISTORIES,
   epochsToShare,
   type HistorySetting,
@@ -127,7 +113,6 @@ import {
   inception,
   KIND_ADMIT,
   KIND_APP,
-  KIND_ARTIFACT,
   KIND_ACCOUNT,
   accountClaimsOf,
   type AccountClaim,
@@ -228,7 +213,6 @@ import {
   takeOff,
   type SessionRecord,
   type SessionStamp,
-  type StackItem,
   postTargetOf,
   postUrl,
   personKeyOf,
@@ -318,9 +302,7 @@ import {
   IMAGE_REF,
   SERVICE_LABEL,
   type RoomPages,
-  type AppAsset,
   type AppImage,
-  type AppInstall,
   parseScope,
   permits,
   POST_SORTS,
@@ -471,7 +453,6 @@ import {
   type InviteLook,
   type InviteOptions,
   type KeepersInfo,
-  type AuditLine,
   type KnockInfo,
   type InProject,
   type InSpace,
@@ -502,17 +483,6 @@ import {
   type ThreadInfo,
   type TierInfo,
   type Whoami,
-  type CompanyAgentInfo,
-  type CompanyDeviceInfo,
-  type CompanyInfo,
-  type ConsoleRole,
-  type CreateCompanyInput,
-  type LinkInfo,
-  type ScimInfo,
-  type ConsoleInfo,
-  type SignInStatus,
-  type AuditStreamInfo,
-  type ExportLine,
   type ServiceSettingsInfo,
   type ShippedServiceInfo,
   type ArtifactInfo,
@@ -526,50 +496,33 @@ import {
   type ArtifactLine,
   type AppReleases,
   type Preferences,
-  noAgent,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { AppLogFollower, ArchivedSessions, recentSessions, TranscriptFollower, transcriptActive, transcriptTitle, type SessionText } from './claudecode.ts';
 import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
-import { keystoresHere, moveHomeKey, readSecretJson, vaultOf, writeSecretJson, type Keystore } from './vault.ts';
-import { envCredentials, providerFor, type KeyProvider, type ProviderSpec, type VaultCredentials } from './keyproviders.ts';
+import { moveHomeKey, readSecretJson, vaultOf, writeSecretJson } from './vault.ts';
 import { entryHome, entryState, harnessesIn, staleEntry, writeEntry, type McpLaunch } from './harnesses.ts';
-import { guessPlatform, platformKey } from './appinstall.ts';
+import { platformKey } from './appinstall.ts';
 import { publicReleases, type Fetch } from './github.ts';
-import { createHash, createPublicKey, createVerify, hkdfSync, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { LiveRooms } from './live.ts';
 import { createAndSaveAgent, loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
 import { acquireLock } from './lock.ts';
-import { emptyDirectory, findPerson, groupsOf, hashToken, newScimToken, scimHandle, startScimServer, tokenMatches, type ScimDirectory, type ScimRequest, type ScimResponse } from './scim.ts';
-import { checkAuthority, deviceProof, inspectDevice } from './devices.ts';
 import { machinePolicy } from './machine.ts';
-import { browserSignIn, claimsOf, delegatedToken, openInBrowser, refreshSignIn, signInNonce, type SignInTokens } from './signin.ts';
-import { startConsole } from './console.ts';
+import { browserSignIn, claimsOf, openInBrowser, signInNonce, type SignInTokens } from './signin.ts';
 import { decodeNodeAnswer, decodeNodeRequest, encodeNodeAnswer, encodeNodeRequest } from './company.ts';
-import { imageDigest, imageLabels, imageLocation } from './registry.ts';
-import { invitationMail, mailServer, sendMail } from './mail.ts';
-import { newSink, sendLines, sinkTarget, type AuditSink, type AuditSinkInput, type StreamedLine } from './auditsinks.ts';
+import { imageDigest, imageLabels } from './registry.ts';
 import {
   decodeEnrollment,
   decodeRecoveryAnswer,
-  decodeRecoveryRequest,
-  encodeEnrollment,
-  encodeRecoveryAnswer,
   encodeRecoveryRequest,
   nameFromToken,
-  orgState,
-  readPolicy,
-  type CompanyAction,
-  type CompanyPolicy,
-  type Retention,
   type Enrolling,
-  type MapRole,
-  type OrgState,
 } from './company.ts';
 import { BlobStore } from './blobstore.ts';
 import { releaseApproval, Runtime } from './runtime.ts';
@@ -593,19 +546,10 @@ import { checkGumroadLicense, createGumroadMembership, GUMROAD_CLIENT_ID, gumroa
 import { loadSpaces, removeSpace, saveSpace, type StoredSpace } from './spacestore.ts';
 import { KIND_THEME, sanitizeTheme, type Theme } from './theme.ts';
 import { KIND_AVATAR, sanitizeFigure, type AvatarFigure } from './avatar.ts';
+import { ManagedKeys, type ManagedCore } from './managed.ts';
+import { DAY_MS } from './shared.ts';
+import { Companies, KIND_GENERATION, type CompaniesCore } from './companies.ts';
 
-/** What a company account may always sign, whatever its company's policy: itself, its keys, its name, leaving, links (they have their own switch), blocking and muting. */
-const ALWAYS_ALLOWED = new Set<string>([KIND_IDENTITY, KIND_ROTATE, 'weave.delegate', 'weave.revoke', KIND_ORG_FREEZE, 'weave.profile', KIND_THEME, KIND_AVATAR, KIND_IMPRINT, KIND_LINK, KIND_LEAVE, KIND_BLOCK, KIND_MUTE, KIND_REKEY]);
-/** A company sign-in kept on this computer (sso.json, sealed): the ID token, and where and how to renew it. */
-interface Sso {
-  idToken: string;
-  /** The salt the ID token's nonce was made with for this identity (signInNonce). */
-  salt?: string;
-  expires?: number;
-  refreshToken?: string;
-  issuer?: string;
-  clientId?: string;
-}
 
 export const KIND_PROFILE = 'weave.profile';
 /** A project's page, sealed inside the project; the latest one by a maintainer counts. */
@@ -771,56 +715,15 @@ interface KeepState {
   index: string;
 }
 
-/**
- * An OIDC ID token, checked against its issuer: the signature with the
- * issuer's published keys (RS256), the issuer, the audience, the expiry.
- * Returns its claims, or throws.
- */
-export async function verifyIdToken(token: string, issuer: string, audience: string): Promise<{ sub: string; email?: string; groups: string[]; nonce?: string }> {
-  const [h, b, sig] = token.split('.');
-  if (!h || !b || !sig) throw new Error('not a token');
-  const header = JSON.parse(Buffer.from(h, 'base64url').toString()) as { alg?: string; kid?: string };
-  if (header.alg !== 'RS256') throw new Error(`unsupported token algorithm ${header.alg}`);
-  const discovery = (await (await fetch(`${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`)).json()) as { jwks_uri: string };
-  const { keys } = (await (await fetch(discovery.jwks_uri)).json()) as { keys: Array<Record<string, unknown> & { kid?: string }> };
-  const jwk = keys.find((k) => !header.kid || k.kid === header.kid);
-  if (!jwk) throw new Error('unknown signing key');
-  if (!createVerify('RSA-SHA256').update(`${h}.${b}`).verify(createPublicKey({ key: jwk as never, format: 'jwk' }), Buffer.from(sig, 'base64url'))) throw new Error('bad signature');
-  const claims = JSON.parse(Buffer.from(b, 'base64url').toString()) as { iss?: string; aud?: string | string[]; exp?: number; sub?: string; email?: string; groups?: unknown; nonce?: unknown };
-  if (claims.iss !== issuer) throw new Error('wrong issuer');
-  if (!(Array.isArray(claims.aud) ? claims.aud : [claims.aud]).includes(audience)) throw new Error('wrong audience');
-  if (!claims.exp || claims.exp * 1000 < Date.now()) throw new Error('expired');
-  if (!claims.sub) throw new Error('no subject');
-  return { sub: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [], ...(typeof claims.nonce === 'string' ? { nonce: claims.nonce } : {}) };
-}
-
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
-const DAY_MS = 24 * 3600 * 1000;
 const BUDGETS = {
   trusted: { events: 1200, bytes: 10 * 1024 * 1024 },
   member: { events: 300, bytes: 2 * 1024 * 1024 },
   newcomer: { events: 60, bytes: 512 * 1024 },
 };
 
-/** For the audit: what an event says, without keys, boxes, wrapped parts or ciphertext. */
-const SECRET_FIELDS = new Set(['boxes', 'box', 'wrapped', 'ct', 'nonce', 'key', 'keys', 'secret', 'boards']);
-function withoutSecrets(value: Json): Json {
-  if (Array.isArray(value)) return value.map(withoutSecrets);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([k]) => !SECRET_FIELDS.has(k)).map(([k, v]) => [k, withoutSecrets(v as Json)]));
-  return value;
-}
 
-/** A space's managed setting and its wrapped company halves, by epoch and by who published them. */
-interface ManagedRaw {
-  setting?: ManagedSetting;
-  parts: Map<number, Map<Did, string>>;
-}
 
-/** A promoted server's generation (nQ9JHlUV): { generation }. */
-const KIND_GENERATION = 'weave.org.generation';
-
-/** An escrow's key: its key service part and its company part, both needed. */
-const escrowKey = (kmsPart: Uint8Array, companyPart: Uint8Array): Uint8Array => new Uint8Array(createHash('sha256').update('weave/escrow/v2').update(kmsPart).update(companyPart).digest());
 
 /**
  * A person's meeting point: the DHT topic their node is found on, from a secret that only their links carry (so a
@@ -1089,6 +992,10 @@ export class WeaveNode implements Backend {
   /** The verifiers of accounts elsewhere (verifiers.ts): client apps this node runs to check them. */
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
+  /** The company key service: halves, unlocking, sealing and opening with both halves (managed.ts). */
+  #managed: ManagedKeys = new ManagedKeys(this, WeaveNode.managedCore(this));
+  /** Company accounts: their group and spaces, sign-in, attestor, policy, escrow, audit, SCIM, console (companies.ts). */
+  #companies: Companies = new Companies(this, WeaveNode.companiesCore(this));
   #services: Services = new Services(WeaveNode.servicesHost(this), () => this.#website);
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
   #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
@@ -1133,7 +1040,7 @@ export class WeaveNode implements Backend {
     this.#releaseLock = acquireLock(home);
     this.replica = new Replica(this.#openStore(home));
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
-    if (loadConfig(home).standby) this.#refuseWrites();
+    if (loadConfig(home).standby) this.#companies.refuseWrites();
     this.blobs = new BlobStore(home.blobs);
     this.config = loadConfig(home);
     this.#agents = loadAgents(home);
@@ -1142,23 +1049,23 @@ export class WeaveNode implements Backend {
     rmSync(joinPath(home.dir, 'github.json'), { force: true });
     for (const file of [this.#gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
-    this.#loadHalves();
+    this.#managed.loadHalves();
     // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
-    for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#seeGeneration(r);
+    for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#companies.seeGeneration(r);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
     for (const event of this.replica.events(isKeys)) this.#takeKeys(event);
     this.replica.admit = this.#admit;
     this.replica.onAppend((event) => {
-      if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#seeGeneration(event);
+      if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#companies.seeGeneration(event);
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
       if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
-      const kept = scoped ? this.#rawCache.get(scoped) : undefined;
+      const kept = scoped ? this.#managed.rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#directs.get(scoped)?.space) : undefined;
       // A company half or setting arriving changes which key opens what: decode again.
-      if (kept && space && this.#takeRaw(space, kept, event)) this.#decoded = undefined;
+      if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#decoded = undefined;
       if (isKeys(event)) this.#takeKeys(event);
       this.#decodedAdd(event);
       // A new encryption key (mine or a peer's) adds an epoch to direct chats.
@@ -1166,7 +1073,7 @@ export class WeaveNode implements Backend {
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#personEvents.clear();
       if (event.kind === KIND_ORG_FREEZE) this.#decoded = undefined;
-      if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#policyCache) this.#takePolicy(event);
+      if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
       else this.#personEventsAdd(event);
     });
   }
@@ -1294,12 +1201,12 @@ export class WeaveNode implements Backend {
     const { idToken, salt } = tokens;
     const name = options.name?.trim() || nameFromToken(idToken) || 'New colleague';
     const { node, words } = WeaveNode.create(name, dir, { org: enrollment.company, words: fresh });
-    node.#saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
+    node.#companies.saveSso({ idToken, ...(salt ? { salt } : {}), expires: (claimsOf(idToken).exp ?? 0) * 1000, ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(enrollment.signIn ?? {}) });
     await node.addContact(encodeContact({ v: 1, did: enrollment.company, name: enrollment.name, entry: enrollment.entry }));
     // The company group is under the company's key service: the join is written once it unlocks (see #continueEnrollment).
     const { invite, proof } = await node.#takeInvite(enrollment.invite);
-    writeSecretJson(node.home, node.#enrollFile, { group: enrollment.group, invite, ...(proof ? { proof } : {}), words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
-    await node.#continueEnrollment();
+    writeSecretJson(node.home, node.#companies.enrollFile, { group: enrollment.group, invite, ...(proof ? { proof } : {}), words, idToken, ...(salt ? { salt } : {}) } satisfies Enrolling);
+    await node.#companies.continueEnrollment();
     return node;
   }
 
@@ -1523,11 +1430,11 @@ export class WeaveNode implements Backend {
     this.#follower?.stop();
     this.#appLog?.stop();
     // Company halves of new keys must be published first: without them, nobody else (and no later run) opens what they sealed.
-    await Promise.race([Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id))), new Promise((r) => setTimeout(r, 15_000).unref())]);
-    await this.#scimServer?.close();
-    this.#scimServer = undefined;
-    await this.#console?.close();
-    this.#console = undefined;
+    await Promise.race([Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id))), new Promise((r) => setTimeout(r, 15_000).unref())]);
+    await this.#companies.scimServer?.close();
+    this.#companies.scimServer = undefined;
+    await this.#companies.console?.close();
+    this.#companies.console = undefined;
     await this.goOffline();
     this.#sqlite?.close();
     this.#releaseLock();
@@ -1571,7 +1478,7 @@ export class WeaveNode implements Backend {
     if (space && space.kind !== 'direct' && this.#state(space).closed) throw new WeaveError('daemon.space.closed', { space: space.name }, `${space.name} is closed: it's kept as it is, read-only`);
     if (space && input.as) this.#visitorMay(space, signer.did, input.as, input.kind);
     if (space?.kind === 'project') inner = this.#forBoard(space, inner);
-    const fields: EventFields = space ? sealFor(await this.#cipherReady(space), inner) : inner;
+    const fields: EventFields = space ? sealFor(await this.#managed.cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
     return this.itemFor(event)!;
   }
@@ -1773,7 +1680,7 @@ export class WeaveNode implements Backend {
     // An agent counts as its person: it may start a project for them, which is theirs, never its own.
     if (input.as) this.#agentMay(input.as, KIND_SPACE_CREATE);
     const project = await this.#createSpace('project', input.name);
-    if (input.description) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
+    if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PAGE, body: { ...DEFAULT_PAGE, body: input.description, description: summary(input.description) } }));
     return this.project(project.id);
   }
 
@@ -1802,7 +1709,7 @@ export class WeaveNode implements Backend {
     const body: Record<string, Json> = { invite, expires, key: true };
     if (access.length) body.access = access as unknown as Json;
     if (options.accept) body.accept = true;
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE, body }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_INVITE, body }));
     if (options.accept) {
       return encodeKnock({
         v: 1,
@@ -1821,7 +1728,7 @@ export class WeaveNode implements Backend {
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
     if (isKnockLink(text)) return this.#knock(text, note ?? '');
     const { space, invite, proof } = await this.#takeInvite(text);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_JOIN, body: { invite, ...(proof ? { proof } : {}) } }));
     return this.#spaceInfo(space);
   }
 
@@ -1853,7 +1760,7 @@ export class WeaveNode implements Backend {
     if (knock && this.#selfBodies(KIND_KNOCK_PENDING).some((b) => b.space === parsed.space.id && b.inviter === parsed.inviter)) return { ...look, standing: 'waiting' };
     if (!knock && typeof parsed.key !== 'string') return { ...look, standing: 'old', problem: 'this link was made by an older Weave and no longer works: ask for a new one' };
     if (Date.parse(parsed.expires) < this.clock()) return { ...look, standing: 'expired', problem: 'this link has expired: ask for a new one' };
-    const inside = this.#insideOnly(parsed.space.founder);
+    const inside = this.#companies.insideOnly(parsed.space.founder);
     if (inside) return { ...look, standing: 'elsewhere', problem: inside };
     return look;
   }
@@ -1872,7 +1779,7 @@ export class WeaveNode implements Backend {
       this.#saveSpace(held);
       return { space: held, invite: invite.invite, ...(invite.key ? { proof: joinProof(invite.key, spaceScope(held), this.identity.author) } : {}) };
     }
-    const inside = this.#insideOnly(invite.space.founder);
+    const inside = this.#companies.insideOnly(invite.space.founder);
     if (inside) throw new Error(inside);
     this.#adoptBootstrap(invite.entry);
     const space: StoredSpace = { ...invite.space, entry: invite.entry, via: invite.inviter, ...(invite.boards ? { boards: invite.boards } : {}) };
@@ -1914,7 +1821,7 @@ export class WeaveNode implements Backend {
     const { id, event, space, invite, rights } = matches[0];
     if (input.accept) {
       const member = event.author;
-      this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ADMIT, body: { member, invite } }));
+      this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_ADMIT, body: { member, invite } }));
       const boardKeys = this.#boardKeysFor(space, rights);
       this.replica.write(this.identity, gift({ ...this.#keysForNewcomers(space), ...(boardKeys ? { boards: boardKeys } : {}) } as typeof space, [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
     }
@@ -1993,7 +1900,7 @@ export class WeaveNode implements Backend {
       .map(carriedItem);
     if (!events.length) return false;
     // v: 3, its items carry their envelopes: checkable (or, from before protocol 3, vouched for by the founder).
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json, v: 3 } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CARRY, body: { events: events as unknown as Json, v: 3 } }));
     return true;
   }
 
@@ -2116,7 +2023,7 @@ export class WeaveNode implements Backend {
       const space = d.space as StoredSpace | undefined;
       const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
       if (!space || grant?.role !== 'agent') return true;
-      return visitorCounts(of(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managedRaw(space).setting);
+      return visitorCounts(of(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managed.managedRaw(space).setting);
     });
   }
 
@@ -2125,13 +2032,13 @@ export class WeaveNode implements Backend {
     const space = d.space as StoredSpace | undefined;
     const grant = space && d.event.signer !== d.event.author ? this.replica.authority.grant(d.event.signer) : undefined;
     if (!space || grant?.role !== 'agent') return true;
-    return visitorCounts(this.#state(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managedRaw(space).setting);
+    return visitorCounts(this.#state(space), { key: d.event.signer as Did, author: d.event.author, service: !!grant.name?.startsWith(SERVICE_PREFIX) }, canonicalKind(d.inner.kind), !!this.#managed.managedRaw(space).setting);
   }
 
   /** Before an agent or service of ours signs in a space: refuse what the space wouldn't count, and say why. */
   #visitorMay(space: StoredSpace, key: Did, name: string, kind: string): void {
     const state = this.#state(space);
-    const managed = !!this.#managedRaw(space).setting;
+    const managed = !!this.#managed.managedRaw(space).setting;
     const service = name.startsWith(SERVICE_PREFIX) || this.#services.storedServices().some((s) => s.name === name);
     if (visitorCounts(state, { key, author: this.identity.author, service }, canonicalKind(kind), managed)) return;
     const what = service ? `service "${name}"` : `agent "${name}"`;
@@ -2154,105 +2061,163 @@ export class WeaveNode implements Backend {
     const agents = input.agents ? parseVisitorRule(input.agents) : state.visitors?.agents;
     const services = input.services ? parseVisitorRule(input.services) : state.visitors?.services;
     if ((input.agents && !agents) || (input.services && !services)) throw new WeaveError('daemon.rules.who', undefined, 'a rule says who: everyone, approved or nobody (and optionally which kinds they may write)');
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_VISITORS, body: { ...(agents ? { agents: agents as unknown as Json } : {}), ...(services ? { services: services as unknown as Json } : {}) } }));
     return this.#spaceInfo(space);
   }
 
-  // ---------------------------------------------------------------- audit (stage 9.3)
+  // Companies (companies.ts): the node delegates.
 
-  async audit(input: { space: string; since?: string; until?: string }): Promise<AuditLine[]> {
-    const space = this.#space(input.space);
-    const since = input.since ? new Date(input.since).toISOString() : '';
-    // Up to the end of `until` (stage 15): a date alone means that whole day.
-    const until = input.until ? (/^\d{4}-\d{2}-\d{2}$/.test(input.until) ? `${input.until}T23:59:59.999Z` : new Date(input.until).toISOString()) : '\uffff';
-    const scope = spaceScope(space);
-    const lines: AuditLine[] = [];
-    const line = (time: string, kind: string, author: Did, signer: Did, detail: Json, id: string): AuditLine => {
-      const agent = this.#agentName(signer, author);
-      const name = this.nameOf(author);
-      return { id, time, kind, by: author, ...(name ? { byName: name } : {}), signer, ...(agent ? { agent } : {}), detail: withoutSecrets(detail) };
-    };
-    // Governance: control events, and the company's own (attestations, escrows).
-    for (const d of this.#decodedIn(space.id)) {
-      // Carried events count: after a shred they are the only record left (decoding counts each once).
-      if (d.event.time < since || d.event.time > until) continue;
-      if (classOf(canonicalKind(d.inner.kind)) !== 'control' && d.inner.kind !== KIND_ESCROW_OPENED && d.inner.kind !== KIND_POST_DELETE) continue;
-      lines.push(line(d.event.time, d.inner.kind, d.event.author, d.event.signer, d.inner.body, d.id));
-    }
-    // New keys: who rotated, which epoch (the boxes stay out).
-    for (const r of this.replica.events((e) => e.scope === scope && canonicalKind(e.kind) === KIND_REKEY && e.time >= since && e.time <= until)) {
-      lines.push(line(r.time, KIND_REKEY, r.author, r.signer, { epoch: (r.body as { epoch?: Json } | null)?.epoch ?? null }, r.id));
-    }
-    return lines.sort((a, b) => a.time.localeCompare(b.time));
+  audit(...args: Parameters<Companies['audit']>): ReturnType<Companies['audit']> {
+    return this.#companies.audit(...args);
   }
 
-  // ---------------------------------------------------------------- escrowed recovery (stage 9.2)
-
-  /** What the key service binds an escrow to: the space and the person. */
-  #escrowContext(space: StoredSpace, person: Did) {
-    return { space: `${spaceScope(space)}/escrow/${person}`, epoch: 0 };
+  escrowRecovery(...args: Parameters<Companies['escrowRecovery']>): ReturnType<Companies['escrowRecovery']> {
+    return this.#companies.escrowRecovery(...args);
   }
 
-  async escrowRecovery(input: { space: string; words: string }): Promise<void> {
-    const space = this.#space(input.space);
-    const setting = this.#state(space).managed;
-    if (!setting) throw new Error(`${space.name} isn't a company space: recovery words stay with you`);
-    const words = normalizeWords(input.words);
-    if (recoveryIdentity(words) !== this.identity.author) throw new Error("these words don't belong to this identity");
-    // The words are sealed with a fresh key made of two parts (XyMStMvo): one goes through the key service, so opening is in
-    // its audit; the other is boxed to the company itself (the space's owner). A key service context is no access rule:
-    // every employee may decrypt with it, so its part alone must not be enough. Only the company opens an escrow.
-    const kmsPart = new Uint8Array(randomBytes(32));
-    const companyPart = new Uint8Array(randomBytes(32));
-    const context = this.#escrowContext(space, this.identity.author);
-    const sealed = seal(escrowKey(kmsPart, companyPart), words, `weave/escrow/v2:${context.space}`);
-    const wrapped = await this.#provider(setting).wrap(kmsPart, context);
-    const boxed = boxTo(this.#encryptionKeyOf(space.founder), b64u.encode(companyPart));
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW, body: { person: this.identity.author, v: 2, wrapped, boxed: boxed as unknown as Json, nonce: sealed.nonce, ct: sealed.ct } }));
+  openEscrow(...args: Parameters<Companies['openEscrow']>): ReturnType<Companies['openEscrow']> {
+    return this.#companies.openEscrow(...args);
   }
 
-  async openEscrow(input: { space: string; person: string; for?: string }): Promise<string> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
-    if (!state.managed) throw new Error(`${space.name} isn't a company space`);
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} open an escrow`);
-    const person = this.resolve(input.person);
-    const request = input.for ? decodeRecoveryRequest(input.for) : undefined;
-    if (!request && this.replica.authority.keys(person).org)
-      throw new Error(`${this.nameOf(person) ?? person}'s identity belongs to the company: its words go only to the new computer (there: weave recover-request; here: --for <request>)`);
-    const escrow = this.#decodedIn(space.id)
-      .filter((d) => d.inner.kind === KIND_ESCROW && d.event.author === person && (d.inner.body as { person?: unknown } | null)?.person === person)
-      .at(-1)?.inner.body as { v?: number; wrapped: string; boxed?: Box; nonce: string; ct: string } | undefined;
-    if (!escrow) throw new Error(`${this.nameOf(person) ?? person} left no recovery words in ${space.name}`);
-    const context = this.#escrowContext(space, person);
-    let words: string;
-    if (escrow.v === 2) {
-      // The company's part first: without it, the key service's part opens nothing, and isn't asked.
-      const companyPart = escrow.boxed && this.#tryOpen((me) => {
-        try {
-          return openBox(me.keys.secretKey, me.keys.publicKey, escrow.boxed!) as string;
-        } catch {
-          return undefined;
-        }
-      });
-      if (typeof companyPart !== 'string') throw new Error(`only ${this.nameOf(space.founder) ?? 'the company'} opens recovery words: ask through the company's admin console`);
-      const kmsPart = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
-      words = open(escrowKey(kmsPart, b64u.decode(companyPart)), { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v2:${context.space}`) as string;
-    } else {
-      // Escrows from before v2 went through the key service alone (any employee could open them): leave new ones.
-      const dataKey = await this.#provider(state.managed).unwrap(escrow.wrapped, context);
-      words = open(dataKey, { nonce: escrow.nonce, ct: escrow.ct }, `weave/escrow/v1:${context.space}`) as string;
-    }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ESCROW_OPENED, body: { person, ...(request ? { for: request } : {}) } }));
-    return request ? encodeRecoveryAnswer(person, boxTo(request, { words }) as unknown as Json) : words;
+  companySignIn(...args: Parameters<Companies['companySignIn']>): ReturnType<Companies['companySignIn']> {
+    return this.#companies.companySignIn(...args);
   }
+
+  signInStatus(...args: Parameters<Companies['signInStatus']>): ReturnType<Companies['signInStatus']> {
+    return this.#companies.signInStatus(...args);
+  }
+
+  createCompany(...args: Parameters<Companies['createCompany']>): ReturnType<Companies['createCompany']> {
+    return this.#companies.createCompany(...args);
+  }
+
+  company(...args: Parameters<Companies['company']>): ReturnType<Companies['company']> {
+    return this.#companies.company(...args);
+  }
+
+  companyAction(...args: Parameters<Companies['companyAction']>): ReturnType<Companies['companyAction']> {
+    return this.#companies.companyAction(...args);
+  }
+
+  enrollLink(...args: Parameters<Companies['enrollLink']>): ReturnType<Companies['enrollLink']> {
+    return this.#companies.enrollLink(...args);
+  }
+
+  inviteByEmail(...args: Parameters<Companies['inviteByEmail']>): ReturnType<Companies['inviteByEmail']> {
+    return this.#companies.inviteByEmail(...args);
+  }
+
+  link(...args: Parameters<Companies['link']>): ReturnType<Companies['link']> {
+    return this.#companies.link(...args);
+  }
+
+  links(...args: Parameters<Companies['links']>): ReturnType<Companies['links']> {
+    return this.#companies.links(...args);
+  }
+
+  addAuditStream(...args: Parameters<Companies['addAuditStream']>): ReturnType<Companies['addAuditStream']> {
+    return this.#companies.addAuditStream(...args);
+  }
+
+  removeAuditStream(...args: Parameters<Companies['removeAuditStream']>): ReturnType<Companies['removeAuditStream']> {
+    return this.#companies.removeAuditStream(...args);
+  }
+
+  auditStreams(...args: Parameters<Companies['auditStreams']>): ReturnType<Companies['auditStreams']> {
+    return this.#companies.auditStreams(...args);
+  }
+
+  exportSpace(...args: Parameters<Companies['exportSpace']>): ReturnType<Companies['exportSpace']> {
+    return this.#companies.exportSpace(...args);
+  }
+
+  get deviceCredentials() {
+    return this.#companies.deviceCredentials;
+  }
+
+  set deviceCredentials(value) {
+    this.#companies.deviceCredentials = value;
+  }
+
+  setScim(...args: Parameters<Companies['setScim']>): ReturnType<Companies['setScim']> {
+    return this.#companies.setScim(...args);
+  }
+
+  scim(...args: Parameters<Companies['scim']>): ReturnType<Companies['scim']> {
+    return this.#companies.scim(...args);
+  }
+
+  startServices(...args: Parameters<Companies['startServices']>): ReturnType<Companies['startServices']> {
+    return this.#companies.startServices(...args);
+  }
+
+  setConsole(...args: Parameters<Companies['setConsole']>): ReturnType<Companies['setConsole']> {
+    return this.#companies.setConsole(...args);
+  }
+
+  backup(...args: Parameters<Companies['backup']>): ReturnType<Companies['backup']> {
+    return this.#companies.backup(...args);
+  }
+
+  keystores(...args: Parameters<Companies['keystores']>): ReturnType<Companies['keystores']> {
+    return this.#companies.keystores(...args);
+  }
+
+  moveHomeKey(...args: Parameters<Companies['moveHomeKey']>): ReturnType<Companies['moveHomeKey']> {
+    return this.#companies.moveHomeKey(...args);
+  }
+
+  consoleOperatorLink(...args: Parameters<Companies['consoleOperatorLink']>): ReturnType<Companies['consoleOperatorLink']> {
+    return this.#companies.consoleOperatorLink(...args);
+  }
+
+  consoleInfo(...args: Parameters<Companies['consoleInfo']>): ReturnType<Companies['consoleInfo']> {
+    return this.#companies.consoleInfo(...args);
+  }
+
+  consoleAdmin(...args: Parameters<Companies['consoleAdmin']>): ReturnType<Companies['consoleAdmin']> {
+    return this.#companies.consoleAdmin(...args);
+  }
+
+  isCompanyAdmin(...args: Parameters<Companies['isCompanyAdmin']>): ReturnType<Companies['isCompanyAdmin']> {
+    return this.#companies.isCompanyAdmin(...args);
+  }
+
+  consoleRole(...args: Parameters<Companies['consoleRole']>): ReturnType<Companies['consoleRole']> {
+    return this.#companies.consoleRole(...args);
+  }
+
+  companyAgents(...args: Parameters<Companies['companyAgents']>): ReturnType<Companies['companyAgents']> {
+    return this.#companies.companyAgents(...args);
+  }
+
+  companyDevices(...args: Parameters<Companies['companyDevices']>): ReturnType<Companies['companyDevices']> {
+    return this.#companies.companyDevices(...args);
+  }
+
+  consoleRecord(...args: Parameters<Companies['consoleRecord']>): ReturnType<Companies['consoleRecord']> {
+    return this.#companies.consoleRecord(...args);
+  }
+
+  consoleAction(...args: Parameters<Companies['consoleAction']>): ReturnType<Companies['consoleAction']> {
+    return this.#companies.consoleAction(...args);
+  }
+
+  scimRequest(...args: Parameters<Companies['scimRequest']>): ReturnType<Companies['scimRequest']> {
+    return this.#companies.scimRequest(...args);
+  }
+
+  signIn(...args: Parameters<Companies['signIn']>): ReturnType<Companies['signIn']> {
+    return this.#companies.signIn(...args);
+  }
+
 
   async approveAgent(input: { space: string; agent: string; on?: boolean }): Promise<SpaceInfo> {
     const space = this.#space(input.space);
     const state = this.#state(space);
     if (space.kind === 'direct') throw new WeaveError('daemon.rules.direct', undefined, 'a direct chat has no rules for agents');
     if (!canManage(state, this.identity.author)) throw new WeaveError('daemon.approve.manage.only', { space: space.name }, `only those who manage ${space.name} approve agents and services there`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_AGENT_APPROVE, body: { agent: this.#agentKey(input.agent), on: input.on !== false } }));
     return this.#spaceInfo(space);
   }
 
@@ -2312,7 +2277,7 @@ export class WeaveNode implements Backend {
   /** A space whose newcomers read the last 30 days gets a new key once its key is older than that, if we may rotate it. */
   #rotateMonthly(space: StoredSpace): number {
     const state = this.#state(space);
-    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companyRetention(space)?.maxDays;
+    const forgets = (space.kind !== 'group' && [...boardRulesOf(this.#entries(space), this.#managers(state), this.#seenAt).values()].some((r) => r.keepDays)) || !!this.#companies.companyRetention(space)?.maxDays;
     if (space.kind === 'direct' || (state.history?.value !== '30d' && !forgets) || !canManage(state, this.identity.author)) return 0;
     const start = this.#epochStarts(space).get(currentEpoch(space)) ?? '';
     if (start >= new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()) return 0;
@@ -2355,7 +2320,7 @@ export class WeaveNode implements Backend {
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
     this.replica.write(this.identity, fields);
-    this.#afterRekey(space, epoch, key);
+    this.#managed.afterRekey(space, epoch, key);
   }
 
   /** Keys of the read-limited boards that these rights open, to hand over with an invite. */
@@ -2370,7 +2335,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     const lastActive = new Map<Did, string>();
     const agents = new Map<Did, Set<string>>();
-    const attested = state.managed?.attestor ? this.#attestations(space, state.managed.attestor) : new Map();
+    const attested = state.managed?.attestor ? this.#companies.attestations(space, state.managed.attestor) : new Map();
     for (const entry of this.#entries(space)) {
       const { author, signer, time } = entry.event;
       if (time > (lastActive.get(author) ?? '')) lastActive.set(author, time);
@@ -2387,7 +2352,7 @@ export class WeaveNode implements Backend {
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
       agents: [...(agents.get(m.did) ?? [])],
       ...(state.managed?.attestor && attested.get(m.did) ? { attested: (({ time: _time, ...a }) => a)(attested.get(m.did)!) } : {}),
-      ...(this.#companyVouchedOf(m.did) ? { company: this.nameOf(this.#companyVouchedOf(m.did)!) ?? 'a company' } : {}),
+      ...(this.#companies.companyVouchedOf(m.did) ? { company: this.nameOf(this.#companies.companyVouchedOf(m.did)!) ?? 'a company' } : {}),
     }));
   }
 
@@ -2401,7 +2366,7 @@ export class WeaveNode implements Backend {
         ? new WeaveError('daemon.leave.owner', { space: space.name }, `you own ${space.name}: hand it over to someone first`)
         : new WeaveError('daemon.leave.last', { space: space.name }, `you're the only one in ${space.name}: close it instead`);
     }
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_LEAVE, body: { upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.#spaces.delete(space.id);
     this.#decoded = undefined;
@@ -2419,7 +2384,7 @@ export class WeaveNode implements Backend {
     const to = this.resolve(input.to);
     if (to === this.identity.author) throw new WeaveError('daemon.handover.self', undefined, "that's you");
     if (!state.members.has(to)) throw new WeaveError('daemon.handover.not.member', { who: input.to, space: space.name }, `${input.to} isn't in ${space.name}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HANDOVER, body: { to, upTo: this.#upTo(this.identity.author), at: this.#anchor(this.identity.author, space) } }));
     return this.#spaceInfo(space);
   }
 
@@ -2430,7 +2395,7 @@ export class WeaveNode implements Backend {
     if (!HISTORIES.includes(input.history)) throw new WeaveError('daemon.history.values', undefined, 'history is all (everything), 30d (the last 30 days) or joining (from their invite on)');
     if (!canManage(state, this.identity.author))
       throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
-    if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
+    if ((state.history?.value ?? 'all') !== input.history) this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
     return this.#spaceInfo(space);
   }
 
@@ -2441,7 +2406,7 @@ export class WeaveNode implements Backend {
     if (!canManage(state, this.identity.author))
       throw new WeaveError('daemon.close.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} can close it` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} can close it`);
     if (!!state.closed === input.closed) return this.#spaceInfo(space);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CLOSE, body: { closed: input.closed } }));
     return this.#spaceInfo(space);
   }
 
@@ -2463,7 +2428,7 @@ export class WeaveNode implements Backend {
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
     this.replica.write(this.identity, fields);
-    this.#afterRekey(space, epoch, key);
+    this.#managed.afterRekey(space, epoch, key);
     return 1;
   }
 
@@ -2523,20 +2488,20 @@ export class WeaveNode implements Backend {
     const member = this.resolve(who);
     if (!state.members.has(member)) throw new WeaveError('daemon.remove.not.member', { who, space: space.name }, `${who} is not in ${space.name}`);
     if (member === state.founder) throw new WeaveError('daemon.remove.owner', { space: space.name }, `the owner can't be removed from ${space.name}`);
-    this.replica.write(this.identity, sealFor(await this.#cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
+    this.replica.write(this.identity, sealFor(await this.#managed.cipherReady(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
     const remaining = [...state.members.keys()].filter((did) => did !== member);
     const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
     space.keys[String(epoch)] = key;
     this.#saveSpace(space);
     this.replica.write(this.identity, fields);
-    this.#afterRekey(space, epoch, key);
+    this.#managed.afterRekey(space, epoch, key);
   }
 
   // ---------------------------------------------------------------- communities
 
   async createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo> {
     const community = await this.#createSpace('community', input.name);
-    if (input.description) this.replica.write(this.identity, sealFor(this.#cipher(community), { kind: KIND_PAGE, body: { description: input.description } }));
+    if (input.description) this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description } }));
     return this.community(community.id);
   }
 
@@ -2555,7 +2520,7 @@ export class WeaveNode implements Backend {
   async setCommunity(input: { community: string; description: string }): Promise<CommunityInfo> {
     const community = this.#space(input.community, 'community');
     this.#maintainerState(community);
-    this.replica.write(this.identity, sealFor(this.#cipher(community), { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
     return this.community(community.id);
   }
 
@@ -3136,7 +3101,7 @@ export class WeaveNode implements Backend {
     if (!create) throw new Error('say what the routine creates: a board and a title pattern ({date}, {day}, {weekday})');
     this.#board(space, this.#spacePosts(space).boards, create.board);
     const id = input.id?.trim() || randomUUID().slice(0, 8);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_ROUTINE, body: { id, name, on: input.on !== false, trigger, create } as unknown as Json }));
     return (await this.routines({ space: space.id })).find((r) => r.id === id)!;
   }
 
@@ -3144,7 +3109,7 @@ export class WeaveNode implements Backend {
     const space = this.#routineSpace(input.space);
     this.#maintainerState(space);
     if (!this.#routineRecords(space).some((r) => r.id === input.id)) throw new Error('no such routine');
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_ROUTINE, body: { id: input.id, removed: true } }));
   }
 
   async runRoutine(input: { space?: string; id: string }): Promise<PostInfo> {
@@ -3579,7 +3544,7 @@ export class WeaveNode implements Backend {
     };
     const read = grantees(input.read, before.read);
     const write = grantees(input.write, before.write);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_BOARD_ACCESS, body: { board: board.name, read: read as unknown as Json, write: write as unknown as Json } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD_ACCESS, body: { board: board.name, read: read as unknown as Json, write: write as unknown as Json } }));
     await this.#reconcileBoards(project);
     return this.boards(project.id);
   }
@@ -3603,7 +3568,7 @@ export class WeaveNode implements Backend {
     if (input.sort !== undefined) body.sort = input.sort;
     if (input.position !== undefined) body.position = input.position;
     if (input.on === false) body.on = false;
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_BOARD, body }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_BOARD, body }));
     return this.boards(project.id);
   }
 
@@ -3617,7 +3582,7 @@ export class WeaveNode implements Backend {
       if (match.length !== 1) throw new Error(`no single post ${ref} in ${board.title}`);
       return match[0].id;
     });
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_CURATE, body: { board: board.name, pinned } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_CURATE, body: { board: board.name, pinned } }));
     return this.boards(space.id);
   }
 
@@ -3737,7 +3702,7 @@ export class WeaveNode implements Backend {
     const project = this.#project(input.project);
     const state = this.#maintainerState(project);
     const group = this.#space(input.group, 'group');
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: true } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: true } }));
     // Inviting the group is the consent for everyone in it right now.
     const newcomers = [...this.#state(group).members.keys()].filter((did) => !state.members.has(did));
     this.#admitAll(project, group, newcomers);
@@ -3747,14 +3712,14 @@ export class WeaveNode implements Backend {
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const group = this.#knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: false } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_PROJECT_GROUP, body: { group: group.id, name: group.name, on: false } }));
   }
 
   async setRule(input: { project: string; group: string; auto: boolean }): Promise<void> {
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const group = this.#knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_RULE, body: { group: group.id, auto: input.auto } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_RULE, body: { group: group.id, auto: input.auto } }));
   }
 
   async admissions(ref?: string): Promise<Admission[]> {
@@ -3778,7 +3743,7 @@ export class WeaveNode implements Backend {
       for (const other of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
         const otherState = this.#state(other);
         if (otherState.maintainers.has(this.identity.author) && otherState.groups.has(group.id) && !otherState.groups.get(group.id)!.auto) {
-          this.replica.write(this.identity, sealFor(this.#cipher(other), { kind: KIND_RULE, body: { group: group.id, auto: true } }));
+          this.replica.write(this.identity, sealFor(this.#managed.cipher(other), { kind: KIND_RULE, body: { group: group.id, auto: true } }));
         }
       }
     }
@@ -3790,7 +3755,7 @@ export class WeaveNode implements Backend {
     const project = this.#project(input.project);
     this.#maintainerState(project);
     const group = this.#knownGroup(project, input.group);
-    this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_DECLINE, body: { member: this.resolve(input.who), via: group.id } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_DECLINE, body: { member: this.resolve(input.who), via: group.id } }));
   }
 
   /**
@@ -3819,20 +3784,20 @@ export class WeaveNode implements Backend {
     changed += this.#applyShreds();
     changed += this.#forget();
     changed += this.#release();
-    changed += await this.#renewSignIn();
-    for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#unlock(space);
+    changed += await this.#companies.renewSignIn();
+    for (const space of [...this.#spaces.values()]) if (this.#state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
-    await Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id)));
-    changed += await this.#attest();
-    changed += await this.#applyDirectory();
-    changed += await this.#offboard();
+    await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
+    changed += await this.#companies.attest();
+    changed += await this.#companies.applyDirectory();
+    changed += await this.#companies.offboard();
     changed += this.#anchorRemovals();
     changed += this.#settleLosses();
-    changed += await this.#orgDuties();
-    changed += await this.#continueEnrollment();
+    changed += await this.#companies.orgDuties();
+    changed += await this.#companies.continueEnrollment();
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
-    await this.#streamAudit();
-    await Promise.all([...this.#halves.keys()].map((id) => this.#publishHalf(id)));
+    await this.#companies.streamAudit();
+    await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
     // Bookkeeping for keepers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
     if (!this.#isLinkedNode) {
       this.#writeKeepIndex();
@@ -4006,7 +3971,7 @@ export class WeaveNode implements Backend {
 
   /** Follow someone where only the two of us read it: sealed in our direct chat. Friends without a public follow. */
   #tellFollow(peer: Did, on: boolean): void {
-    this.replica.write(this.identity, sealFor(this.#cipher(this.#direct(peer)), { kind: KIND_FOLLOW, body: edgeBody(peer, on) }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(this.#direct(peer)), { kind: KIND_FOLLOW, body: edgeBody(peer, on) }));
   }
 
   /**
@@ -4065,8 +4030,8 @@ export class WeaveNode implements Backend {
       contact: this.#contacts().has(did),
       posts: this.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
-      ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.#companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.#companyClaim(did)),
-      links: this.#linksOf(did).filter((l) => l.state === 'linked'),
+      ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.#companies.companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.#companies.companyClaim(did)),
+      links: this.#companies.linksOf(did).filter((l) => l.state === 'linked'),
     };
   }
 
@@ -4690,7 +4655,7 @@ export class WeaveNode implements Backend {
     for (const space of this.#spaces.values()) {
       if (space.kind !== 'group' && space.kind !== 'project') continue;
       if (this.#state(space).members.size < 2) continue;
-      this.replica.append(this.#identity, sealFor(this.#cipher(space), { kind: KIND_MSG, body: { text, moved: '0.4' } }));
+      this.replica.append(this.#identity, sealFor(this.#managed.cipher(space), { kind: KIND_MSG, body: { text, moved: '0.4' } }));
     }
   }
 
@@ -4725,7 +4690,7 @@ export class WeaveNode implements Backend {
       if (space.kind !== 'group' && space.kind !== 'project') continue;
       if (this.#state(space).members.size < 2) continue;
       try {
-        farewells[space.id] = this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MSG, body: { text, moved: 3 } }, { legacy: true })).id;
+        farewells[space.id] = this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_MSG, body: { text, moved: 3 } }, { legacy: true })).id;
       } catch {
         locked = true;
       }
@@ -5013,7 +4978,7 @@ export class WeaveNode implements Backend {
     const state = this.#state(group);
     const current = state.members.get(member);
     const until = grantUntil(new Date(), months, current?.until);
-    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_MEMBERSHIP, body: { member, until } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(group), { kind: KIND_MEMBERSHIP, body: { member, until } }));
     // New (or returning) members get the tier's keys, posted where their node will look for them.
     if (!current) {
       this.replica.write(this.identity, gift(this.#keysForNewcomers(group), [member], spaceScope(this.#direct(member)), this.#entryPoint(), this.#encryptionKeyOf));
@@ -5153,7 +5118,7 @@ export class WeaveNode implements Backend {
       }
       this.#recordLicense(record.tier, record.member, record.license, check);
       if (!check.ok) continue;
-      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_MEMBERSHIP, body: { member: record.member, until: grantUntil(new Date(now), 1, until) } }));
+      this.replica.write(this.identity, sealFor(this.#managed.cipher(group), { kind: KIND_MEMBERSHIP, body: { member: record.member, until: grantUntil(new Date(now), 1, until) } }));
       renewed++;
     }
     return renewed;
@@ -5229,13 +5194,13 @@ export class WeaveNode implements Backend {
       if (!state.tier) continue;
       const expired = [...state.members.values()].filter((m) => m.until && m.until <= now).map((m) => m.did);
       if (!expired.length) continue;
-      for (const member of expired) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
+      for (const member of expired) this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_REMOVE, body: { member, upTo: this.#upTo(member), at: this.#anchor(member, space) } }));
       const remaining = [...state.members.keys()].filter((did) => !expired.includes(did));
       const { fields, epoch, key } = rekey(space, remaining, this.#encryptionKeyOf);
       space.keys[String(epoch)] = key;
       this.#saveSpace(space);
       this.replica.write(this.identity, fields);
-      this.#afterRekey(space, epoch, key);
+      this.#managed.afterRekey(space, epoch, key);
       removed += expired.length;
     }
     return removed;
@@ -6451,7 +6416,7 @@ export class WeaveNode implements Backend {
       if (typeof b.invite !== 'string' || typeof b.expires !== 'string' || (b.expires > now && b.key === true) || closed.has(b.invite)) continue;
       const state = this.#state(space);
       const joined = [...state.members.values()].filter((m) => m.invite === b.invite).map((m) => m.did);
-      this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
+      this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite: b.invite, joined } }));
       closed.add(b.invite);
       n++;
     }
@@ -6718,7 +6683,7 @@ export class WeaveNode implements Backend {
     const role = space.kind === 'community' ? 'moderator' : 'maintainer';
     if (on && !state.members.has(member)) throw new Error(`${who} isn't in ${space.name}`);
     if (!on && member === state.founder) throw new Error(`the owner always stays a ${role}`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member), at: this.#anchor(member, space) }) } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_MAINTAINER, body: { member, on, ...(on ? {} : { upTo: this.#upTo(member), at: this.#anchor(member, space) }) } }));
   }
 
   /** A board of a space, by name or title. */
@@ -6731,11 +6696,11 @@ export class WeaveNode implements Backend {
 
   async #createSpace(kind: SpaceKind, name: string, extra: Record<string, Json> = {}): Promise<StoredSpace> {
     if (!name?.trim()) throw new Error(`a ${kind} needs a name`);
-    const inside = this.#insideOnly();
+    const inside = this.#companies.insideOnly();
     if (inside) throw new Error(inside);
     const space: StoredSpace = { ...newSpace(kind, name.trim(), this.identity.author), entry: { topics: [], bootstrap: [] } };
     await this.#addSpace(space);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SPACE_CREATE, body: { name: space.name, ...extra } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SPACE_CREATE, body: { name: space.name, ...extra } }));
     return space;
   }
 
@@ -6747,7 +6712,7 @@ export class WeaveNode implements Backend {
   #saveSpace(space: StoredSpace): void {
     this.#decoded = undefined;
     // New keys may open its setting and halves: read them again.
-    this.#rawCache.delete(space.id);
+    this.#managed.rawCache.delete(space.id);
     this.#spaces.set(space.id, space);
     saveSpace(this.home, space);
     // At once: what is written next in this space must not reach anyone who lost it.
@@ -6858,1417 +6823,31 @@ export class WeaveNode implements Backend {
     return typeof invite === 'string' && this.#decodedIn(space.id).some((x) => canonicalKind(x.inner.kind) === KIND_INVITE && (x.inner.body as { invite?: unknown } | null)?.invite === invite);
   }
 
-  // ---------------------------------------------------------------- managed spaces (stage 6)
+  // ManagedKeys (managed.ts): the node delegates.
 
-  /** How this node signs in to key services: a token, or the person's SSO token (see #ssoToken). Set by the app or by tests. */
-  kmsCredentials?: VaultCredentials;
-  /** Unlocked epoch keys of managed spaces, in memory: `space:epoch` → key, until when. */
-  #managedKeys = new Map<string, { key: string; until: number }>();
-  /** Unlocks in flight, per space: a second asker waits for the first. */
-  #unlocking = new Map<string, Promise<number>>();
-  #managedProblems = new Map<string, string>();
-
-  #provider(setting: ManagedSetting): KeyProvider {
-    // A company's node signs in to its key service with a Vault token or an Azure app's secret (or token), from its environment;
-    // people sign in with their company account.
-    const env = process.env;
-    return providerFor(
-      setting.provider as unknown as ProviderSpec,
-      this.home,
-      this.kmsCredentials ?? {
-        ...envCredentials(env),
-        idToken: () => this.#ssoToken(),
-        delegated: (scope) => this.#delegated(scope),
-      },
-    );
-  }
-
-  /** The person's latest company sign-in (stage 6.3); none yet. */
-  #ssoToken(): string | undefined {
-    return this.#sso()?.idToken;
-  }
-
-  /** Access tokens for other resources, issued to this person from their sign-in (stage 14), until they run out. */
-  #delegatedTokens = new Map<string, { token: string; until: number }>();
-
-  /** An access token for a resource (Azure Key Vault), as this person: from their sign-in's refresh token. */
-  async #delegated(scope: string): Promise<string | undefined> {
-    const kept = this.#delegatedTokens.get(scope);
-    if (kept && kept.until > Date.now()) return kept.token;
-    const sso = this.#sso();
-    if (!sso?.refreshToken || !sso.issuer || !sso.clientId) return undefined;
-    const fresh = await delegatedToken({ issuer: sso.issuer, clientId: sso.clientId }, sso.refreshToken, scope);
-    // Entra may hand out a new refresh token with it: keep the newest.
-    if (fresh.refreshToken && fresh.refreshToken !== sso.refreshToken) this.#saveSso({ ...sso, refreshToken: fresh.refreshToken });
-    this.#delegatedTokens.set(scope, { token: fresh.accessToken, until: fresh.expires });
-    return fresh.accessToken;
-  }
-
-  /** The company sign-in kept here (sealed at rest): the ID token, and what renews it (stage 13). */
-  #sso(): Sso | undefined {
-    return readSecretJson<Sso>(this.home, joinPath(this.home.dir, 'sso.json'));
-  }
-
-  #saveSso(sso: Sso): void {
-    writeSecretJson(this.home, joinPath(this.home.dir, 'sso.json'), sso);
-  }
-
-  #signInProblem?: string;
-
-  /** The company group this company account belongs to (not the company's own node). */
-  #myCompanyGroup(): StoredSpace | undefined {
-    const here = this.#companyHere();
-    return here && here.group.founder !== this.identity.author ? here.group : undefined;
-  }
-
-  /**
-   * Keep a company account signed in (stage 13): renew the ID token with the
-   * refresh token before it runs out, and sign in to the company again before
-   * its vouching (24 hours) runs out, so nobody has to.
-   */
-  async #renewSignIn(): Promise<number> {
-    const sso = this.#sso();
-    if (!sso?.idToken) return 0;
-    const now = this.clock();
-    let changed = 0;
-    if (sso.refreshToken && sso.issuer && sso.clientId && (sso.expires ?? 0) - now < 10 * 60_000) {
-      try {
-        const fresh = await refreshSignIn({ issuer: sso.issuer, clientId: sso.clientId }, sso.refreshToken);
-        Object.assign(sso, fresh);
-        this.#saveSso(sso);
-        this.#signInProblem = undefined;
-        changed++;
-      } catch (error) {
-        this.#signInProblem = (error as Error).message;
-        return changed;
-      }
-    }
-    const group = this.#myCompanyGroup();
-    if (!group || (sso.expires ?? 0) <= now || !this.#state(group).members.has(this.identity.author)) return changed;
-    const vouched = this.#attestations(group, group.founder).get(this.identity.author);
-    const lastSignIn = this.#decodedIn(group.id).filter((d) => d.inner.kind === KIND_SIGNIN && d.event.author === this.identity.author).at(-1)?.event.time ?? '';
-    const soon = new Date(now + 6 * 3_600_000).toISOString();
-    const hourAgo = new Date(now - 3_600_000).toISOString();
-    if ((!vouched || vouched.until < soon) && lastSignIn < hourAgo) {
-      await this.signIn({ space: group.id, idToken: sso.idToken });
-      changed++;
-    }
-    return changed;
-  }
-
-  /** Sign in with your company account again, in the browser (when renewing stopped working, or to switch accounts). */
-  async companySignIn(): Promise<SignInStatus> {
-    const group = this.#myCompanyGroup();
-    const here = this.#companyHere();
-    const sso = this.#sso();
-    const config = sso?.issuer && sso.clientId ? { issuer: sso.issuer, clientId: sso.clientId } : here?.org.signIn;
-    if (!group || !config) throw new Error("this isn't a company account, or its company hasn't said where to sign in");
-    const tokens = await browserSignIn(config, openInBrowser, { for: this.identity.author, ...(claimsOf(sso?.idToken ?? '').email ? { loginHint: claimsOf(sso!.idToken).email! } : {}) });
-    this.#saveSso({ ...tokens, ...config });
-    this.#signInProblem = undefined;
-    await this.signIn({ space: group.id, idToken: tokens.idToken, ...(tokens.salt ? { salt: tokens.salt } : {}) });
-    return this.signInStatus();
-  }
-
-  async signInStatus(): Promise<SignInStatus> {
-    const here = this.#companyHere();
-    const group = this.#myCompanyGroup();
-    if (!here || !group) return { company: false };
-    const sso = this.#sso();
-    const vouched = this.#attestations(group, group.founder).get(this.identity.author);
-    const claims = claimsOf(sso?.idToken ?? '');
-    return {
-      company: true,
-      name: this.nameOf(here.group.founder) ?? here.group.name,
-      ...(claims.email ? { account: claims.email } : {}),
-      ...(sso?.expires ? { tokenUntil: new Date(sso.expires).toISOString() } : {}),
-      renews: !!sso?.refreshToken,
-      ...(vouched ? { vouchedUntil: vouched.until } : {}),
-      ...(this.#signInProblem ? { problem: this.#signInProblem } : {}),
-    };
-  }
-
-  /** Per space, its managed setting and halves: built once, kept up to date as events come, dropped when its keys change. */
-  #rawCache = new Map<string, ManagedRaw>();
-
-  /**
-   * A space's managed setting and wrapped company halves, read straight from
-   * its events with the Weave half alone (that's how they're sealed): what
-   * unlocks a space can't need the space unlocked, nor decoding, which needs
-   * this. Kept until the next event arrives.
-   */
-  #managedRaw(space: StoredSpace): ManagedRaw {
-    const kept = this.#rawCache.get(space.id);
-    if (kept) return kept;
-    const scope = spaceScope(space);
-    const out: ManagedRaw = { parts: new Map() };
-    for (const r of this.replica.events((e) => e.scope === scope && e.kind === KIND_SEALED && !e.missing)) this.#takeRaw(space, out, r);
-    this.#rawCache.set(space.id, out);
-    return out;
-  }
-
-  /** One event of a space, for its managed setting and halves (only those sealed with the Weave half open here). */
-  #takeRaw(space: StoredSpace, into: ManagedRaw, r: WeaveRecord): boolean {
-    const inner = openIn(space, r);
-    if (!inner || (inner.kind !== KIND_MANAGED && inner.kind !== KIND_KMS)) return false;
-    const b = inner.body as Record<string, unknown> | null;
-    if (inner.kind === KIND_MANAGED && r.author === space.founder && b?.provider && Number(b.ttlMinutes) > 0 && Number(b.graceHours) >= 0 && (!into.setting || r.time >= into.setting.time))
-      into.setting = { provider: b.provider as Json, ttlMinutes: Number(b.ttlMinutes), graceHours: Number(b.graceHours), ...(isDid(b.attestor) ? { attestor: b.attestor } : {}), ...(typeof b.company === 'string' ? { company: b.company } : {}), ...(Number.isSafeInteger(b.from) ? { from: b.from as number } : {}), by: r.author, time: r.time };
-    if (inner.kind === KIND_KMS && Number.isSafeInteger(b?.epoch) && typeof b?.wrapped === 'string') {
-      // Every author's part kept apart: which counts is decided by whose rekey we seal with (#kmsParts).
-      let byAuthor = into.parts.get(b.epoch as number);
-      if (!byAuthor) into.parts.set(b.epoch as number, (byAuthor = new Map()));
-      if (!byAuthor.has(r.author)) byAuthor.set(r.author, b.wrapped);
-    }
-    return true;
-  }
-
-  /**
-   * Each epoch's company half (WUCPqIBs): the one by whoever made the rekey we
-   * seal with, else the owner's, else the first. A part from anyone else (any
-   * member can seal one with the Weave half) never stands in for it.
-   */
-  #kmsParts(space: StoredSpace): Map<number, string> {
-    const out = new Map<number, string>();
-    for (const [epoch, byAuthor] of this.#managedRaw(space).parts) {
-      const rekeyer = space.rekeyers?.[String(epoch)];
-      const part = rekeyer ? byAuthor.get(rekeyer) : (byAuthor.get(space.founder) ?? byAuthor.values().next().value);
-      if (part) out.set(epoch, part);
-    }
-    return out;
-  }
-
-  /** One epoch's key, from both halves. */
-  #splitKey(space: StoredSpace, epoch: number, weavePart: string, kmsPart: Uint8Array): string {
-    const info = `weave/managed-epoch/v1:${space.id}:${epoch}`;
-    return b64u.encode(new Uint8Array(hkdfSync('sha256', Buffer.concat([b64u.decode(weavePart), kmsPart]), Buffer.alloc(0), info, 32)));
-  }
-
-  /** On disk while offline grace allows (sealed at rest): `space:epoch` → key, until. */
-  #graceCache(): Record<string, { key: string; until: number }> {
-    return readSecretJson<Record<string, { key: string; until: number }>>(this.home, joinPath(this.home.dir, 'managed-keys.json')) ?? {};
-  }
-
-  #remember(space: StoredSpace, setting: ManagedSetting, epoch: number, key: string): void {
-    const now = this.clock();
-    this.#managedKeys.set(`${space.id}:${epoch}`, { key, until: now + setting.ttlMinutes * 60_000 });
-    if (setting.graceHours > 0) {
-      const cache = this.#graceCache();
-      cache[`${space.id}:${epoch}`] = { key, until: now + setting.graceHours * 3_600_000 };
-      writeSecretJson(this.home, joinPath(this.home.dir, 'managed-keys.json'), cache);
-    }
-  }
-
-  /**
-   * A space as sealing and opening see it: for a managed space, the epochs
-   * with a company half carry the key made of both halves, while unlocked
-   * (in memory for the TTL, or on disk within the offline grace); locked ones
-   * are left out, so nothing can be read or written with them.
-   */
-  #cipher(space: StoredSpace): StoredSpace {
-    const setting = this.#managedRaw(space).setting;
-    if (!setting) return space;
-    const parts = this.#kmsParts(space);
-    const now = this.clock();
-    const grace = parts.size ? this.#graceCache() : {};
-    const keys: Record<string, string> = {};
-    let locked = false;
-    // From which epoch on the company's half is needed (yHsKySEi): the setting says, or (settings from before) the first epoch with one.
-    const from = setting.from ?? (parts.size ? Math.min(...parts.keys()) : Infinity);
-    for (const [epoch, weavePart] of Object.entries(space.keys)) {
-      const id = `${space.id}:${epoch}`;
-      const memory = this.#managedKeys.get(id);
-      if (memory && memory.until > now) {
-        keys[epoch] = memory.key;
-        this.#decodedValidUntil = Math.min(this.#decodedValidUntil, Math.max(memory.until, grace[id]?.until ?? 0));
-      } else if (parts.has(Number(epoch))) {
-        if (grace[id] && grace[id].until > now) {
-          keys[epoch] = grace[id].key;
-          this.#decodedValidUntil = Math.min(this.#decodedValidUntil, grace[id].until);
-        } else locked = true;
-      } else if (!memory && Number(epoch) < from) keys[epoch] = weavePart; // from before the space was managed
-      else locked = true;
-    }
-    if (locked) void this.#unlock(space);
-    // The newest epoch locked: it stays the newest, without a key, so writing waits for it (sealFor refuses) instead of using an older one.
-    const newest = String(currentEpoch(space));
-    if (!(newest in keys)) keys[newest] = undefined as unknown as string;
-    return { ...space, keys };
-  }
-
-  /** A space's keys to write with: a managed space's newest epoch unlocked first, if it can be (else sealFor refuses to write). */
-  async #cipherReady(space: StoredSpace): Promise<StoredSpace> {
-    const cipher = this.#cipher(space);
-    if (cipher.keys[String(currentEpoch(cipher))]) return cipher;
-    await this.#unlock(space);
-    return this.#cipher(space);
-  }
-
-  /** Unlock the company halves this node doesn't hold (or whose time ran out). */
-  async #unlock(space: StoredSpace): Promise<number> {
-    const running = this.#unlocking.get(space.id);
-    if (running) return running;
-    const work = this.#unlockNow(space).finally(() => this.#unlocking.delete(space.id));
-    this.#unlocking.set(space.id, work);
-    return work;
-  }
-
-  /** The earliest time a managed key used by the decoded views runs out: then they decode again, without it. */
-  #decodedValidUntil = Infinity;
-
-  async #unlockNow(space: StoredSpace): Promise<number> {
-    const setting = this.#managedRaw(space).setting;
-    if (!setting) return 0;
-    let unlocked = 0;
-    let problem: string | undefined;
-    try {
-      const provider = this.#provider(setting);
-      const now = this.clock();
-      for (const [epoch, wrapped] of this.#kmsParts(space)) {
-        const weavePart = space.keys[String(epoch)];
-        const kept = this.#managedKeys.get(`${space.id}:${epoch}`);
-        if (!weavePart || (kept && kept.until > now)) continue;
-        // Each epoch on its own: one that can't be unwrapped doesn't keep the others locked (WUCPqIBs).
-        try {
-          const kmsPart = await provider.unwrap(wrapped, { space: spaceScope(space), epoch });
-          this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
-          unlocked++;
-        } catch (error) {
-          problem = `key ${epoch}: ${(error as Error).message}`;
-        }
-      }
-    } catch (error) {
-      problem = (error as Error).message;
-    }
-    if (problem) this.#managedProblems.set(space.id, problem);
-    else this.#managedProblems.delete(space.id);
-    if (unlocked) this.#decoded = undefined;
-    return unlocked;
-  }
-
-  /** After a rekey in a managed space: a fresh company half, wrapped by the provider and published. */
-  #afterRekey(space: StoredSpace, epoch: number, weavePart: string): void {
-    const setting = this.#managedRaw(space).setting;
-    if (!setting) return;
-    const kmsPart = new Uint8Array(randomBytes(32));
-    (space.rekeyers ??= {})[String(epoch)] = this.identity.author;
-    this.#saveSpace(space);
-    this.#remember(space, setting, epoch, this.#splitKey(space, epoch, weavePart, kmsPart));
-    this.#halves.set(`${space.id}:${epoch}`, { space, epoch, kmsPart });
-    this.#saveHalves();
-    void this.#publishHalf(`${space.id}:${epoch}`);
-  }
-
-  /**
-   * Halves not published yet, kept on disk (sealed at rest) so that a restart
-   * doesn't lose them (AsPMzM8O): without its half nobody else ever reads that
-   * epoch, and after the grace not even we.
-   */
-  #saveHalves(): void {
-    const file = joinPath(this.home.dir, 'managed-halves.json');
-    const out: Record<string, { space: string; epoch: number; kmsPart: string }> = {};
-    for (const [id, h] of this.#halves) out[id] = { space: h.space.id, epoch: h.epoch, kmsPart: b64u.encode(h.kmsPart) };
-    writeSecretJson(this.home, file, out);
-  }
-
-  #loadHalves(): void {
-    const saved = readSecretJson<Record<string, { space: string; epoch: number; kmsPart: string }>>(this.home, joinPath(this.home.dir, 'managed-halves.json')) ?? {};
-    for (const [id, h] of Object.entries(saved)) {
-      const space = this.#spaces.get(h.space);
-      const setting = space && this.#managedRaw(space).setting;
-      const weavePart = space?.keys[String(h.epoch)];
-      if (!space || !setting || !weavePart) continue;
-      const kmsPart = b64u.decode(h.kmsPart);
-      this.#halves.set(id, { space, epoch: h.epoch, kmsPart });
-      // Ours to read with meanwhile, as before the restart.
-      if (!this.#managedKeys.has(id)) this.#remember(space, setting, h.epoch, this.#splitKey(space, h.epoch, weavePart, kmsPart));
-    }
-  }
-
-  /** Company halves wrapped and published in the background; kept until published, and tried again on reconcile. */
-  #halves = new Map<string, { space: StoredSpace; epoch: number; kmsPart: Uint8Array; publishing?: Promise<void> }>();
-
-  #publishHalf(id: string): Promise<void> {
-    const half = this.#halves.get(id);
-    if (!half) return Promise.resolve();
-    half.publishing ??= (async () => {
-      const { space, epoch, kmsPart } = half;
-      try {
-        const setting = this.#managedRaw(space).setting!;
-        const wrapped = await this.#provider(setting).wrap(kmsPart, { space: spaceScope(space), epoch });
-        this.replica.write(this.identity, sealFor(space, { kind: KIND_KMS, body: { epoch, wrapped } }));
-        this.#halves.delete(id);
-        this.#saveHalves();
-      } catch (error) {
-        this.#managedProblems.set(space.id, `couldn't wrap the new key: ${(error as Error).message}`);
-      } finally {
-        half.publishing = undefined;
-      }
-    })();
-    return half.publishing;
-  }
-
-  // ---------------------------------------------------------------- company accounts (stage 10)
-
-  /** A company group's settings, if it is one: what the company that founded it signed there. */
-  #orgOf(group: StoredSpace): OrgState | undefined {
-    // Only a group managed as its own company group can be one; that's read without decoding it.
-    if (group.kind !== 'group' || this.#managedRaw(group).setting?.company !== group.id) return undefined;
-    return this.#memo(`org:${group.id}`, () => orgState(group.founder, this.#decodedIn(group.id)));
-  }
-
-  /** The company groups this node runs: it founded them as the company. */
-  #companyGroups(): StoredSpace[] {
-    return [...this.#spaces.values()].filter((s) => s.kind === 'group' && s.founder === this.identity.author && this.#orgOf(s));
-  }
-
-  /** The company this node runs, else the one this person belongs to (their own company's, for a company-owned identity). */
-  #companyHere(): { group: StoredSpace; org: OrgState } | undefined {
-    const groups = [...this.#spaces.values()].filter((s) => s.kind === 'group');
-    const owner = this.replica.authority.keys(this.identity.author).org;
-    const order = [this.identity.author, ...(owner ? [owner] : [])];
-    for (const founder of [...order, undefined]) {
-      for (const group of groups) {
-        if (founder !== undefined ? group.founder !== founder : order.includes(group.founder)) continue;
-        const org = this.#orgOf(group);
-        if (org) return { group, org };
-      }
-    }
-    return undefined;
-  }
-
-  /** The company's spaces besides its group: founded by it, vouched for through the group. */
-  #companySpaces(group: StoredSpace): StoredSpace[] {
-    return [...this.#spaces.values()].filter((s) => s.id !== group.id && s.founder === group.founder && this.#managedRaw(s).setting?.company === group.id);
-  }
-
-  /** Who the company vouches for right now, with their sign-in groups. */
-  #vouched(group: StoredSpace): Map<Did, { groups: string[] }> {
-    const now = new Date(this.clock()).toISOString();
-    const out = new Map<Did, { groups: string[] }>();
-    for (const [did, a] of this.#attestations(group, group.founder)) if (a.until > now && !this.replica.authority.frozen(did)) out.set(did, { groups: a.groups });
-    return out;
-  }
-
-  #isOrgAdmin(group: StoredSpace, org: OrgState, did: Did): boolean {
-    return did === group.founder || (!!org.admins && !!this.#vouched(group).get(did)?.groups.includes(org.admins));
-  }
-
-  #companyOfPerson(did: Did): NonNullable<Profile['company']> {
-    const org = this.replica.authority.keys(did).org!;
-    return { did: org, name: this.nameOf(org), ...(this.replica.authority.frozen(did) ? { frozen: true as const } : {}) };
-  }
-
-  /**
-   * The company someone belongs to, as far as this node can tell (MHV79Ro6):
-   * the one their identity names, if that company has them in its company
-   * group. Anyone can name a company in their identity; only the company puts
-   * them in its group. A bare claim counts only for what it costs the claimant
-   * (the company may freeze them; its policy holds them).
-   */
-  #companyVouchedOf(did: Did): Did | undefined {
-    const claim = this.#companyClaim(did);
-    return claim?.vouched ? claim.org : undefined;
-  }
-
-  /** The company someone's identity names, and whether it vouches for them as far as this node sees: yes, no (we hold its group), or can't tell. */
-  #companyClaim(did: Did): { org: Did; vouched?: boolean } | undefined {
-    const org = this.replica.authority.keys(did).org;
-    if (!org) return undefined;
-    // A freeze by that company is its word too: it held them.
-    if (this.replica.authority.frozen(did)) return { org, vouched: true };
-    const groups = [...this.#spaces.values()].filter((s) => s.kind === 'group' && s.founder === org && !!this.#orgOf(s));
-    if (!groups.length) return { org };
-    return { org, vouched: groups.some((g) => this.#state(g).members.has(did)) };
-  }
-
-  async createCompany(input: CreateCompanyInput): Promise<CompanyInfo> {
-    if (this.#companyGroups().length) throw new Error('this node already runs a company');
-    if (!input.admins?.trim()) throw new Error("name the sign-in group of the company's admins");
-    if (!input.issuer || !input.audience) throw new Error("the company's sign-in: its issuer and the audience its tokens name");
-    const group = await this.#createSpace('group', input.name);
-    this.config = { ...this.config, attestor: { issuer: input.issuer, audience: input.audience, ...(input.hours ? { hours: input.hours } : {}) } };
-    saveConfig(this.home, this.config);
-    await this.manageSpace({ space: group.id, provider: input.provider as ProviderSpec, ttlMinutes: input.ttlMinutes, graceHours: input.graceHours, attestor: this.identity.author, company: group.id });
-    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_SETTINGS, body: { admins: input.admins.trim(), links: true, signIn: { issuer: input.issuer, clientId: input.audience } } }));
-    return (await this.company())!;
-  }
-
-  async company(): Promise<CompanyInfo | undefined> {
-    const here = this.#companyHere();
-    if (!here) return undefined;
-    const { group, org } = here;
-    const name = (id: string) => this.#spaces.get(id)?.name ?? id;
-    return {
-      did: group.founder,
-      name: this.nameOf(group.founder) ?? group.name,
-      group: { id: group.id, name: group.name },
-      runsHere: group.founder === this.identity.author,
-      admin: this.#isOrgAdmin(group, org, this.identity.author),
-      ...(org.admins ? { admins: org.admins } : {}),
-      ...(org.auditors ? { auditors: org.auditors } : {}),
-      ...(org.helpdesk ? { helpdesk: org.helpdesk } : {}),
-      links: org.links,
-      policy: org.policy,
-      retention: org.retention,
-      spaceRetention: org.spaceRetention,
-      chats: org.chats.map((c) => ({ space: c.space, name: name(c.space), people: c.people.map((d) => this.nameOf(d) ?? d) })),
-      maps: org.maps.map((m) => ({ ...m, spaceName: name(m.space) })),
-      start: org.start?.contacts ?? [],
-      spaces: this.#companySpaces(group).map((s) => ({ id: s.id, kind: s.kind, name: s.name })),
-      requests: org.requests.slice(-20).map((r) => {
-        const done = org.done.get(r.id);
-        return { id: r.id, by: r.by, byName: this.nameOf(r.by), time: r.time, action: r.action.action, done: !!done, ...(done?.error ? { error: done.error } : {}) };
-      }),
-    };
-  }
-
-  async companyAction(action: CompanyAction): Promise<CompanyInfo> {
-    const here = this.#companyHere();
-    if (!here) throw new Error("you're not in a company");
-    const { group, org } = here;
-    if (group.founder === this.identity.author) await this.#orgDo(group, action);
-    else {
-      if (action.action !== 'chat' && !this.#isOrgAdmin(group, org, this.identity.author)) throw new Error(`only ${this.nameOf(group.founder) ?? group.name}'s admins ask the company for that`);
-      // Spaces and people as ids where this node knows them; the company resolves the rest.
-      const body: Record<string, Json> = { ...(action as unknown as Record<string, Json>) };
-      if (typeof body.space === 'string' && action.action !== 'space') body.space = this.#spaces.has(body.space) ? body.space : ([...this.#spaces.values()].find((s) => s.name === body.space)?.id ?? body.space);
-      if (typeof body.person === 'string') body.person = this.resolve(body.person);
-      if (typeof body.with === 'string') body.with = this.resolve(body.with);
-      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_REQUEST, body }));
-    }
-    return (await this.company())!;
-  }
-
-  async enrollLink(input: { days?: number } = {}): Promise<string> {
-    const here = this.#companyHere();
-    if (!here) throw new Error("you're not in a company: create it on the company's node first (weave company create)");
-    if (!this.#isOrgAdmin(here.group, here.org, this.identity.author)) throw new Error('only the company and its admins hand out enrollment links');
-    const invite = await this.invite(here.group.id, (input.days ?? 30) * 24);
-    const company = here.group.founder;
-    const signIn = here.org.signIn ?? (this.config.attestor ? { issuer: this.config.attestor.issuer, clientId: this.config.attestor.audience } : undefined);
-    return encodeEnrollment({ v: 1, company, name: this.nameOf(company) ?? here.group.name, group: here.group.id, invite, entry: { topics: [company], bootstrap: this.config.bootstrap }, ...(signIn ? { signIn } : {}) });
-  }
-
-  /**
-   * An invitation by email (stage 14): a new enrollment link, sent through the company's mail server
-   * (WEAVE_SMTP_URL). It points at the console's join page, which opens Weave with the link.
-   */
-  async inviteByEmail(input: { to: string; by?: string; days?: number }): Promise<{ to: string; joinUrl: string }> {
-    if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(input.to)) throw new Error(`${input.to} isn't an email address`);
-    const server = mailServer();
-    if (!server) throw new Error("give the company's node its mail server first (WEAVE_SMTP_URL, and WEAVE_SMTP_FROM)");
-    const base = this.#console?.url ?? process.env.WEAVE_PUBLIC_URL;
-    if (!base) throw new Error('the invitation points at the admin console: turn it on first (weave company console on)');
-    const link = await this.enrollLink(input.days ? { days: input.days } : {});
-    const joinUrl = `${base.replace(/\/$/, '')}/join#${link}`;
-    const company = (await this.company())?.name ?? 'your company';
-    await sendMail(server, invitationMail({ to: input.to, company, joinUrl, link, ...(input.by ? { by: input.by } : {}) }));
-    return { to: input.to, joinUrl };
-  }
-
-  /** What the company does, on its own node: for itself, or for an admin who asked. */
-  async #orgDo(group: StoredSpace, action: CompanyAction, by: Did = this.identity.author): Promise<void> {
-    const write = (kind: string, body: Json) => this.replica.write(this.identity, sealFor(this.#cipher(group), { kind, body }));
-    const companySpace = (ref: string) => {
-      const space = this.#space(ref);
-      if (space.id !== group.id && !this.#companySpaces(group).some((s) => s.id === space.id)) throw new Error(`${space.name} isn't one of the company's spaces`);
-      return space;
-    };
-    switch (action.action) {
-      case 'settings': {
-        const org = this.#orgOf(group)!;
-        const policy = readPolicy(action, org.policy);
-        // The company's retention, or one project's or group's own (stage 15).
-        const forSpace = action.retention?.space ? companySpace(action.retention.space) : undefined;
-        const spaceRetention: Record<string, Retention> = { ...org.spaceRetention };
-        const retention: Retention = forSpace ? { ...(org.spaceRetention[forSpace.id] ?? {}) } : { ...org.retention };
-        for (const key of ['minDays', 'maxDays'] as const) {
-          const days = action.retention?.[key];
-          if (days === null) delete retention[key];
-          else if (days !== undefined) {
-            if (!Number.isFinite(days) || days <= 0 || days > 36_500) throw new Error('retention is a number of days above 0');
-            retention[key] = days;
-          }
-        }
-        if (retention.minDays && retention.maxDays && retention.minDays > retention.maxDays) throw new Error('the minimum is longer than the maximum');
-        if (forSpace) {
-          if (retention.minDays || retention.maxDays) spaceRetention[forSpace.id] = retention;
-          else delete spaceRetention[forSpace.id];
-        }
-        const role = (value: string | null | undefined, now: string | undefined) => (value === null ? null : value?.trim() || now || null);
-        let deviceCA = org.deviceCA ?? null;
-        if (action.deviceCA === null) deviceCA = null;
-        else if (action.deviceCA !== undefined) {
-          checkAuthority(action.deviceCA);
-          deviceCA = action.deviceCA;
-        }
-        write(KIND_ORG_SETTINGS, {
-          admins: action.admins?.trim() || org.admins || null,
-          auditors: role(action.auditors, org.auditors),
-          helpdesk: role(action.helpdesk, org.helpdesk),
-          ...policy,
-          retention: (forSpace ? org.retention : retention) as unknown as Json,
-          spaceRetention: spaceRetention as unknown as Json,
-          deviceCA,
-          ...(org.signIn ? { signIn: org.signIn } : {}),
-        });
-        // Published, so every node holds the company's accounts to it (and counts their links only while allowed).
-        // With the last number of each company account's keys it holds: what they sign past it is held to the policy, whatever date it claims.
-        if (JSON.stringify(policy) !== JSON.stringify(org.policy)) this.replica.write(this.identity, { kind: KIND_ORG_POLICY, body: { ...policy, from: this.#companyKeysUpTo() } });
-        return;
-      }
-      case 'chat': {
-        if (by === this.identity.author) throw new Error('a company chat is between two colleagues: one of them asks for it');
-        const other = this.resolve(action.with);
-        const vouched = this.#vouched(group);
-        if (!vouched.has(by) || !vouched.has(other) || other === by) throw new Error('company chats are between two colleagues the company vouches for');
-        if (this.#orgOf(group)!.chats.some((c) => c.people.includes(by) && c.people.includes(other) && this.#spaces.has(c.space))) return;
-        const space = await this.#createSpace('group', `${this.nameOf(by) ?? 'colleague'} & ${this.nameOf(other) ?? 'colleague'}`);
-        const setting = this.#managedRaw(group).setting!;
-        await this.manageSpace({ space: space.id, provider: setting.provider as unknown as ProviderSpec, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, attestor: this.identity.author, company: group.id });
-        write(KIND_ORG_CHAT, { space: space.id, people: [by, other] });
-        return;
-      }
-      case 'map': {
-        const space = companySpace(action.space);
-        if (space.id === group.id) throw new Error('everyone the company vouches for is in the company group already');
-        if (!action.group?.trim()) throw new Error('map a sign-in group');
-        write(KIND_ORG_MAP, { group: action.group.trim(), space: space.id, role: action.role === 'maintainer' ? 'maintainer' : 'member', on: action.on !== false });
-        return;
-      }
-      case 'start':
-        for (const contact of action.contacts) decodeContact(contact);
-        write(KIND_ORG_START, { contacts: action.contacts });
-        return;
-      case 'space': {
-        const space = await this.#createSpace(action.kind === 'group' ? 'group' : 'project', action.name);
-        const setting = this.#managedRaw(group).setting!;
-        await this.manageSpace({ space: space.id, provider: setting.provider as unknown as ProviderSpec, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, attestor: this.identity.author, company: group.id });
-        return;
-      }
-      case 'hold':
-        await this.setHold({ space: companySpace(action.space).id, until: action.until, ...(action.reason ? { reason: action.reason } : {}) });
-        return;
-      case 'destroy-key':
-        await this.destroyCompanyKey(companySpace(action.space).id);
-        return;
-      case 'freeze':
-        await this.#freeze(this.resolve(action.person));
-        return;
-    }
-  }
-
-  /**
-   * Freeze a company-owned identity: public, so every node ignores what its
-   * keys sign after the numbers seen here (and anything by keys not seen). It
-   * leaves the company's spaces; its history stays.
-   */
-  async #freeze(person: Did): Promise<void> {
-    const keys = this.replica.authority.keys(person);
-    if (keys.org !== this.identity.author) throw new Error(`${this.nameOf(person) ?? person} isn't an identity this company owns`);
-    const signers = new Set<Did>([person, keys.root, ...keys.retired.keys(), ...this.replica.authority.grantsOf(person).map((g) => g.subject)]);
-    const last: Record<string, number> = {};
-    for (const r of this.replica.events((e) => signers.has(e.signer))) last[r.signer] = Math.max(last[r.signer] ?? 0, r.seq);
-    for (const space of [...this.#spaces.values()]) {
-      const state = this.#state(space);
-      if (space.founder === this.identity.author && state.members.has(person) && canManage(state, this.identity.author)) await this.removeMember(space.id, person);
-    }
-    this.replica.write(this.identity, { kind: KIND_ORG_FREEZE, body: { person, keys: last } });
-  }
-
-  /**
-   * On the company's node: answer admins' requests, and keep the company's
-   * spaces in line with its sign-in groups: admit and gift keys to those a
-   * mapping (or being an admin) puts there, appoint maintainers, and remove
-   * those a mapping brought in that no longer belong.
-   */
-  async #orgDuties(): Promise<number> {
-    let changed = 0;
-    for (const group of this.#companyGroups()) {
-      let org = this.#orgOf(group)!;
-      for (const request of org.requests) {
-        if (org.done.has(request.id)) continue;
-        let error: string | undefined;
-        // Anyone the company vouches for may ask for a company chat; everything else is for admins.
-        const allowed = request.action.action === 'chat' ? this.#vouched(group).has(request.by) : this.#isOrgAdmin(group, org, request.by);
-        if (!allowed) error = request.action.action === 'chat' ? 'company chats are for colleagues the company vouches for' : "only the company's admins ask for that";
-        else {
-          try {
-            await this.#orgDo(group, request.action, request.by);
-          } catch (e) {
-            error = (e as Error).message;
-          }
-        }
-        this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_DONE, body: { request: request.id, ...(error ? { error } : {}) } }));
-        changed++;
-      }
-      org = this.#orgOf(group)!;
-      const vouched = this.#vouched(group);
-      for (const space of this.#companySpaces(group)) {
-        let state = this.#state(space);
-        if (state.closed) continue;
-        const want = new Map<Did, MapRole>();
-        for (const [did, a] of vouched) {
-          if (org.admins && a.groups.includes(org.admins) && space.kind === 'project') want.set(did, 'maintainer');
-          for (const m of org.maps) if (m.space === space.id && a.groups.includes(m.group) && want.get(did) !== 'maintainer') want.set(did, m.role);
-        }
-        for (const chat of org.chats) if (chat.space === space.id) for (const did of chat.people) if (vouched.has(did) && !want.has(did)) want.set(did, 'member');
-        const newcomers = [...want.keys()].filter((did) => !state.members.has(did));
-        if (newcomers.length) {
-          for (const member of newcomers) this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ADMIT, body: { member, via: group.id } }));
-          this.replica.write(this.identity, gift(this.#keysForNewcomers(space), newcomers, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
-          changed += newcomers.length;
-          state = this.#state(space);
-        }
-        if (space.kind === 'project') {
-          for (const [did, role] of want) {
-            if (role !== 'maintainer' || !state.members.has(did) || state.maintainers.has(did)) continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: true } }));
-            changed++;
-          }
-          for (const did of state.maintainers) {
-            if (did === state.founder || state.members.get(did)?.via !== group.id || want.get(did) === 'maintainer') continue;
-            this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_MAINTAINER, body: { member: did, on: false, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
-            changed++;
-          }
-          state = this.#state(space);
-        }
-        for (const member of [...state.members.values()]) {
-          if (member.via !== group.id || member.did === this.identity.author || want.has(member.did)) continue;
-          await this.removeMember(space.id, member.did);
-          changed++;
-        }
-      }
-      for (const space of [group, ...this.#companySpaces(group)]) {
-        const maxDays = (org.spaceRetention[space.id] ?? org.retention).maxDays;
-        if (maxDays) changed += await this.#shredOlder(space, maxDays);
-      }
-    }
-    return changed;
-  }
-
-  /** The company's maximum: shred the keys of a company space that ended before it (what rules keep is carried forward first). */
-  async #shredOlder(space: StoredSpace, maxDays: number): Promise<number> {
-    const state = this.#state(space);
-    if (this.#held(state) || !canManage(state, this.identity.author)) return 0;
-    const before = new Date(this.clock() - maxDays * DAY_MS).toISOString();
-    const starts = this.#epochStarts(space);
-    const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
-    if (!epochs.slice(0, -1).some((_, i) => (starts.get(epochs[i + 1]) ?? '') !== '' && starts.get(epochs[i + 1])! <= before)) return 0;
-    await this.shred({ space: space.id, before, dropOlder: true });
-    return 1;
-  }
-
-  /** A company space's retention, from its company group: its own if the company gave it one (stage 15), else the company's. */
-  #companyRetention(space: StoredSpace): Retention | undefined {
-    const company = this.#managedRaw(space).setting?.company;
-    const group = company ? this.#spaces.get(company) : this.#orgOf(space) ? space : undefined;
-    const org = group ? this.#orgOf(group) : undefined;
-    return org ? (org.spaceRetention[space.id] ?? org.retention) : undefined;
+  get kmsCredentials() {
+    return this.#managed.kmsCredentials;
   }
 
-  /** A space's epochs that ended less than `days` ago (or haven't ended): a company's minimum keeps them. */
-  #endedWithin(space: StoredSpace, days: number): Set<number> {
-    const since = new Date(this.clock() - days * DAY_MS).toISOString();
-    const starts = this.#epochStarts(space);
-    const epochs = Object.keys(space.keys).map(Number).sort((a, b) => a - b);
-    return new Set(epochs.filter((_, i) => i === epochs.length - 1 || (starts.get(epochs[i + 1]) ?? '9999') > since));
+  set kmsCredentials(value) {
+    this.#managed.kmsCredentials = value;
   }
 
-  // ---------------------------------------------------------------- company policy (stage 11)
-
-  /** Companies' published policies, by company. Read once, then kept up to date as policies arrive (it's asked while events are received). */
-  #policyCache?: Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }>;
-
-  /** The last number of every key of this company's accounts that this (the company's) node holds. */
-  #companyKeysUpTo(): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const signer of this.replica.signers()) {
-      const person = this.replica.authority.personOf(signer);
-      if (person === this.identity.author || this.replica.authority.keys(person).org !== this.identity.author) continue;
-      out[signer] = this.replica.number(signer);
-    }
-    return out;
-  }
-
-  #policies(): Map<Did, CompanyPolicy & { time: string; from?: Map<Did, number> }> {
-    if (!this.#policyCache) {
-      this.#policyCache = new Map();
-      for (const r of this.replica.events((e) => e.kind === KIND_ORG_POLICY && e.scope === 'public')) this.#takePolicy(r);
-    }
-    return this.#policyCache;
-  }
-
-  #takePolicy(r: { author: Did; time: string; body: Json }): void {
-    const before = this.#policyCache!.get(r.author);
-    const from = (r.body as { from?: unknown } | null)?.from;
-    const upTo = from && typeof from === 'object' && !Array.isArray(from) ? new Map(Object.entries(from as Record<string, unknown>).filter((e): e is [Did, number] => isDid(e[0]) && Number.isSafeInteger(e[1]))) : undefined;
-    if (!before || before.time <= r.time) this.#policyCache!.set(r.author, { ...readPolicy(r.body), time: r.time, ...(upTo ? { from: upTo } : {}) });
-  }
-
-  /** A company account's company policy, if its company published one. */
-  #policyOf(person: Did): { org: Did; policy: CompanyPolicy & { time: string; from?: Map<Did, number> } } | undefined {
-    const org = this.replica.authority.keys(person).org;
-    const policy = org ? this.#policies().get(org) : undefined;
-    return org && policy ? { org, policy } : undefined;
-  }
-
-  /** For a company account kept to the company's spaces: why it may not go elsewhere. */
-  #insideOnly(founder?: Did): string | undefined {
-    const own = this.#policyOf(this.identity.author);
-    if (!own || own.policy.outside || founder === own.org) return undefined;
-    return `${this.nameOf(own.org) ?? 'Your company'}'s accounts stay in the company's spaces`;
-  }
-
-  /**
-   * What a company account signs against its company's published policy, from
-   * when it was published: refused by its own node when writing and by every
-   * node when receiving. Leaving, identity and keys are always allowed. "From
-   * when" is by number where the policy names them (what each key had signed by
-   * then), so backdating doesn't get past it; by time for older policies.
-   */
-  #policyRefuses(event: { author: Did; signer?: Did; n?: number; space: string; kind: string; time: string }, body: Json | undefined): string | undefined {
-    const found = this.#policyOf(event.author);
-    if (!found || ALWAYS_ALLOWED.has(event.kind)) return undefined;
-    const from = found.policy.from;
-    const earlier = from && event.signer && event.n !== undefined ? event.n <= (from.get(event.signer) ?? 0) : event.time < found.policy.time;
-    if (earlier) return undefined;
-    const { org, policy } = found;
-    const who = this.nameOf(org) ?? 'The company';
-    const colleague = (did: Did) => did === org || this.#companyVouchedOf(did) === org;
-    if (event.space === 'public') {
-      if (policy.public) return undefined;
-      const b = body as { subject?: unknown; on?: unknown } | null | undefined;
-      if (event.kind === KIND_FOLLOW && (b?.on === false || (isDid(b?.subject) && colleague(b.subject)))) return undefined;
-      return `${who}'s accounts don't post publicly`;
-    }
-    if (event.space === 'self' || (event as { class?: string }).class === 'control') return undefined;
-    const scope = parseScope(event.space);
-    if (!scope) return undefined;
-    if (scope.kind === 'direct') {
-      if (policy.directs === 'off') return `${who}'s accounts don't use direct chats`;
-      const direct = this.#directs.get(scope.id);
-      const other = !direct ? undefined : event.author === this.identity.author ? direct.peer : direct.peer === event.author ? this.identity.author : undefined;
-      if (!other) return undefined;
-      if (policy.directs === 'company' && !colleague(other)) return `${who}'s accounts chat directly only with colleagues`;
-      if (policy.chats && other !== org && colleague(other)) return `${who} keeps chats between colleagues in company chats (weave company chat <colleague>)`;
-      return undefined;
-    }
-    if (policy.outside) return undefined;
-    const space = this.#spaces.get(scope.id);
-    return space && space.founder !== org ? `${who}'s accounts stay in the company's spaces` : undefined;
-  }
-
-  get #enrollFile(): string {
-    return joinPath(this.home.dir, 'enroll.json');
-  }
-
-  /**
-   * A new company account's remaining steps, once the company group's events
-   * are here: unlock it with the person's sign-in, join, sign in with the
-   * attestor, leave the words with the company, the starting setup.
-   */
-  async #continueEnrollment(): Promise<number> {
-    const pending = readSecretJson<Enrolling>(this.home, this.#enrollFile);
-    if (!pending) return 0;
-    const group = this.#spaces.get(pending.group);
-    if (!group || !this.#managedRaw(group).setting?.attestor) return 0;
-    let changed = 0;
-    if (pending.idToken && this.#sso()?.idToken !== pending.idToken) this.#saveSso({ ...(this.#sso() ?? {}), idToken: pending.idToken, salt: pending.salt, expires: (claimsOf(pending.idToken).exp ?? 0) * 1000 });
-    await this.#unlock(group);
-    if (this.#managedProblems.has(group.id)) return 0;
-    if (!pending.joined) {
-      this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_JOIN, body: { invite: pending.invite, ...(pending.proof ? { proof: pending.proof } : {}) } }));
-      pending.joined = true;
-      changed++;
-    }
-    if (pending.idToken) {
-      await this.signIn({ space: group.id, idToken: pending.idToken, ...(pending.salt ? { salt: pending.salt } : {}) });
-      delete pending.idToken;
-      delete pending.salt;
-      changed++;
-    }
-    if (pending.words) {
-      await this.escrowRecovery({ space: group.id, words: pending.words });
-      delete pending.words;
-      changed++;
-    }
-    const org = this.#orgOf(group);
-    if (!pending.started && org) {
-      for (const contact of org.start?.contacts ?? []) {
-        try {
-          await this.addContact(contact);
-        } catch {
-          // Our own link, or a damaged one: nothing to add.
-        }
-      }
-      pending.started = true;
-      changed++;
-    }
-    if (pending.words || !pending.started) writeSecretJson(this.home, this.#enrollFile, pending);
-    else rmSync(this.#enrollFile, { force: true });
-    return changed;
-  }
-
-  async link(input: { who: string; space?: string; on?: boolean }): Promise<LinkInfo[]> {
-    const to = input.who.includes('weave:contact:') ? (await this.addContact(input.who)).did : this.resolve(input.who);
-    if (to === this.identity.author) throw new Error("that's this identity");
-    const on = input.on !== false;
-    if (on && this.replica.authority.keys(this.identity.author).org) {
-      const here = this.#companyHere();
-      if (here && !here.org.links) throw new Error(`${this.nameOf(here.group.founder) ?? here.group.name} doesn't let its accounts link to others`);
-    }
-    const fields = { kind: KIND_LINK, body: { to, on } };
-    if (input.space) this.replica.write(this.identity, sealFor(this.#cipher(this.#space(input.space)), fields));
-    else this.replica.write(this.identity, fields);
-    return this.#linksOf(this.identity.author);
-  }
-
-  async links(who?: string): Promise<LinkInfo[]> {
-    return this.#linksOf(who ? this.resolve(who) : this.identity.author);
-  }
-
-  /**
-   * Every link statement this node can read (public, or sealed into its
-   * spaces), the latest per direction; companies' public word on links; and
-   * when companies froze their identities. Built once per change of what's
-   * decoded: profiles ask for it person by person.
-   */
-  #linkIndex(): { said: Map<string, { on: boolean; time: string; space?: string }>; others: Map<Did, Set<Did>>; policy: Map<Did, boolean>; frozenAt: Map<Did, string> } {
-    return this.#memo('links', () => {
-      const said = new Map<string, { on: boolean; time: string; space?: string }>();
-      const others = new Map<Did, Set<Did>>();
-      const policy = new Map<Did, boolean>();
-      const frozenAt = new Map<Did, string>();
-      for (const d of this.#decodeAll()) {
-        const b = d.inner.body as Record<string, unknown> | null;
-        if (d.inner.kind === KIND_LINK && isDid(b?.to) && b.to !== d.event.author) {
-          const [from, to] = [d.event.author, b.to];
-          const before = said.get(`${from} ${to}`);
-          if (!before || before.time <= d.event.time) said.set(`${from} ${to}`, { on: b.on !== false, time: d.event.time, ...(d.space ? { space: d.space.id } : {}) });
-          for (const [x, y] of [[from, to], [to, from]] as const) {
-            const set = others.get(x) ?? new Set<Did>();
-            others.set(x, set.add(y));
-          }
-        } else if (d.inner.kind === KIND_ORG_POLICY && !d.space && typeof b?.links === 'boolean') policy.set(d.event.author, b.links);
-        else if (d.inner.kind === KIND_ORG_FREEZE && isDid(b?.person) && !frozenAt.has(b.person) && this.replica.authority.keys(b.person).org === d.event.author) frozenAt.set(b.person, d.event.time);
-      }
-      return { said, others, policy, frozenAt };
-    });
-  }
-
-  /** A person's links, where either side says so (see #linkIndex). */
-  #linksOf(did: Did): LinkInfo[] {
-    const { said, others, policy, frozenAt } = this.#linkIndex();
-    const out: LinkInfo[] = [];
-    for (const other of others.get(did) ?? []) {
-      const mine = said.get(`${did} ${other}`);
-      const theirs = said.get(`${other} ${did}`);
-      if (!mine?.on && !theirs?.on) continue;
-      // A company that said no: its identities' links don't count (it does allow them unless it said so).
-      const refused = [did, other].some((x) => {
-        const org = this.replica.authority.keys(x).org;
-        return !!org && policy.get(org) === false;
-      });
-      const until = [did, other].map((x) => (this.replica.authority.frozen(x) ? frozenAt.get(x) : undefined)).filter((t): t is string => !!t).sort()[0];
-      const claim = this.#companyClaim(other);
-      const org = claim && claim.vouched !== false ? claim.org : undefined;
-      const space = mine?.space ?? theirs?.space;
-      out.push({
-        did: other,
-        name: this.nameOf(other),
-        state: refused ? 'refused' : mine?.on && theirs?.on ? 'linked' : mine?.on ? 'waiting' : 'asked',
-        since: [mine?.on ? mine.time : '', theirs?.on ? theirs.time : ''].sort().at(-1)!,
-        ...(until ? { until } : {}),
-        ...(org ? { company: { did: org, name: this.nameOf(org), ...(claim?.vouched ? {} : { unconfirmed: true as const }) } } : {}),
-        ...(space ? { space: this.#spaces.get(space)?.name ?? space } : {}),
-      });
-    }
-    return out.sort((a, b) => a.since.localeCompare(b.since));
-  }
-
-  // ---------------------------------------------------------------- the audit in security tools, and exports (stage 12)
-
-  get #sinksFile(): string {
-    return joinPath(this.home.dir, 'audit-streams.json');
-  }
-
-  /** Sinks (secrets included: sealed at rest), what each was sent (line id → time), and their last problems. */
-  #sinks(): { sinks: AuditSink[]; sent: Record<string, Record<string, string>>; problems: Record<string, string> } {
-    return readSecretJson(this.home, this.#sinksFile) ?? { sinks: [], sent: {}, problems: {} };
-  }
-
-  async addAuditStream(input: AuditSinkInput): Promise<AuditStreamInfo[]> {
-    if (!this.#companyGroups().length) throw new Error("the audit streams from the company's own node");
-    const state = this.#sinks();
-    state.sinks.push(newSink(input));
-    writeSecretJson(this.home, this.#sinksFile, state);
-    await this.#streamAudit();
-    return this.auditStreams();
-  }
-
-  async removeAuditStream(id: string): Promise<AuditStreamInfo[]> {
-    const state = this.#sinks();
-    if (!state.sinks.some((s) => s.id === id)) throw new Error(`no audit stream ${id}`);
-    state.sinks = state.sinks.filter((s) => s.id !== id);
-    delete state.sent[id];
-    delete state.problems[id];
-    writeSecretJson(this.home, this.#sinksFile, state);
-    return this.auditStreams();
-  }
-
-  async auditStreams(): Promise<AuditStreamInfo[]> {
-    const state = this.#sinks();
-    return state.sinks.map((s) => {
-      const sent = Object.values(state.sent[s.id] ?? {});
-      return { id: s.id, kind: s.kind, target: sinkTarget(s), sent: sent.length, ...(sent.length ? { lastSent: sent.sort().at(-1) } : {}), ...(state.problems[s.id] ? { problem: state.problems[s.id] } : {}) };
-    });
-  }
-
-  #streaming?: Promise<number>;
-
-  /** Send each sink the company's audit lines of the last 31 days it hasn't had yet; what fails is sent next time. */
-  #streamAudit(): Promise<number> {
-    this.#streaming ??= (async () => {
-      try {
-        const state = this.#sinks();
-        if (!state.sinks.length) return 0;
-        const since = new Date(this.clock() - 31 * DAY_MS).toISOString();
-        const lines: StreamedLine[] = [];
-        for (const group of this.#companyGroups()) {
-          for (const space of [group, ...this.#companySpaces(group)]) {
-            for (const l of await this.audit({ space: space.id, since })) lines.push({ ...l, space: { id: space.id, name: space.name } });
-          }
-        }
-        lines.sort((a, b) => a.time.localeCompare(b.time));
-        let sent = 0;
-        for (const sink of state.sinks) {
-          const had = (state.sent[sink.id] ??= {});
-          for (const [id, time] of Object.entries(had)) if (time < since) delete had[id];
-          const fresh = lines.filter((l) => l.id && !had[l.id]);
-          try {
-            for (let i = 0; i < fresh.length; i += 500) {
-              const batch = fresh.slice(i, i + 500);
-              await sendLines(sink, batch);
-              for (const l of batch) had[l.id!] = l.time;
-              sent += batch.length;
-            }
-            delete state.problems[sink.id];
-          } catch (error) {
-            state.problems[sink.id] = (error as Error).message;
-          }
-        }
-        writeSecretJson(this.home, this.#sinksFile, state);
-        return sent;
-      } finally {
-        this.#streaming = undefined;
-      }
-    })();
-    return this.#streaming;
-  }
-
-  async exportSpace(input: { space: string; since?: string; until?: string }): Promise<ExportLine[]> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
-    if (!canManage(state, this.identity.author)) throw new Error(`only those who manage ${space.name} export it`);
-    const since = input.since ? new Date(input.since).toISOString() : '';
-    const until = input.until ? new Date(input.until).toISOString() : '9999';
-    const decoded = this.#decodedIn(space.id);
-    const deleted = new Map<string, string>();
-    const edited = new Map<string, string[]>();
-    for (const d of decoded) {
-      const target = (d.inner.body as { target?: unknown } | null)?.target;
-      if (typeof target !== 'string') continue;
-      if (d.inner.kind === KIND_POST_DELETE && !deleted.has(target)) deleted.set(target, d.event.time);
-      if (d.inner.kind === KIND_POST_EDIT) edited.set(target, [...(edited.get(target) ?? []), d.event.time]);
-    }
-    return decoded
-      .filter((d) => d.event.time >= since && d.event.time <= until && d.inner.kind !== KIND_CARRY)
-      .map((d) => {
-        const agent = this.#agentName(d.event.signer, d.event.author);
-        const name = this.nameOf(d.event.author);
-        return {
-          id: d.id,
-          time: d.event.time,
-          kind: d.inner.kind,
-          by: d.event.author,
-          ...(name ? { byName: name } : {}),
-          signer: d.event.signer,
-          ...(agent ? { agent } : {}),
-          body: withoutSecrets(d.inner.body),
-          ...(deleted.has(d.id) ? { deleted: deleted.get(d.id) } : {}),
-          ...(edited.has(d.id) ? { edited: edited.get(d.id) } : {}),
-        };
-      });
-  }
-
-  // ---------------------------------------------------------------- SCIM and devices (stage 12)
-
-  /** For tests and service setups: this computer's device certificate and key (PEM), instead of the managed settings' files. */
-  deviceCredentials?: { cert: string; key: string };
-
-  #deviceProof(idToken: string): unknown {
-    let creds = this.deviceCredentials;
-    const managed = machinePolicy();
-    if (!creds && managed.deviceCert && managed.deviceKey) {
-      try {
-        creds = { cert: readFileSync(managed.deviceCert, 'utf8'), key: readFileSync(managed.deviceKey, 'utf8') };
-      } catch {
-        creds = undefined;
-      }
-    }
-    return creds ? deviceProof(creds.cert, creds.key, this.identity.author, idToken) : undefined;
-  }
-
-  get #scimFile(): string {
-    return joinPath(this.home.dir, 'scim.json');
-  }
-
-  #scimDirectory(): ScimDirectory {
-    return readSecretJson<ScimDirectory>(this.home, this.#scimFile) ?? emptyDirectory();
-  }
-
-  #scimServer?: { port: number; close(): Promise<void> };
-  /** Directory changes, one after another. */
-  #scimWork: Promise<unknown> = Promise.resolve();
-
-  /** On the company's node: serve SCIM for the company's user management (a new token each time), or stop. */
-  async setScim(input: { on: boolean; port?: number; invite?: boolean }): Promise<ScimInfo> {
-    if (!this.#companyGroups().length) throw new Error("SCIM runs on the company's own node (weave company create)");
-    if (!input.on) {
-      const { scim: _scim, ...rest } = this.config;
-      this.config = rest;
-      saveConfig(this.home, this.config);
-      await this.#scimServer?.close();
-      this.#scimServer = undefined;
-      return this.scim();
-    }
-    const token = newScimToken();
-    writeSecretJson(this.home, this.#scimFile, { ...this.#scimDirectory(), tokenHash: hashToken(token) });
-    if (input.invite && !mailServer()) throw new Error("to send invitations, give the company's node its mail server (WEAVE_SMTP_URL)");
-    this.config = { ...this.config, scim: { port: input.port ?? this.config.scim?.port ?? 7720, ...((input.invite ?? this.config.scim?.invite) ? { invite: true } : {}) } };
-    saveConfig(this.home, this.config);
-    await this.#startScim();
-    return { ...(await this.scim()), token };
-  }
-
-  async scim(): Promise<ScimInfo> {
-    const directory = this.#scimDirectory();
-    const vouched = new Map<string, Did>();
-    for (const group of this.#companyGroups()) for (const [did, a] of this.#attestations(group, this.identity.author)) vouched.set(a.subject, did);
-    return {
-      on: !!this.config.scim,
-      ...(this.#scimServer ? { port: this.#scimServer.port } : {}),
-      ...(this.config.scim?.invite ? { invite: true } : {}),
-      users: Object.values(directory.users).map((u) => {
-        const did = vouched.get(u.externalId ?? '') ?? vouched.get(u.userName);
-        return { userName: u.userName, ...(u.displayName ? { displayName: u.displayName } : {}), active: u.active, groups: groupsOf(directory, u.id), ...(did ? { did, name: this.nameOf(did) } : {}) };
-      }),
-      groups: Object.values(directory.groups).map((g) => ({ name: g.displayName, members: g.members.length })),
-    };
-  }
-
-  /** Start what the company's node serves (SCIM, the admin console), as configured. The daemon calls it. */
-  async startServices(): Promise<void> {
-    if (this.config.standby) return;
-    if (this.config.scim) await this.#startScim().catch((error: Error) => console.error(`weave: SCIM couldn't start: ${error.message}`));
-    if (this.config.console) await this.#startConsole().catch((error: Error) => console.error(`weave: the admin console couldn't start: ${error.message}`));
-  }
-
-  // ---------------------------------------------------------------- services: code you run under keys of their own
-
-  // ---------------------------------------------------------------- the admin console (stage 12)
-
-  #console?: { port: number; url: string; operatorLink(): string; close(): Promise<void> };
-
-  get #consoleFile(): string {
-    return joinPath(this.home.dir, 'console.json');
-  }
-
-  /** On the company's node: serve the admin console (or stop). Admins sign in with the company's sign-in through the app registration `clientId`. */
-  async setConsole(input: { on: boolean; port?: number; url?: string; clientId?: string; clientSecret?: string }): Promise<ConsoleInfo> {
-    if (!this.#companyGroups().length || !this.config.attestor) throw new Error("the admin console runs on the company's own node (weave company create)");
-    if (!input.on) {
-      const { console: _console, ...rest } = this.config;
-      this.config = rest;
-      saveConfig(this.home, this.config);
-      await this.#console?.close();
-      this.#console = undefined;
-      return this.consoleInfo();
-    }
-    const clientId = input.clientId ?? this.config.console?.clientId;
-    if (!clientId) throw new Error("name the console's app registration with the company's sign-in (its client id)");
-    if (input.clientSecret) writeSecretJson(this.home, this.#consoleFile, { clientSecret: input.clientSecret });
-    this.config = { ...this.config, console: { port: input.port ?? this.config.console?.port ?? 7730, clientId, ...((input.url ?? this.config.console?.url) ? { url: input.url ?? this.config.console?.url } : {}) } };
-    saveConfig(this.home, this.config);
-    await this.#startConsole();
-    return { ...(await this.consoleInfo()), operatorLink: this.#console!.operatorLink() };
-  }
-
-  /**
-   * A backup of this home (stage 14): its files, and a consistent copy of its database, into an empty folder.
-   * With the home key in the company's key service it opens only with access to it; otherwise the backup
-   * carries what opens it (a file keystore) or opens only on this computer (DPAPI, Keychain): the result says.
-   */
-  async backup(input: { to: string }): Promise<{ to: string; files: number; bytes: number; keystore: Keystore; note?: string }> {
-    const to = resolvePath(input.to);
-    if (existsSync(to) && readdirSync(to).length) throw new Error(`${to} isn't empty`);
-    mkdirSync(to, { recursive: true });
-    let files = 0;
-    let bytes = 0;
-    const skip = new Set(['weave.db', 'weave.db-wal', 'weave.db-shm', 'node.lock', 'daemon.json']);
-    const copy = (from: string, into: string) => {
-      for (const entry of readdirSync(from, { withFileTypes: true })) {
-        if (skip.has(entry.name) && from === this.home.dir) continue;
-        const source = joinPath(from, entry.name);
-        const target = joinPath(into, entry.name);
-        if (entry.isDirectory()) {
-          mkdirSync(target, { recursive: true });
-          copy(source, target);
-        } else {
-          cpSync(source, target);
-          files++;
-          bytes += statSync(source).size;
-        }
-      }
-    };
-    copy(this.home.dir, to);
-    if (this.#sqlite) {
-      this.#sqlite.snapshot(joinPath(to, 'weave.db'));
-      files++;
-      bytes += statSync(joinPath(to, 'weave.db')).size;
-    }
-    const keystore = vaultOf(this.home).keystore;
-    const note =
-      keystore === 'kms'
-        ? undefined
-        : keystore === 'file'
-          ? "this backup carries the key that opens it (vault.json): keep it as safe as the server, or move the home key to the company's key service"
-          : `this backup opens only on this computer, as this user (${keystore})`;
-    return { to, files, bytes, keystore, ...(note ? { note } : {}) };
-  }
-
-  /** Where this computer can keep the home key (stage 17). */
-  async keystores(): Promise<Array<{ keystore: Keystore; name: string; ready: boolean; why?: string; current: boolean }>> {
-    const current = vaultOf(this.home).keystore;
-    const here = keystoresHere();
-    if (!here.some((k) => k.keystore === current)) here.unshift({ keystore: current, name: current, ready: true });
-    return here.map((k) => ({ ...k, current: k.keystore === current }));
-  }
-
-  /** Keep the home key somewhere else (stage 17): the same key, so nothing else changes. */
-  async moveHomeKey(input: { to: 'os' | Exclude<Keystore, 'kms'> }): Promise<{ from: Keystore; to: Keystore }> {
-    return moveHomeKey(this.home, input.to);
-  }
-
-  async consoleOperatorLink(): Promise<string> {
-    if (!this.#console) throw new Error('the admin console is off (weave company console on)');
-    return this.#console.operatorLink();
-  }
-
-  async consoleInfo(): Promise<ConsoleInfo> {
-    return { on: !!this.#console, ...(this.#console ? { url: this.#console.url, port: this.#console.port } : {}), ...(this.config.console?.clientId ? { clientId: this.config.console.clientId } : {}) };
-  }
-
-  async #startConsole(): Promise<void> {
-    await this.#console?.close();
-    const c = this.config.console!;
-    const secret = readSecretJson<{ clientSecret?: string }>(this.home, this.#consoleFile)?.clientSecret;
-    this.#console = await startConsole(this, { port: c.port, ...(c.url ? { url: c.url } : {}), issuer: this.config.attestor!.issuer, clientId: c.clientId!, ...(secret ? { clientSecret: secret } : {}) });
-  }
-
-  /** Is the person behind this company sign-in one of the company's admins (by the directory's groups when SCIM is on)? */
-  consoleAdmin(claims: { sub: string; email?: string; groups: string[] }): boolean {
-    return this.consoleRole(claims) === 'admin';
-  }
-
-  /**
-   * What the person behind this company sign-in may do in the console (stage 15), by their sign-in groups
-   * (the directory's when SCIM is on): admins everything, auditors read everything, the helpdesk sets people up.
-   */
-  /** Signing nothing: a standby, or a server a newer one took over from. */
-  #refuseWrites(): void {
-    const refuse = () => {
-      throw new Error('this is a standby server: it follows the active one and writes nothing (weave-server promote, once the active one is gone)');
-    };
-    this.replica.write = refuse;
-    this.replica.append = refuse;
-    this.replica.append2 = refuse;
+  manageSpace(...args: Parameters<ManagedKeys['manageSpace']>): ReturnType<ManagedKeys['manageSpace']> {
+    return this.#managed.manageSpace(...args);
   }
 
-  /** A server of this identity of a newer generation than ours: we stand down, as a standby. */
-  #seeGeneration(event: { body: Json }): void {
-    const generation = (event.body as { generation?: unknown } | null)?.generation;
-    if (!Number.isSafeInteger(generation) || (generation as number) <= (this.config.generation ?? 0) || this.config.standby) return;
-    this.config = { ...this.config, standby: true };
-    saveConfig(this.home, { ...loadConfig(this.home), standby: true });
-    this.#refuseWrites();
-    console.warn(`weave: a newer server of this identity took over (generation ${generation}): this one is a standby now and writes nothing`);
+  unlockSpace(...args: Parameters<ManagedKeys['unlockSpace']>): ReturnType<ManagedKeys['unlockSpace']> {
+    return this.#managed.unlockSpace(...args);
   }
 
-  /** Is this person (name or did) one of the company's admins, or the company itself? */
-  isCompanyAdmin(who: string): boolean {
-    const here = this.#companyHere();
-    if (!here) return false;
-    return this.#isOrgAdmin(here.group, here.org, this.resolve(who));
+  destroyCompanyKey(...args: Parameters<ManagedKeys['destroyCompanyKey']>): ReturnType<ManagedKeys['destroyCompanyKey']> {
+    return this.#managed.destroyCompanyKey(...args);
   }
 
-  consoleRole(claims: { sub: string; email?: string; groups: string[] }): ConsoleRole | undefined {
-    const group = this.#companyGroups()[0];
-    const org = group ? this.#orgOf(group) : undefined;
-    if (!org) return undefined;
-    let groups = claims.groups;
-    if (this.config.scim) {
-      const directory = this.#scimDirectory();
-      const { user, deleted } = findPerson(directory, { subject: claims.sub, email: claims.email });
-      if (deleted || (user && !user.active)) return undefined;
-      if (user) groups = groupsOf(directory, user.id);
-    }
-    if (org.admins && groups.includes(org.admins)) return 'admin';
-    if (org.auditors && groups.includes(org.auditors)) return 'auditor';
-    if (org.helpdesk && groups.includes(org.helpdesk)) return 'helpdesk';
-    return undefined;
-  }
-
-  /**
-   * The agents of the company's people, and in which of its projects and groups each may act (stage 15).
-   * Agents act in a company space only once whoever manages it approves them: on the company's node, the company.
-   */
-  async companyAgents(): Promise<CompanyAgentInfo[]> {
-    const group = this.#companyGroups()[0];
-    if (!group) throw new Error('not a company node');
-    const spaces = [group, ...this.#companySpaces(group)];
-    const people = new Set<Did>();
-    for (const space of spaces) for (const did of this.#state(space).members.keys()) people.add(did);
-    const out: CompanyAgentInfo[] = [];
-    for (const person of people) {
-      for (const grant of this.replica.authority.grantsOf(person)) {
-        if (grant.role !== 'agent') continue;
-        out.push({
-          did: grant.subject,
-          name: grant.name ?? 'agent',
-          person,
-          ...(this.nameOf(person) ? { personName: this.nameOf(person) } : {}),
-          spaces: spaces.filter((s) => this.#state(s).members.has(person)).map((s) => ({ id: s.id, name: s.name, approved: !!this.#state(s).approvedAgents?.has(grant.subject) })),
-        });
-      }
-    }
-    return out.sort((a, b) => `${a.personName ?? a.person}/${a.name}`.localeCompare(`${b.personName ?? b.person}/${b.name}`));
-  }
-
-  /**
-   * Each person's company computer as the company last saw it (stage 15): the certificate their sign-in came with,
-   * until when it's valid, or why a sign-in wasn't vouched for (no certificate, another authority, expired).
-   */
-  async companyDevices(): Promise<CompanyDeviceInfo[]> {
-    const group = this.#companyGroups()[0];
-    if (!group) throw new Error('not a company node');
-    const required = !!this.#orgOf(group)?.deviceCA;
-    const attested = this.#attestations(group, group.founder);
-    const now = new Date(this.clock()).toISOString();
-    return [...this.#state(group).members.keys()]
-      .filter((did) => did !== group.founder)
-      .map((did) => {
-        const a = attested.get(did);
-        const refused = this.#deviceRefused.get(did) ?? this.#signInRefused.get(did);
-        return {
-          did,
-          ...(this.nameOf(did) ? { name: this.nameOf(did) } : {}),
-          required,
-          ...(a?.device ? { device: a.device } : {}),
-          ...(a ? { vouchedUntil: a.until, vouched: a.until > now } : { vouched: false }),
-          ...(refused && (!a || refused.time > a.time) ? { problem: refused.problem, problemTime: refused.time } : {}),
-        };
-      });
-  }
-
-  /** Record what an admin did in the console, in the company's audit. */
-  async consoleRecord(what: Record<string, string>, admin: { subject: string; email?: string; role?: string }): Promise<void> {
-    const group = this.#companyGroups()[0];
-    if (!group) throw new Error('not a company node');
-    this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ORG_CONSOLE, body: { subject: admin.subject, ...(admin.email ? { email: admin.email } : {}), ...(admin.role ? { role: admin.role } : {}), ...what } }));
-  }
-
-  /** An admin in the console: the company does it, recorded with who asked. */
-  async consoleAction(action: CompanyAction, admin: { subject: string; email?: string; role?: string }): Promise<CompanyInfo> {
-    const group = this.#companyGroups()[0];
-    if (!group) throw new Error('not a company node');
-    const what: Record<string, string> = { action: action.action };
-    for (const key of ['space', 'person', 'group', 'name', 'kind'] as const) {
-      const value = (action as Record<string, unknown>)[key];
-      if (typeof value === 'string') what[key] = value;
-    }
-    await this.consoleRecord(what, admin);
-    await this.#orgDo(group, action);
-    return (await this.company())!;
-  }
 
-  async #startScim(): Promise<void> {
-    await this.#scimServer?.close();
-    this.#scimServer = await startScimServer(this.config.scim!.port, (req, auth) => this.scimRequest(req, auth));
-  }
 
-  /** One request from the company's user management. Changes take effect at once. */
-  async scimRequest(req: ScimRequest, authorization: string | undefined): Promise<ScimResponse> {
-    const run = this.#scimWork.then(async () => {
-      const directory = this.#scimDirectory();
-      if (!tokenMatches(directory, authorization)) return { status: 401, body: { schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'], status: '401', detail: 'wrong or missing bearer token' } };
-      const response = scimHandle(directory, req);
-      if (response.changed) {
-        writeSecretJson(this.home, this.#scimFile, directory);
-        await this.#applyDirectory();
-      }
-      // Someone new in the user management gets their invitation by email, if the company wants that.
-      const created = response.status === 201 && req.path.startsWith('/Users') ? (response.body as { active?: boolean; userName?: string; emails?: Array<{ value: string }> }) : undefined;
-      const email = created?.active === false ? undefined : (created?.emails?.[0]?.value ?? (created?.userName?.includes('@') ? created.userName : undefined));
-      if (email && this.config.scim?.invite)
-        void this.inviteByEmail({ to: email })
-          .then(() => this.consoleRecord({ action: 'invite', email }, { subject: 'scim' }))
-          .catch((error: Error) => console.error(`weave: the invitation to ${email} wasn't sent: ${error.message}`));
-      return response;
-    });
-    this.#scimWork = run.catch(() => undefined);
-    return run;
-  }
 
-  /**
-   * The directory as it stands, applied to everyone the company vouches for:
-   * deactivated or deleted people aren't vouched for any more (and are removed
-   * from the company's spaces at once; deleted company-owned identities are
-   * frozen); everyone else gets the directory's groups. People the directory
-   * doesn't know yet are left as they are.
-   */
-  async #applyDirectory(): Promise<number> {
-    if (!this.config.scim) return 0;
-    const directory = this.#scimDirectory();
-    const now = new Date(this.clock()).toISOString();
-    let changed = 0;
-    for (const group of this.#companyGroups()) {
-      for (const [did, a] of this.#attestations(group, this.identity.author)) {
-        if (a.until <= now) continue;
-        const found = findPerson(directory, { subject: a.subject, email: a.email });
-        const vouch = (groups: string[], until: string) =>
-          this.replica.write(this.identity, sealFor(this.#cipher(group), { kind: KIND_ATTEST, body: { did, subject: a.subject, ...(a.email ? { email: a.email } : {}), groups, until } }));
-        if (found.deleted || (found.user && !found.user.active)) {
-          vouch(a.groups, now);
-          if (found.deleted && this.replica.authority.keys(did).org === this.identity.author && !this.replica.authority.frozen(did)) await this.#freeze(did);
-          changed++;
-        } else if (found.user) {
-          const groups = groupsOf(directory, found.user.id);
-          if (groups.join('\n') !== [...a.groups].sort().join('\n')) {
-            vouch(groups, a.until);
-            changed++;
-          }
-        }
-      }
-    }
-    if (changed) {
-      await this.#offboard();
-      await this.#orgDuties();
-    }
-    return changed;
-  }
 
   // ---------------------------------------------------------------- budgets (stage 8)
 
@@ -8303,7 +6882,7 @@ export class WeaveNode implements Backend {
 
   /** Over budget? Counted from what this node holds of the author's live content in that space (the last hour). */
   #admit = (event: EventV2, body: Json | undefined): string | undefined => {
-    const refused = this.#policyRefuses(event, body);
+    const refused = this.#companies.policyRefuses(event, body);
     if (refused) return refused;
     if (!this.budgets || event.class !== 'content') return undefined; // control is never held back: nothing may block a rekey
     const hourAgo = this.clock() - 3_600_000;
@@ -8335,119 +6914,12 @@ export class WeaveNode implements Backend {
     const state = this.#state(space);
     if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} puts it on hold`);
     if (Number.isNaN(Date.parse(input.until))) throw new Error('until is a date, e.g. 2027-12-31');
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_HOLD, body: { until: new Date(input.until).toISOString(), reason: input.reason ?? '' } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_HOLD, body: { until: new Date(input.until).toISOString(), reason: input.reason ?? '' } }));
     return this.#spaceInfo(space);
   }
 
-  // ---------------------------------------------------------------- SSO (stage 6.3)
+  // ---------------------------------------------------------------- removals, settled and anchored
 
-  async signIn(input: { space: string; idToken: string; salt?: string }): Promise<void> {
-    const space = this.#space(input.space);
-    const setting = this.#state(space).managed;
-    if (!setting?.attestor) throw new Error(`${space.name} has no company sign-in`);
-    const sso = this.#sso();
-    // A token keeps its salt (a refreshed one too, while the company's sign-in keeps its nonce).
-    const salt = input.salt ?? sso?.salt;
-    // Kept for the key service too (Vault's JWT auth), sealed at rest.
-    this.#saveSso({ ...(sso ?? {}), idToken: input.idToken, salt, expires: (claimsOf(input.idToken).exp ?? 0) * 1000 });
-    await this.#unlock(space);
-    const device = this.#deviceProof(input.idToken);
-    // Who hands it in, and the salt that ties the token to them (0siqvEzB).
-    const box = boxTo(this.#encryptionKeyOf(setting.attestor), { idToken: input.idToken, did: this.identity.author, ...(salt ? { salt } : {}), ...(device ? { device: device as unknown as Json } : {}) });
-    // A sign-in is what lets the company's key service open its half to us, so it can't wait for it: boxed to the attestor, it goes under the newest key at hand.
-    const cipher = await this.#cipherReady(space);
-    const athand = { ...cipher, keys: Object.fromEntries(Object.entries(cipher.keys).filter(([, key]) => key)) };
-    this.replica.write(this.identity, sealFor(athand, { kind: KIND_SIGNIN, body: { box: box as unknown as Json } }));
-  }
-
-  /** Who the attestor vouches for in a space: did → their latest attestation, while it holds or not. */
-  /** Sign-ins the company didn't vouch for because of the computer they came from (stage 15): person → why, and when. */
-  #deviceRefused = new Map<Did, { problem: string; time: string }>();
-  /** Sign-ins the company didn't vouch for because they weren't the identity's own (0siqvEzB): person → why, and when. */
-  #signInRefused = new Map<Did, { problem: string; time: string }>();
-
-  #attestations(space: StoredSpace, attestor: Did): Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }> {
-    const out = new Map<Did, { subject: string; email?: string; groups: string[]; until: string; time: string; device?: { subject: string; serial: string; validTo?: string } }>();
-    // A company space's people are vouched for in the company group (stage 10).
-    const company = this.#managedRaw(space).setting?.company;
-    for (const d of this.#decodedIn(company && this.#spaces.has(company) ? company : space.id)) {
-      if (d.inner.kind !== KIND_ATTEST || d.event.author !== attestor) continue;
-      const b = d.inner.body as { did?: unknown; subject?: unknown; email?: unknown; groups?: unknown; until?: unknown; device?: { subject?: unknown; serial?: unknown; validTo?: unknown } } | null;
-      if (!isDid(b?.did) || typeof b?.subject !== 'string' || typeof b?.until !== 'string') continue;
-      out.set(b.did, { subject: b.subject, ...(typeof b.email === 'string' ? { email: b.email } : {}), groups: Array.isArray(b.groups) ? b.groups.filter((g): g is string => typeof g === 'string') : [], until: b.until, time: d.event.time, ...(typeof b.device?.subject === 'string' && typeof b.device.serial === 'string' ? { device: { subject: b.device.subject, serial: b.device.serial, ...(typeof b.device.validTo === 'string' ? { validTo: b.device.validTo } : {}) } } : {}) });
-    }
-    return out;
-  }
-
-  /** As a company's attestor: check new sign-ins with the OIDC provider and vouch for those that hold. */
-  async #attest(): Promise<number> {
-    const config = this.config.attestor;
-    if (!config) return 0;
-    let made = 0;
-    for (const space of [...this.#spaces.values()]) {
-      const setting = this.#state(space).managed;
-      if (setting?.attestor !== this.identity.author) continue;
-      const attested = this.#attestations(space, this.identity.author);
-      for (const d of this.#decodedIn(space.id)) {
-        if (d.inner.kind !== KIND_SIGNIN || (attested.get(d.event.author)?.time ?? '') >= d.event.time) continue;
-        const box = (d.inner.body as { box?: unknown } | null)?.box;
-        const opened = box ? this.#tryOpen((me) => openBox(me.keys.secretKey, me.keys.publicKey, box as unknown as Box) as { idToken?: unknown }) : undefined;
-        if (typeof opened?.idToken !== 'string') continue;
-        const claims = await verifyIdToken(opened.idToken, config.issuer, config.audience).catch(() => undefined);
-        if (!claims) continue;
-        // The sign-in must be this identity's own (0siqvEzB): colleagues read the sealed sign-ins and could copy a box, and
-        // whoever sees a token (the key service takes it too) could hand it in as theirs. The token's nonce names the
-        // identity it was asked for; one without (a refreshed token) only renews who it vouched for already.
-        const handedIn = opened as { did?: unknown; salt?: unknown };
-        const salt = typeof handedIn.salt === 'string' ? handedIn.salt : undefined;
-        const bound = !!salt && claims.nonce === signInNonce(d.event.author, salt);
-        const renews = attested.get(d.event.author)?.subject === claims.sub;
-        const now = new Date(this.clock()).toISOString();
-        const taken = [...attested].some(([did, a]) => did !== d.event.author && a.subject === claims.sub && a.until > now);
-        const problem =
-          handedIn.did !== d.event.author ? 'this sign-in was handed in by someone else'
-          : salt && claims.nonce !== undefined && !bound ? 'this sign-in was made for another identity'
-          : !bound && !renews ? "this sign-in isn't tied to this identity: sign in from Weave on this computer"
-          : taken ? `${claims.email ?? claims.sub} is vouched for as another identity: that one has to lapse or be removed first`
-          : undefined;
-        if (problem) {
-          this.#signInRefused.set(d.event.author, { problem, time: d.event.time });
-          continue;
-        }
-        this.#signInRefused.delete(d.event.author);
-        // With SCIM on, the directory decides: deactivated or unknown people aren't vouched for, and its groups count (stage 12).
-        let groups = claims.groups;
-        if (this.config.scim) {
-          const directory = this.#scimDirectory();
-          // The directory decides for those it knows: deactivated or deleted aren't vouched for; the rest get its groups.
-          // Those it doesn't know yet (before the first provisioning) keep their sign-in's groups.
-          const { user, deleted } = findPerson(directory, { subject: claims.sub, email: claims.email });
-          if (deleted || (user && !user.active)) continue;
-          if (user) groups = groupsOf(directory, user.id);
-        }
-        // With a device authority, only sign-ins from the company's computers.
-        const ca = this.#orgOf(space)?.deviceCA;
-        const checked = ca ? inspectDevice((opened as { device?: unknown }).device, ca, d.event.author, opened.idToken, this.clock()) : undefined;
-        if (checked && 'problem' in checked) {
-          this.#deviceRefused.set(d.event.author, { problem: checked.problem, time: d.event.time });
-          continue;
-        }
-        const device = checked?.device;
-        this.#deviceRefused.delete(d.event.author);
-        const until = new Date(this.clock() + (config.hours ?? 24) * 3_600_000).toISOString();
-        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_ATTEST, body: { did: d.event.author, subject: claims.sub, ...(claims.email ? { email: claims.email } : {}), groups, until, ...(device ? { device } : {}) } }));
-        attested.set(d.event.author, { subject: claims.sub, groups, until, time: new Date().toISOString() });
-        made++;
-      }
-    }
-    return made;
-  }
-
-  /**
-   * In a space with an attestor: people the company no longer vouches for are
-   * removed (with a new key), by whoever manages the space. Newcomers get an
-   * hour to sign in.
-   */
   /**
    * Two people who took each other's role at once (each removal or demotion
    * not naming the other as seen): as the owner, say which came first, by the
@@ -8460,7 +6932,7 @@ export class WeaveNode implements Backend {
       const state = this.#state(space);
       if (state.founder !== this.identity.author) continue;
       for (const pair of state.unsettled ?? []) {
-        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SETTLE, body: pair }));
+        this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SETTLE, body: pair }));
         settled++;
       }
     }
@@ -8482,72 +6954,14 @@ export class WeaveNode implements Backend {
         if (state.left.has(did) || state.members.has(did)) continue;
         const signers = this.replica.signers().filter((s) => this.replica.authority.personOf(s) === did);
         if (!signers.length || signers.every((s) => state.cutoffs?.some((c) => c.signer === s && c.c !== undefined))) continue;
-        this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_REMOVE, body: { member: did, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
+        this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_REMOVE, body: { member: did, upTo: this.#upTo(did), at: this.#anchor(did, space) } }));
         anchored++;
       }
     }
     return anchored;
   }
 
-  async #offboard(): Promise<number> {
-    let removed = 0;
-    const now = new Date(this.clock()).toISOString();
-    const hourAgo = new Date(this.clock() - 3_600_000).toISOString();
-    for (const space of [...this.#spaces.values()]) {
-      const state = this.#state(space);
-      const attestor = state.managed?.attestor;
-      if (!attestor || !canManage(state, this.identity.author)) continue;
-      const attested = this.#attestations(space, attestor);
-      for (const [did, member] of state.members) {
-        if (did === state.founder || did === attestor || did === this.identity.author) continue;
-        // Newcomers get an hour to sign in; someone the company stopped vouching for goes at once.
-        const attestation = attested.get(did);
-        if (attestation ? attestation.until > now : member.since > hourAgo) continue;
-        await this.removeMember(space.id, did);
-        removed++;
-      }
-    }
-    return removed;
-  }
 
-  async manageSpace(input: { space: string; provider: ProviderSpec; ttlMinutes?: number; graceHours?: number; attestor?: string; company?: string }): Promise<SpaceInfo> {
-    const space = this.#space(input.space);
-    const state = this.#state(space);
-    if (space.kind === 'direct') throw new Error('a direct chat belongs to two people, not a company');
-    if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} puts its keys under a company's key service`);
-    const setting: ManagedSetting = { provider: input.provider as unknown as Json, ttlMinutes: input.ttlMinutes ?? 15, graceHours: input.graceHours ?? 8, by: this.identity.author, time: new Date().toISOString() };
-    // Check the provider works before anything depends on it.
-    const probe = new Uint8Array(randomBytes(32));
-    const back = await this.#provider(setting).unwrap(await this.#provider(setting).wrap(probe, { space: spaceScope(space), epoch: -1 }), { space: spaceScope(space), epoch: -1 });
-    if (b64u.encode(back) !== b64u.encode(probe)) throw new Error('the key service gave back something else');
-    const attestor = input.attestor ? this.resolve(input.attestor) : undefined;
-    this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: { provider: setting.provider, ttlMinutes: setting.ttlMinutes, graceHours: setting.graceHours, ...(attestor ? { attestor } : {}), ...(input.company ? { company: input.company } : {}), from: currentEpoch(space) + 1 } }));
-    // From the next key on, half of it is the company's.
-    this.#rotateKey(space);
-    return this.#spaceInfo(space);
-  }
-
-  async unlockSpace(ref: string): Promise<SpaceInfo> {
-    const space = this.#space(ref);
-    await this.#unlock(space);
-    const problem = this.#managedProblems.get(space.id);
-    if (problem) throw new Error(problem);
-    return this.#spaceInfo(space);
-  }
-
-  async destroyCompanyKey(ref: string): Promise<void> {
-    const space = this.#space(ref);
-    const state = this.#state(space);
-    if (!state.managed) throw new Error(`${space.name} isn't under a company's key service`);
-    if (state.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} destroys its company key`);
-    if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: its company key stays`);
-    await this.#provider(state.managed).destroy();
-    for (const id of [...this.#managedKeys.keys()]) if (id.startsWith(`${space.id}:`)) this.#managedKeys.delete(id);
-    const cache = this.#graceCache();
-    for (const id of Object.keys(cache)) if (id.startsWith(`${space.id}:`)) delete cache[id];
-    writeSecretJson(this.home, joinPath(this.home.dir, 'managed-keys.json'), cache);
-    this.#decoded = undefined;
-  }
 
   /** The space's rules for agents and services as they apply (company spaces: approved only), and who is approved. */
   #visitorsInfo(space: StoredSpace): NonNullable<SpaceInfo['visitors']> {
@@ -8563,23 +6977,6 @@ export class WeaveNode implements Backend {
     };
   }
 
-  #managedInfo(space: StoredSpace, setting: ManagedSetting): NonNullable<SpaceInfo['managed']> {
-    const spec = setting.provider as unknown as ProviderSpec;
-    const current = this.#cipher(space).keys[String(currentEpoch(space))] !== undefined;
-    const problem = this.#managedProblems.get(space.id);
-    return {
-      agents: [...(this.#state(space).approvedAgents ?? [])].map((did) => {
-        const grant = this.replica.authority.grant(did);
-        return grant ? `${this.nameOf(grant.author) ?? grant.author}/${grant.name ?? did.slice(8, 16)}` : did;
-      }),
-      provider: spec.kind === 'vault' ? `Vault at ${spec.address} (${spec.key})` : spec.kind === 'azure' ? `Azure Key Vault ${spec.vault} (${spec.key})` : spec.kind === 'aws' || spec.kind === 'gcp' ? providerFor(spec, this.home, {}).describe().keyRef : spec.kind,
-      unlocked: current,
-      ttlMinutes: setting.ttlMinutes,
-      graceHours: setting.graceHours,
-      ...(setting.attestor ? { attestor: setting.attestor } : {}),
-      ...(problem ? { problem } : {}),
-    };
-  }
 
   // ---------------------------------------------------------------- keepers (stage 5)
 
@@ -8605,7 +7002,7 @@ export class WeaveNode implements Backend {
       { scope: SELF_SCOPE },
       ...[...this.#directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer })),
       // A company's spaces are kept by its own archive, never by friends (stage 13).
-      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO && !this.#managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
+      ...[...this.#spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.#state(s).members.size <= KEPT_UP_TO && !this.#managed.managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
     ];
   }
 
@@ -8894,7 +7291,7 @@ export class WeaveNode implements Backend {
     if (!dids.length) return;
     // Letting them in would need a new key we can't give: someone who manages the project does it.
     if (!canManage(this.#state(project), this.identity.author) && this.#needsFreshKey(project)) return;
-    for (const member of dids) this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
+    for (const member of dids) this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ADMIT, body: { member, via: group.id } }));
     this.replica.write(this.identity, gift(this.#keysForNewcomers(project), dids, spaceScope(group), this.#entryPoint(), this.#encryptionKeyOf));
   }
 
@@ -9080,7 +7477,7 @@ export class WeaveNode implements Backend {
       ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',
-      ...(state.managed ? { managed: this.#managedInfo(space, state.managed) } : {}),
+      ...(state.managed ? { managed: this.#managed.managedInfo(space, state.managed) } : {}),
       ...(space.kind !== 'direct' ? { visitors: this.#visitorsInfo(space) } : {}),
       ...(this.#held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.#homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
@@ -9204,7 +7601,7 @@ export class WeaveNode implements Backend {
     const around = this.#aroundPosts(entries);
     const visible = postsOf(space.kind, entries, state.maintainers).filter((p) => known.has(p.board)); // posts of dropped boards stay in the logs, out of sight
     const ctx = { scores: scoresOf(entries), chats: this.#chats(entries), saves: this.#saves(), entries, prefixes: shortPrefixes(visible.map((p) => p.id)) };
-    const minDays = this.#companyRetention(space)?.minDays;
+    const minDays = this.#companies.companyRetention(space)?.minDays;
     // Each author's share of each board with a rule: their bytes against an even split (stage 8).
     const overuse = new Map<string, number>();
     for (const board of rules.keys()) {
@@ -9348,9 +7745,9 @@ export class WeaveNode implements Backend {
     };
     const keepDays = valid(input.keepDays, 36_500, 'days to keep');
     const maxMB = valid(input.maxMB, 1_000_000, 'the size limit in MB');
-    const floor = this.#companyRetention(space)?.minDays;
+    const floor = this.#companies.companyRetention(space)?.minDays;
     if (floor && keepDays && keepDays < floor) throw new Error(`${space.name} is a company space: it keeps everything at least ${floor} days`);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_BOARD_RULE, body: { board: board.name, keepDays, maxMB } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_BOARD_RULE, body: { board: board.name, keepDays, maxMB } }));
     return this.boards(space.id);
   }
 
@@ -9362,7 +7759,7 @@ export class WeaveNode implements Backend {
     if (this.#held(state)) throw new Error(`${space.name} is on legal hold until ${state.hold!.until.slice(0, 10)}: nothing is shredded`);
     const before = Date.parse(input.before);
     if (Number.isNaN(before)) throw new Error('before is a date, e.g. 2026-09-01');
-    const floor = this.#companyRetention(space)?.minDays;
+    const floor = this.#companies.companyRetention(space)?.minDays;
     if (floor && before > this.clock() - floor * DAY_MS)
       throw new Error(`${space.name} is a company space: it keeps everything at least ${floor} days (shred before ${new Date(this.clock() - floor * DAY_MS).toISOString().slice(0, 10)} at the latest)`);
     // An epoch ends when the next one begins; the current one can't be shredded.
@@ -9371,14 +7768,14 @@ export class WeaveNode implements Backend {
     const ended = epochs.slice(0, -1).filter((e, i) => (starts.get(epochs[i + 1]) ?? '') !== '' && Date.parse(starts.get(epochs[i + 1])!) <= before);
     if (!ended.length) throw new Error(`no key of ${space.name} ended before ${input.before.slice(0, 10)}${epochs.length < 2 ? ': it has had one key all along' : ''}`);
     // A company space's setting is read with the keys alone (see #managedRaw): restated under the current key, or it would go with the old ones.
-    const managed = this.#managedRaw(space).setting;
+    const managed = this.#managed.managedRaw(space).setting;
     if (managed) {
       if (space.founder !== this.identity.author) throw new Error(`only the owner of ${space.name} shreds it: it's under a company's key service`);
       const { by: _by, time: _time, ...setting } = managed;
       this.replica.write(this.identity, sealFor(space, { kind: KIND_MANAGED, body: setting as unknown as Json }));
     }
     const { carried, dropped } = this.#carryForward(space, new Set(ended), input.dropOlder ? new Date(before).toISOString() : undefined);
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_SHRED, body: { epochs: ended, dropped } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_SHRED, body: { epochs: ended, dropped } }));
     return { epochs: ended, carried };
   }
 
@@ -9414,7 +7811,7 @@ export class WeaveNode implements Backend {
       const keys = board ? space.boards?.[board] : undefined;
       const latest = keys ? Math.max(...Object.keys(keys).map(Number)) : -1;
       if (board && latest < 0) continue; // a board we can't read: we hold none of it to carry
-      this.replica.write(this.identity, sealFor(this.#cipher(space), board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
+      this.replica.write(this.identity, sealFor(this.#managed.cipher(space), board ? sealForBoard(space, board, latest, keys![String(latest)], inner) : inner));
     }
     return { carried: items.length, dropped };
   }
@@ -9429,8 +7826,8 @@ export class WeaveNode implements Backend {
         const epochs = (d.inner.body as { epochs?: unknown } | null)?.epochs;
         if (!Array.isArray(epochs)) continue;
         // A company's minimum keeps recent keys, whoever asks to shred them.
-        const floor = this.#companyRetention(space)?.minDays;
-        const kept = floor ? this.#endedWithin(space, floor) : undefined;
+        const floor = this.#companies.companyRetention(space)?.minDays;
+        const kept = floor ? this.#companies.endedWithin(space, floor) : undefined;
         const live = epochs.filter((e): e is number => Number.isSafeInteger(e) && !!space.keys[String(e)] && !kept?.has(e));
         const dropped = (d.inner.body as { dropped?: unknown } | null)?.dropped;
         if (live.length) {
@@ -9448,7 +7845,7 @@ export class WeaveNode implements Backend {
     const doomed = new Set(epochs.filter((e) => space.keys[String(e)] && e !== currentEpoch(space)));
     if (!doomed.size) return;
     // Our own work stays with us: restated in our private space first. Not in a company space: there, the company's retention decides (stage 11).
-    const company = !!this.#managedRaw(space).setting?.company;
+    const company = !!this.#managed.managedRaw(space).setting?.company;
     const mine = company ? [] : this.#decodedIn(space.id).filter((d) => d.event.author === this.identity.author && !d.carried && doomed.has(Number((d.event.body as { epoch?: unknown } | null)?.epoch)));
     if (mine.length) this.replica.write(this.identity, this.#sealForSelf({ kind: KIND_CARRY, body: { space: space.id, events: mine.map(carriedItem) as unknown as Json } }));
     // The shredder's carry restates only what its node held (zLqeyEBC): what we hold of those epochs that no carry under a
@@ -9465,7 +7862,7 @@ export class WeaveNode implements Backend {
     const scope = spaceScope(space);
     // Bodies are stored once per hash for every space: drop only this space's own. One counts as ours if it opens with this
     // space's key of that epoch (a copy of another space's body under our scope doesn't), and no event elsewhere points to it.
-    const cipher = this.#cipher(space);
+    const cipher = this.#managed.cipher(space);
     const elsewhere = new Set(this.replica.events((r) => r.scope !== scope && isWireItemV2(r.wire)).map((r) => (r.wire as WireItemV2).e.body as string));
     for (const r of this.replica.events((r) => r.scope === scope && r.class === 'content' && !r.missing)) {
       if (!doomed.has(Number((r.body as { epoch?: unknown } | null)?.epoch)) || !isWireItemV2(r.wire)) continue;
@@ -9483,7 +7880,7 @@ export class WeaveNode implements Backend {
     const space = post.space && this.#spaces.get(post.space.id);
     if (!space) throw new Error('only posts of projects and communities are forgotten');
     if (post.by.did !== this.identity.author && !this.#managers(this.#state(space)).has(this.identity.author)) throw new Error('its author keeps a post, or those who manage the space');
-    this.replica.write(this.identity, sealFor(this.#cipher(space), { kind: KIND_POST_KEEP, body: { target: post.id } }));
+    this.replica.write(this.identity, sealFor(this.#managed.cipher(space), { kind: KIND_POST_KEEP, body: { target: post.id } }));
     return this.post(post.id);
   }
 
@@ -9751,7 +8148,7 @@ export class WeaveNode implements Backend {
       }
       // The setting and the company halves are sealed with the Weave half alone; nothing else counts that way in a managed space.
       const raw = space ? openIn(space, event) : undefined;
-      const inner = space && (openIn(this.#cipher(space), event) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
+      const inner = space && (openIn(this.#managed.cipher(space), event) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
       if (!inner) return undefined;
       decoded = { event, inner, space };
       // An event of a read-limited board: readable only with that board's key.
@@ -9773,8 +8170,8 @@ export class WeaveNode implements Backend {
 
   #decodeAll(): Decoded[] {
     // A managed key used for these views ran out: decode again without it.
-    if (this.#decoded && this.clock() >= this.#decodedValidUntil) this.#decoded = undefined;
-    if (!this.#decoded) this.#decodedValidUntil = Infinity;
+    if (this.#decoded && this.clock() >= this.#managed.decodedValidUntil) this.#decoded = undefined;
+    if (!this.#decoded) this.#managed.decodedValidUntil = Infinity;
     // Board keys arrive inside the project: taking one makes more events readable, so decode again.
     for (let round = 0; round < 4; round++) {
       if (!this.#decoded) {
@@ -10051,7 +8448,7 @@ export class WeaveNode implements Backend {
         const roster = [...this.#state(group).members.keys()].filter((did) => state.members.has(did)).sort();
         const known = [...(access.rosters.get(id) ?? [])].sort();
         if (roster.join() === known.join()) continue;
-        this.replica.write(this.identity, sealFor(this.#cipher(project), { kind: KIND_ROSTER, body: { group: id, members: roster } }));
+        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), { kind: KIND_ROSTER, body: { group: id, members: roster } }));
         changed++;
       }
       if (changed) {
@@ -10070,7 +8467,7 @@ export class WeaveNode implements Backend {
         const key = newBoardKey();
         ((project.boards ??= {})[board] ??= {})[String(epoch)] = key;
         this.#saveSpace(project);
-        this.replica.write(this.identity, sealFor(this.#cipher(project), boardKeyFor(project, board, epoch, key, readers, this.#encryptionKeyOf)));
+        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), boardKeyFor(project, board, epoch, key, readers, this.#encryptionKeyOf)));
         changed++;
       };
       if (!epochs?.size) {
@@ -10086,7 +8483,7 @@ export class WeaveNode implements Backend {
         const key = mine[String(epoch)];
         const missing = key ? readers.filter((did) => !holding.has(did)) : [];
         if (!missing.length) continue;
-        this.replica.write(this.identity, sealFor(this.#cipher(project), boardKeyFor(project, board, epoch, key, missing, this.#encryptionKeyOf)));
+        this.replica.write(this.identity, sealFor(this.#managed.cipher(project), boardKeyFor(project, board, epoch, key, missing, this.#encryptionKeyOf)));
         changed++;
       }
     }
@@ -10216,6 +8613,62 @@ export class WeaveNode implements Backend {
   // ---------------------------------------------------------------- modules: services and websites
 
   /** What services.ts reaches of the node: exactly what it uses. */
+  /** What company accounts see of the node, and nothing more (companies.ts). */
+  static companiesCore(n: WeaveNode): CompaniesCore {
+    return {
+      agentName: n.#agentName.bind(n),
+      anchor: n.#anchor.bind(n),
+      createSpace: n.#createSpace.bind(n),
+      decodeAll: n.#decodeAll.bind(n),
+      decodedIn: n.#decodedIn.bind(n),
+      get directs() {
+        return n.#directs;
+      },
+      get encryptionKeyOf() {
+        return n.#encryptionKeyOf;
+      },
+      entryPoint: n.#entryPoint.bind(n),
+      epochStarts: n.#epochStarts.bind(n),
+      held: n.#held.bind(n),
+      keysForNewcomers: n.#keysForNewcomers.bind(n),
+      get managed() {
+        return n.#managed;
+      },
+      memo: n.#memo.bind(n),
+      space: n.#space.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      get sqlite() {
+        return n.#sqlite;
+      },
+      state: n.#state.bind(n),
+      tryOpen: n.#tryOpen.bind(n),
+      upTo: n.#upTo.bind(n),
+    };
+  }
+
+  /** What the key service sees of the node, and nothing more (managed.ts). */
+  static managedCore(n: WeaveNode): ManagedCore {
+    return {
+      invalidateDecoded: () => {
+        n.#decoded = undefined;
+      },
+      // Lazily: the key service is built before company accounts are.
+      delegated: (scope) => n.#companies.delegated(scope),
+      held: n.#held.bind(n),
+      rotateKey: n.#rotateKey.bind(n),
+      saveSpace: n.#saveSpace.bind(n),
+      space: n.#space.bind(n),
+      spaceInfo: n.#spaceInfo.bind(n),
+      get spaces() {
+        return n.#spaces;
+      },
+      ssoToken: () => n.#companies.ssoToken(),
+      state: n.#state.bind(n),
+    };
+  }
+
   static servicesHost(n: WeaveNode) {
     return {
       actor: n.#actor.bind(n),
@@ -10225,7 +8678,7 @@ export class WeaveNode implements Backend {
       set agents(value) {
         n.#agents = value;
       },
-      cipher: n.#cipher.bind(n),
+      cipher: n.#managed.cipher.bind(n.#managed),
       decode: n.#decode.bind(n),
       decodeAll: n.#decodeAll.bind(n),
       emitLive: n.#emitLive.bind(n),
@@ -10301,7 +8754,7 @@ export class WeaveNode implements Backend {
       },
       allBadges: n.#allBadges.bind(n),
       allShows: n.#allShows.bind(n),
-      cipher: n.#cipher.bind(n),
+      cipher: n.#managed.cipher.bind(n.#managed),
       get clock() {
         return n.clock;
       },
