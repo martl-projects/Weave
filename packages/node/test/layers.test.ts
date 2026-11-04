@@ -84,7 +84,30 @@ const MAY_USE_NODE = [
   'websocket.ts',
 ];
 
+/** The core: what runs wherever JavaScript runs. It imports no node:* module and nothing else as a value: types only. */
+const CORE = ['kernel.ts', 'membership.ts', 'content.ts', 'people.ts', 'shared.ts', 'ports.ts'];
+
 describe('the layers of packages/node', () => {
+  it('the core imports nothing of the host as a value, and no node:* module', () => {
+    for (const file of CORE) {
+      const text = readFileSync(join(root, file), 'utf8');
+      const bad: string[] = [];
+      for (const m of text.matchAll(/^import\s+(type\s+)?(\{[^}]*\}|\w+)\s+from\s+'([^']+)';/gm)) {
+        const [, typeOnly, names, source] = m;
+        if (source.startsWith('node:')) bad.push(source);
+        if (!source.startsWith('./')) continue;
+        if (typeOnly) continue;
+        const target = source.slice(2);
+        // The API's types and constants, avatars and themes: pure, nothing of the host in them.
+        if (CORE.includes(target) || ['backend.ts', 'avatar.ts', 'theme.ts'].includes(target)) continue;
+        // A braced list where every name carries its own `type` is a type import too.
+        const values = names.startsWith('{') ? names.slice(1, -1).split(',').map((s) => s.trim()).filter((s) => s && !s.startsWith('type ')) : [names];
+        if (values.length) bad.push(`${source} (${values.join(', ')})`);
+      }
+      expect(bad, `${file} reaches the host through`).toEqual([]);
+    }
+  });
+
   it('only the files on the list import node:* modules', () => {
     const using = sources().filter((f) => importsOf(f).some((s) => s.startsWith('node:')));
     expect(using).toEqual([...MAY_USE_NODE].sort());

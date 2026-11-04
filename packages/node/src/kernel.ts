@@ -1,9 +1,9 @@
 import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts } from '@weave/core';
-import { type HeldSpace, type SpaceAccess, SwarmNode } from '@weave/net';
+import type { HeldSpace, SpaceAccess, SwarmNode } from '@weave/net';
 import { type Actor, type Admission, type BoardInfo, type FeedItem, type HomeSource, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type ProjectPage, type ProjectStatus, type ProposalInfo, type ReactionInfo, type ReplyInfo, type SpaceInfo, type SpaceRef, type ThreadInfo } from './backend.ts';
 import type { People } from './people.ts';
 import { CARRIED_STATE, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
-import { type StoredSpace } from './spacestore.ts';
+import type { StoredSpace } from './spacestore.ts';
 import type { KeyPair, Recipient } from '@weave/core';
 import type { Network, SpaceStorage } from './ports.ts';
 import type { Companies } from './companies.ts';
@@ -13,7 +13,7 @@ import type { ManagedKeys } from './managed.ts';
 import type { Forgetting } from './retention.ts';
 import type { Services } from './services.ts';
 import type { Decoded, WeaveNode } from './node.ts';
-import { replicaOrder, photoOrderOf, photoPosesOf, DEFAULT_PAGE, carriedItem, meetTopic, summary, KIND_PAGE, KIND_SPACE_PHOTO } from './node.ts';
+import { replicaOrder, photoOrderOf, photoPosesOf, DEFAULT_PAGE, carriedItem, meetTopic, summary, KIND_PAGE, KIND_SPACE_PHOTO } from './shared.ts';
 import { newSpace, directSpace } from '@weave/core';
 /*
  * The kernel: the spaces this node holds and their keys, epochs, rekeys and

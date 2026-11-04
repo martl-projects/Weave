@@ -112,7 +112,6 @@ import {
   type Person,
   type Notice,
   type PostInfo,
-  type ProjectPage,
   type PublishInput,
   type SpaceInfo,
   type Whoami,
@@ -178,23 +177,11 @@ import { People, type PeopleCore } from './people.ts';
 import { Apps, type AppsCore } from './apps.ts';
 import { Kernel, type KernelCore } from './kernel.ts';
 import { Membership, type MembershipCore } from './membership.ts';
+import type { SpaceStorage } from './ports.ts';
+import { startDeviceSignIn } from './devicecode.ts';
+import { KIND_PROFILE, meetTopic, meetSecretOf } from './shared.ts';
 
 
-export const KIND_PROFILE = 'weave.profile';
-/** A project's page, sealed inside the project; the latest one by a maintainer counts. */
-export const KIND_PAGE = 'weave.project.page';
-/**
- * A space's photo, as those who run it set it: a picture of their own (a wblob: reference), or none (everyone's
- * avatars as a group photo), the text on the banner in it (its name when empty), and a background behind the group
- * photo (a wblob: reference; a project's banner too, unless its page has one), and whether a project's members stand
- * on its banner (members: true), who stands where in the group photo (order: dids, front row first) and how (poses:
- * did → a pose's or a scene's id, as Weave avatar names them), and whether the
- * photo stands above its member list (list; by default for groups and communities, not for projects, which have a
- * banner). The latest one counts.
- */
-export const KIND_SPACE_PHOTO = 'weave.space.photo';
-/** A public copy of a project's page, published by a maintainer when the project is public. */
-export const KIND_PUBLIC_PROJECT = 'weave.project.public';
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
 export const KIND_HOME_HIDDEN = 'weave.home.hidden';
 /** Sealed to yourself: {space, board, on}. You follow a project's board: its posts come to Home and notify you. */
@@ -311,67 +298,12 @@ export interface Decoded {
   private?: true;
 }
 
-/** The order replica.events() returns: claimed time, then signer, then seq. */
-export const replicaOrder = (a: WeaveRecord, b: WeaveRecord): number => a.time.localeCompare(b.time) || a.signer.localeCompare(b.signer) || a.seq - b.seq;
-
 /** What an always-on node's key may sign: hosting your rooms. Everything else it writes, everyone else drops. */
 export const NODE_PERMISSIONS = ['weave.room', 'weave.room.*'];
 
 
 
 
-
-/**
- * A person's meeting point: the DHT topic their node is found on, from a secret that only their links carry (so a
- * DID, which is public, never tells where a computer is). The topic is a hash, so it never shows the secret.
- */
-export const meetTopic = (secret: Uint8Array): string => `meet:${b64u.encode(new Uint8Array(createHash('sha256').update('weave/meet-topic/v1').update(secret).digest()))}`;
-
-/** A meeting point's secret from a link (base64url, 32 bytes), if it carries a valid one. */
-export function meetSecretOf(entry: { meet?: unknown } | undefined): Uint8Array | undefined {
-  if (typeof entry?.meet !== 'string') return undefined;
-  try {
-    const secret = b64u.decode(entry.meet);
-    return secret.length === 32 ? secret : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * An event as a carry restates it: what it said, with its original signed
- * envelope (`e`) and the salt sealed with it, so that anyone can check the
- * restatement against its author's signature (the envelope signs the salted
- * hash of what it sealed, ih) without the key it was sealed with.
- */
-export const carriedItem = (d: { id: string; event: { author: Did; signer: Did; seq: number; time: string; wire?: unknown }; inner: { kind: string; body: Json; salt?: string }; outer?: Inner }) => ({
-  id: d.id,
-  author: d.event.author,
-  signer: d.event.signer,
-  seq: d.event.seq,
-  time: d.event.time,
-  kind: d.inner.kind,
-  body: d.inner.body,
-  ...(isWireItemV2(d.event.wire) ? { e: d.event.wire.e as unknown as Json } : {}),
-  // A read-limited board's event sealed its board blob: that's what the envelope signs, so that's what's checked (then opened with the board's key).
-  ...(d.outer ? { sealed: { kind: d.outer.kind, body: d.outer.body } as unknown as Json, ...(d.outer.salt ? { salt: d.outer.salt } : {}) } : d.inner.salt ? { salt: d.inner.salt } : {}),
-});
-
-/** Who stands where on a space's group photo: people's keys, each once, front row first (at most 100). */
-export const photoOrderOf = (value: unknown): Did[] =>
-  Array.isArray(value) ? [...new Set(value.filter((d): d is Did => typeof d === 'string' && /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(d)))].slice(0, 100) : [];
-
-/** How each one poses on a space's group photo: their key → a pose's or a scene's id (what they mean is Weave avatar's). */
-export const photoPosesOf = (value: unknown): Record<Did, string> =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? Object.fromEntries(
-        Object.entries(value)
-          .filter((e): e is [Did, string] => /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,80}$/.test(e[0]) && typeof e[1] === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(e[1]))
-          .slice(0, 100),
-      )
-    : {};
-
-export const DEFAULT_PAGE: ProjectPage = { title: '', subtitle: '', body: '', description: '', status: 'active', public: false };
 
 
 
@@ -891,6 +823,8 @@ export class WeaveNode implements Backend {
   #verifiers = new Verifiers(() => this.home, this.#runtime, () => this.wasmSetup.shippedDir);
   /** Services: code you run under keys of their own (see services.ts). */
   /** The company key service: halves, unlocking, sealing and opening with both halves (managed.ts). */
+  /** The spaces' files in the home: the port the kernel and membership save through (ports.ts). */
+  readonly #spaceStorage: SpaceStorage = { load: () => loadSpaces(this.home), save: (space) => saveSpace(this.home, space), remove: (id) => removeSpace(this.home, id) };
   /** The kernel: spaces, keys, decoding, state, the reading layer, board access (kernel.ts). Built first: the modules bind to it. */
   #kernel: Kernel = new Kernel(this, WeaveNode.kernelCore(this));
   #managed: ManagedKeys = new ManagedKeys(this, WeaveNode.managedCore(this));
@@ -2864,6 +2798,9 @@ export class WeaveNode implements Backend {
       get spaces() {
         return n.#spaces;
       },
+      get spaceStorage() {
+        return n.#spaceStorage;
+      },
       get network() {
         return n.#swarm;
       },
@@ -2924,10 +2861,8 @@ export class WeaveNode implements Backend {
       },
       theirMeets: n.#theirMeets.bind(n),
       tryOpen: n.#tryOpen.bind(n),
-      spaceStorage: {
-        load: () => loadSpaces(n.home),
-        save: (space) => saveSpace(n.home, space),
-        remove: (id) => removeSpace(n.home, id),
+      get spaceStorage() {
+        return n.#spaceStorage;
       },
       saveConfig: () => saveConfig(n.home, n.config),
     };
@@ -3084,6 +3019,7 @@ export class WeaveNode implements Backend {
       },
       decodeAll: n.#kernel.decodeAll.bind(n.#kernel),
       decodedIn: n.#kernel.decodedIn.bind(n.#kernel),
+      deviceSignIn: startDeviceSignIn,
       get decodedRevision() {
         return n.#kernel.decodedRevision;
       },
@@ -3845,17 +3781,6 @@ export interface Bundle {
   tiers?: Array<{ tier: string; creator: Did; note?: string }>;
 }
 
-/** The start of a Markdown text as one plain line, for shares and older clients. */
-export function summary(markdown: string, max = 300): string {
-  const plain = markdown
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#*_>`~|]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain;
-}
 
 /** What services.ts and website.ts reach of the node. */
 export type ServicesHost = ReturnType<typeof WeaveNode.servicesHost>;

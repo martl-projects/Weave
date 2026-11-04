@@ -1,6 +1,6 @@
 import { type Attachment, BLOB_TYPES, type Badge, type BlobType, type BoardType, CHOICES, COMMUNITY_BOARD, type Choice, DEFAULT_CHANNEL, type Did, type Entry, type Grantee, ISSUE_STATUSES, type IssueStatus, type Json, KIND_BOARD, KIND_BOARD_ACCESS, KIND_CHANNEL, KIND_CURATE, KIND_ISSUE, KIND_ISSUE_CLAIM, KIND_ISSUE_STATUS, KIND_MSG, KIND_POST, KIND_POST_COAUTHOR, KIND_POST_DELETE, KIND_POST_EDIT, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_REACT, KIND_REPLY, KIND_SAVE, KIND_THREAD, KIND_UPVOTE, KIND_VOTE, KIND_VOTE_DELEGATE, type KeyFacts, MAX_COAUTHORS, POST_SORTS, type Post, type PostSort, SAVE_MODES, type SaveMode, type SpaceState, TEXT_LIMITS, WeaveError, attachmentOf, blobRefsIn, boardName, boardRulesOf, channelName, channelsOf, closingUpTo, coauthorsOf, decryptBlob, encryptBlob, fileName, formatBlobRef, isDid, isMediaType, issuesOf, mayDo, mayUse, messagesOf, parseBlobRef, postRefOf, postTargetOf, postsOf, proposalsOf, rank, sceneOf, sealFor, threadsOf, tooLong } from '@weave/core';
 import { type Actor, type BoardInfo, type ChannelInfo, type CoauthorRequest, type GranteeInfo, HOME_SOURCES, type InProject, type InSpace, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type PostsQuery, type ProjectInfo, type ProjectPage, type ProposalInfo, type ReplyInfo, type SessionRef, type ThreadInfo, noAgentError } from './backend.ts';
-import { type StoredSpace } from './spacestore.ts';
+import type { StoredSpace } from './spacestore.ts';
 import type { Access, Board, BoardRule, EventFields, Inner, Issue, Message, PostTarget, Proposal, SessionStamp, SpaceKind, Thread } from '@weave/core';
 import type { HomeSource, SpaceInfo } from './backend.ts';
 import type { AgentKey } from './keystore.ts';
@@ -10,7 +10,7 @@ import type { Payments } from './payments.ts';
 import type { Sessions } from './sessions.ts';
 import type { SwarmNode } from '@weave/net';
 import type { Decoded, WeaveNode } from './node.ts';
-import { summary, KIND_PAGE, KIND_PUBLIC_PROJECT } from './node.ts';
+import { summary, KIND_PAGE, KIND_PUBLIC_PROJECT } from './shared.ts';
 /*
  * Content: posts and their boards, co-authors, upvotes, saves and shares,
  * project pages, images and files, chat, threads, issues, proposals and

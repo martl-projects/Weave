@@ -53,6 +53,7 @@ export { BUCKETS, compact, expand, fingerprint, HIGHEST, LEAF, LOWEST, openRange
 export { keepStreamId, keepTag, keepWrapKey, padded, unwrapFromKeeper, wrapForKeeper } from './keep.ts';
 export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type WeaveRecord } from './records.ts';
 export { Replica, type IngestResult } from './replica.ts';
+export { sha256 } from '@noble/hashes/sha2.js';
 export { canManage, managersOf, mayDo, mayDoAt, rekeyCounts, type Decision, type SpaceAction } from './authz.ts';
 export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
 export {

@@ -1,10 +1,10 @@
 import { type AccountClaim, type Did, type Entry, type Inner, type Json, KIND_ACCOUNT, KIND_BLOCK, KIND_CONTACT, KIND_FOLLOW, KIND_IMPRINT, KIND_MUTE, type SpaceState, TEXT_LIMITS, accountClaimsOf, accountProofText, b64u, decodeContact, edgeBody, encodeContact, followersOf, friendsOf, imprintOf, isDid, isPlatform, parseBlobRef, personKeyOf, personTargetOf, personUrl, randomBytes, rank, sealFor, tooLong } from '@weave/core';
 import { type AvatarFigure, KIND_AVATAR, sanitizeFigure } from './avatar.ts';
 import { type AccountInfo, type EdgeInput, type Found, type FoundKind, type ImprintInfo, type MyAccountInfo, PROJECT_STATUSES, type Person, type Profile, type ProfileInput, type ProjectStatus, type PublicProject, type Social } from './backend.ts';
-import { type DeviceOAuth, startDeviceSignIn } from './devicecode.ts';
-import { type StoredSpace } from './spacestore.ts';
+import type { DeviceOAuth, startDeviceSignIn } from './devicecode.ts';
+import type { StoredSpace } from './spacestore.ts';
 import { KIND_THEME, type Theme, sanitizeTheme } from './theme.ts';
-import { type PlatformInfo } from './verifiers.ts';
+import type { PlatformInfo } from './verifiers.ts';
 import type { Access, EventFields, Invite, SessionStamp, SpaceKind, WeaveRecord } from '@weave/core';
 import { socialGraph } from '@weave/core';
 import type { Actor, PostInfo } from './backend.ts';
@@ -13,7 +13,7 @@ import type { Companies } from './companies.ts';
 import type { ManagedKeys } from './managed.ts';
 import type { Verifiers } from './verifiers.ts';
 import type { Decoded, WeaveNode } from './node.ts';
-import { meetTopic, meetSecretOf, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './node.ts';
+import { meetTopic, meetSecretOf, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './shared.ts';
 /*
  * People: profiles, names and how a reference resolves to a person, the
  * social graph (follows, blocks, mutes, friends), avatars and themes, the
@@ -37,6 +37,8 @@ export interface PeopleCore {
   setContactCache(value: { from: number; map: Map<Did, string | undefined> }): void;
   decodeAll(): Decoded[];
   decodedIn(spaceId: string): Decoded[];
+  /** Signing in to a platform with a device code, in the browser (a loopback server: the host's). */
+  readonly deviceSignIn: typeof startDeviceSignIn;
   /** Bumped whenever the decoded views change: caches keyed on it go stale. */
   readonly decodedRevision: number;
   direct(peer: Did): StoredSpace;
@@ -119,7 +121,7 @@ export class People {
     const oauth = this.core.verifiers.prover(input.platform);
     if (!oauth?.device) throw new Error(`${input.platform}'s verifier can't make a proof itself: make one by hand (weave account proof ${input.platform})`);
     if (input.space) this.core.space(input.space);
-    const started = await startDeviceSignIn(oauth as DeviceOAuth, this.node.oauthSetup.fetch, input.platform);
+    const started = await this.core.deviceSignIn(oauth as DeviceOAuth, this.node.oauthSetup.fetch, input.platform);
     const id = b64u.encode(randomBytes(12));
     const done = started.grant
       .then((grant) => this.core.verifiers.prove(input.platform, grant.access, this.node.identity.author))

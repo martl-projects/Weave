@@ -7,7 +7,8 @@ import { readSecretJson, writeSecretJson } from './vault.ts';
 import type { Board, Entry, EventFields, SpaceKind } from '@weave/core';
 import type { Companies } from './companies.ts';
 import type { ManagedKeys } from './managed.ts';
-import { carriedItem, type Decoded, type WeaveNode } from './node.ts';
+import { type Decoded, type WeaveNode } from './node.ts';
+import { carriedItem } from './shared.ts';
 import type { Payments } from './payments.ts';
 
 /*

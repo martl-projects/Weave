@@ -1,6 +1,6 @@
 import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
 import { type Admission, type CommunityInfo, type InviteLook, type InviteOptions, type KnockInfo, type MemberInfo, type ProjectInfo, type SpaceInfo, noAgentError } from './backend.ts';
-import { type StoredSpace, removeSpace } from './spacestore.ts';
+import type { StoredSpace } from './spacestore.ts';
 import type { Recipient } from '@weave/core';
 import type { Network } from './ports.ts';
 import type { AgentKey } from './keystore.ts';
@@ -8,8 +8,9 @@ import type { Companies } from './companies.ts';
 import type { Kernel } from './kernel.ts';
 import type { ManagedKeys } from './managed.ts';
 import type { WeaveNode } from './node.ts';
-import { summary, KIND_PAGE } from './node.ts';
-import { DEFAULT_PAGE } from './node.ts';
+import { summary, KIND_PAGE } from './shared.ts';
+import { DEFAULT_PAGE } from './shared.ts';
+import type { SpaceStorage } from './ports.ts';
 /*
  * Membership: creating groups, projects and communities, invite and knock
  * links, joining, who is in, leaving and handing over, removing, closing,
@@ -30,6 +31,7 @@ export interface MembershipCore {
   readonly managed: ManagedKeys;
   selfBodies(kind: string): Array<Record<string, unknown>>;
   readonly spaces: Map<string, StoredSpace>;
+  readonly spaceStorage: SpaceStorage;
   readonly network: Network | undefined;
   tryOpen<T>(open: (me: Recipient) => T | undefined): T | undefined;
 }
@@ -316,7 +318,7 @@ export class Membership {
     // Our node stops following it: keys gone, topics left. The space's history in the logs stays unreadable here.
     this.core.spaces.delete(space.id);
     this.core.kernel.invalidateDecoded();
-    removeSpace(this.node.home, space.id);
+    this.core.spaceStorage.remove(space.id);
     this.core.kernel.announceNow();
     for (const topic of spaceTopics(space, 0)) await this.core.network?.leave(topic).catch(() => {});
   }
