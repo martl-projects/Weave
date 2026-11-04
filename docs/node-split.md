@@ -156,6 +156,8 @@ Notes per step, where the build differed from the plan above.
 
 - **Step 3 (money):** `payments.ts` (`Payments`, 1,416 lines, `PaymentsCore` with 20 members): tiers and membership requests, badges, treasuries and splits, Safe signing, paying from a wallet, ticketed shows, with the class-head fields the tests swap (`checkLicense`, `checkPayment`, `callChain`, `chainRpc`, `gumroadSetup`, …) as get/set delegations on `WeaveNode`. node.ts 9,239 → 8,031. Two kernel helpers that sat inside the money sections stayed where the kernel is: `#selfBodies` (own self-sealed bodies of a kind) and `#arrivals`/`#seenAt` (when an event first got here).
 
+- **Step 4 (holding and retention):** `holding.ts` (`Holding`, 398 lines, `HoldingCore` with 23 members: pulled spaces, keepers, older history on request, budgets) and `retention.ts` (`Forgetting`, 289 lines, `RetentionCore` with 18: holds, forgetting by rule and the blobs that go with it, keeping a post, shredding old keys). node.ts 8,032 → 7,511. The sweep's order is untouched: node.ts still calls `applyShreds()` then `forget()` where it did. `held()` is reached lazily from the cores built before retention. The "who holds what" section turned out to hold the kernel's heart too (`#state`, `#takeKeys`, `#anchor`, `#upTo`, `#spaceInfo`, `#entryPoint`, `#direct`): those stayed for step 8.
+
 ## 7. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.

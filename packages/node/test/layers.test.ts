@@ -65,6 +65,7 @@ const MAY_USE_NODE = [
   'register.ts',
   'registry.ts',
   'remote.ts',
+  'retention.ts',
   'runtime.ts',
   'scim.ts',
   'services.ts',
