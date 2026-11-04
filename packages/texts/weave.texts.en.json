@@ -1111,6 +1111,7 @@
     "panel.open.claude": "Open in Claude",
     "panel.follow.title": "Show the session open in the Claude app again",
     "panel.follow.claude": "Follow Claude",
+    "panel.pinned": "Showing {title}, not the session open in Claude",
     "panel.stack.waiting": "Stack ({n} waiting)",
     "panel.waiting.since": "waiting since {time, ago}",
     "panel.nothing.waits": "Nothing waits below this item.",

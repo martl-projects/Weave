@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { PostScene, postScene, SessionAvatar, SessionFigure } from './avatar.tsx';
 import type { MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
+import { focusNow, pick as pickSession, pinnedAway, type Following } from './follow.ts';
 import { PostHeader, spaceLabel } from './posts.tsx';
 import { attempt, BlobImage } from './ui.tsx';
 import { folderName, running } from './sessions.tsx';
@@ -235,12 +236,13 @@ export function MentionsPanel() {
   const { t } = useTexts();
   const [mentions, setMentions] = useState<MentionInfo[]>([]);
   const [session, setSession] = useState<SessionInfo | null>(null);
-  const [focused, setFocused] = useState<string>();
   const [ctx, setCtx] = useState<Context>();
   const [pane, setPane] = useState<'session' | 'sessions'>('session');
   const [fold, setFold] = useState(false);
-  // Which session to show: the one the Claude app shows (''), or one you picked (#/overlay?session=…).
-  const [pinned, setPinned] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '');
+  // Which session to show: the one the Claude app shows, or one you picked (#/overlay?session=…) until you switch there (follow.ts).
+  const [follow, setFollow] = useState<Following>(() => ({ known: false, pinned: new URLSearchParams(location.hash.split('?')[1] ?? '').get('session') ?? '' }));
+  const { focused, pinned } = follow;
+  const setPinned = (id: string) => setFollow((f) => ({ ...f, pinned: id }));
   // The first time on this device the panel introduces itself (#/overlay?intro=1), until you've read it.
   const [intro, setIntro] = useState(() => new URLSearchParams(location.hash.split('?')[1] ?? '').get('intro') === '1');
   useEffect(() => {
@@ -249,7 +251,7 @@ export function MentionsPanel() {
   useEffect(() => {
     const refresh = () => {
       void api<SessionInfo | null>('focusedSession').then((s) => {
-        setFocused(s?.id);
+        setFollow((f) => focusNow(f, s?.id));
         if (!pinned) setSession(s);
       }, () => {});
       if (pinned) void api<SessionInfo>('session', { id: pinned }).then(setSession, () => {});
@@ -259,8 +261,9 @@ export function MentionsPanel() {
     return onItem((item) => {
       if (item?.kind === 'weave.mention') setMentions((list) => [item.body as unknown as MentionInfo, ...list.filter((m) => m.id !== item.id)].slice(0, 100));
       else if (item?.kind === 'weave.focus') {
+        // A switch in the Claude app ends a pick: pinned becomes '' and this runs again, showing the new one.
         const s = item.body as unknown as SessionInfo | null;
-        setFocused(s?.id);
+        setFollow((f) => focusNow(f, s?.id));
         if (!pinned) setSession(s);
       }
       // A stack or a post may have changed: look again.
@@ -278,7 +281,7 @@ export function MentionsPanel() {
   );
   // Picking the session open in Claude follows the Claude app again.
   const pick = (id: string) => {
-    setPinned(id === focused ? '' : id);
+    setFollow((f) => pickSession(f, id));
     setPane('session');
   };
   return (
@@ -297,6 +300,14 @@ export function MentionsPanel() {
           <button aria-label={t('window.close')} onClick={() => window.close()} />
         </div>
       </div>
+      {pane === 'session' && session && pinnedAway(follow) && (
+        <div className="panel-pinned">
+          <span className="grow">{t('panel.pinned', { title: session.title ?? t('session.untitled') })}</span>
+          <button onClick={() => setPinned('')} title={t('panel.follow.title')}>
+            {t('panel.follow.claude')}
+          </button>
+        </div>
+      )}
       {fold && pane === 'session' && session && (
         <StackFoldout session={session} me={ctx?.me.did} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
       )}

@@ -764,6 +764,9 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 
 /* The Mentions panel: its own small window beside the work (overlay.tsx). */
 .mentions-window { height: 100%; display: flex; flex-direction: column; margin: 0; padding: 0; position: relative; }
+/* The panel shows a session you picked, not the one open in Claude: it says so, with a way back. */
+.panel-pinned { display: flex; align-items: center; gap: 8px; margin: 2px 4px; padding: 4px 8px; font-family: var(--content-font); font-size: 12px; background: color-mix(in srgb, var(--cl-accent, var(--accent)) 15%, transparent); border: 1px solid color-mix(in srgb, var(--cl-accent, var(--accent)) 45%, transparent); border-radius: var(--cl-radius, 0); }
+.panel-pinned .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-foldout { position: absolute; top: 30px; left: 4px; right: 4px; z-index: 10; max-height: calc(100% - 40px); overflow-y: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 4px; font-family: var(--content-font); font-size: 12px; }
 .panel-foldout .empty { margin: 0; }
 .panel-foldout-session { display: flex; align-items: center; gap: 6px; }
