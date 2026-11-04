@@ -780,16 +780,19 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mentions-follow { display: flex; align-items: center; gap: 6px; font-family: var(--content-font); font-size: 12px; }
 .mentions { list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: 12px; }
 .mentions-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; position: relative; z-index: 1; }
-/* Behind the overlay's content, faded and pinned to its bottom: the session's figure left, its work item's picture right. */
-/* Out to the edges and down: the pictures' own empty margins hang over the window's edges. */
-.panel-decor { position: absolute; left: -9%; right: -9%; bottom: -7%; height: 42%; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; z-index: 0; opacity: .3; filter: saturate(.6); }
-/* Each half a fixed width (so it counts as on screen before its picture is drawn), its picture against its outer edge. */
-.panel-decor > * { height: 100%; width: 48%; line-height: 0; }
-.panel-decor img { height: 100%; width: 100%; object-fit: contain; }
-.panel-decor-session img { object-position: left bottom; }
-.panel-decor-post img { object-position: right bottom; }
-/* The work item's own scene is the backdrop now, not beside its title. */
-.panel-current .post-scene { display: none; }
+/* At the top of the overlay: the session's figure peeking in from the left edge, the work item's picture (or its writer) on the right. */
+.panel-top { position: relative; flex: none; height: 132px; display: flex; justify-content: space-between; align-items: flex-end; overflow: hidden; pointer-events: none; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+/* Each a fixed width (so it counts as on screen before its picture is drawn); the session's hangs over the left edge. */
+.panel-top > * { height: 100%; line-height: 0; }
+.panel-top-session { width: 40%; }
+.panel-top-post { width: 60%; }
+.panel-top img { height: 100%; width: 100%; object-fit: contain; }
+/* The scene's picture has room around the figure: drawn big, its figure fills the band, half out over the left edge. */
+.panel-top-session img { position: absolute; left: -36%; bottom: -48%; height: 210%; width: auto; }
+.panel-top-post img, img.panel-top-post { object-position: right bottom; }
+img.panel-top-post { object-fit: contain; }
+/* The work item's own picture is in the band at the top, not again in its text. */
+.panel-current :is(.post-scene, .post-image) { display: none; }
 .mentions-scroll > .empty, .mentions-scroll > .panel-toggles, .mentions-scroll > .panel-lines, .mentions-scroll > .panel-sessions { margin-left: 8px; margin-right: 8px; }
 .mentions-scroll > .panel-sessions { margin-top: 8px; }
 .mentions-scroll > * { flex-shrink: 0; }

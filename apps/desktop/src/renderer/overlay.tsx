@@ -1,5 +1,5 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
-import { PostScene, postScene, SessionAvatar, SessionFigure } from './avatar.tsx';
+import { postScene, SceneImage, SessionAvatar, SessionFigure } from './avatar.tsx';
 import type { MentionInfo, PostInfo, Profile, SessionInfo, SpaceInfo } from '@weave/node/client';
 import { ago, api, bridge, navigate, onItem } from './lib.ts';
 import { focusNow, pick as pickSession, pinnedAway, type Following } from './follow.ts';
@@ -74,15 +74,23 @@ function CurrentItem({ post, ctx }: { post: PostInfo; ctx: Context }) {
   );
 }
 
-/** The overlay's backdrop for a session: its figure on the left, its work item's picture on the right. */
-function PanelDecor({ session, me }: { session: SessionInfo; me: string }) {
+/**
+ * At the top, who works on what at a glance: the session's figure peeking in from the left, and on the right its
+ * work item's picture, or without one the person who wrote it (in the post's scene).
+ */
+function PanelTop({ session, me }: { session: SessionInfo; me: string }) {
   const top = session.stack[0]?.post;
   const post = top && !('missing' in top) ? top : undefined;
-  const scene = post && postScene(post);
   return (
-    <div className="panel-decor" aria-hidden="true">
-      <SessionFigure session={session} person={me} className="panel-decor-session" />
-      {post?.image ? <BlobImage src={post.image} className="panel-decor-post" /> : post && scene ? <PostScene post={post} scene={scene} size={320} className="panel-decor-post" /> : <span />}
+    <div className="panel-top" aria-hidden="true">
+      <SessionFigure session={session} person={me} className="panel-top-session" />
+      {post?.image ? (
+        <BlobImage src={post.image} className="panel-top-post" />
+      ) : post ? (
+        <SceneImage did={post.by.did} agent={post.by.agent} scene={postScene(post) ?? 'hello'} size={320} className="panel-top-post" />
+      ) : (
+        <span />
+      )}
     </div>
   );
 }
@@ -311,14 +319,15 @@ export function MentionsPanel() {
       {fold && pane === 'session' && session && (
         <StackFoldout session={session} me={ctx?.me.did} mentions={mentions} focused={session.id === focused} onFollow={() => (setPinned(''), setFold(false))} onClose={() => setFold(false)} />
       )}
-      {/* Behind it all, faded and pinned to the bottom: the session (left) and its work item's picture (right). */}
-      {pane === 'session' && session && ctx && <PanelDecor session={session} me={ctx.me.did} />}
       <div className="mentions-scroll">
         {intro && <Intro onDone={() => setIntro(false)} />}
         {pane === 'sessions' ? (
           <SessionsPane focused={focused} me={ctx?.me.did} onPick={pick} />
         ) : session && ctx ? (
-          <SessionView session={session} ctx={ctx} />
+          <>
+            <PanelTop session={session} me={ctx.me.did} />
+            <SessionView session={session} ctx={ctx} />
+          </>
         ) : (
           <p className="empty">{t('panel.pick.session')}</p>
         )}
