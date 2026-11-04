@@ -7,6 +7,9 @@ import type { FeedItem, RpcMethod } from './backend.ts';
 import type { Home } from './home.ts';
 import { encodePhoneLink } from './phone-link.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
+import type { IncomingMessage } from 'node:http';
+import type { Duplex } from 'node:stream';
+import { acceptWebSocket, type WebSocketConnection } from './websocket.ts';
 
 /*
  * Remote access for paired phones: the companion app on a phone uses this
@@ -283,23 +286,138 @@ export class RemoteAccess {
   }
 
   #serve(socket: DhtSocket, phone: string, rest: Buffer): void {
-    const stop = new AbortController();
+    const stop = serveRemote(this.#host, dhtConnection(socket, rest));
     this.#sessions.set(socket, { phone, stop });
-    socket.on('close', () => {
-      stop.abort();
-      this.#sessions.delete(socket);
-    });
-    void this.#host.watch((item) => send(socket, { event: item }), stop.signal).catch(() => {});
-    onLines(socket, rest, (message) => {
-      const id = message.id;
-      const method = (RENAMED[String(message.method)] ?? message.method) as RpcMethod;
-      if (!PHONE_METHODS.includes(method)) return send(socket, { id, error: `a phone can't do ${String(method)}` });
-      // JSON turns undefined arguments into null; turn them back so defaults apply.
-      const args = (Array.isArray(message.args) ? message.args : []).map((a) => (a === null ? undefined : a));
-      this.#host.call(method, args).then(
-        (result) => send(socket, { id, result: result ?? null }),
-        (error: Error) => send(socket, { id, ...errorToWire(error) }),
-      );
-    });
+    socket.on('close', () => this.#sessions.delete(socket));
   }
+}
+
+/*
+ * The protocol apart from its transport (docs/node-split.md, step 10; Weave
+ * Web's milestone 2 in OVb4TP5x): what a remote client says and hears is one
+ * JSON message at a time, whoever carries it. The DHT carries it as lines on
+ * a Noise socket whose key is the phone; a WebSocket (apps/web, a browser
+ * behind a session) carries it as text frames. serveRemote knows neither.
+ */
+
+/** A connection a remote client talks on: one JSON message at a time, both ways. */
+export interface RemoteConnection {
+  send(message: unknown): void;
+  /** Called once, with what to do with each message that arrives. */
+  onMessage(handle: (message: Record<string, unknown>) => void): void;
+  onClose(handle: () => void): void;
+  close(): void;
+}
+
+/**
+ * Serve a remote client on a connection: live events out as they happen,
+ * calls in, a phone's methods only (PHONE_METHODS; older names translated).
+ * The stop ends the session; the connection's close does too.
+ */
+export function serveRemote(host: Pick<RemoteHost, 'call' | 'watch'>, connection: RemoteConnection): AbortController {
+  const stop = new AbortController();
+  connection.onClose(() => stop.abort());
+  void host.watch((item) => connection.send({ event: item }), stop.signal).catch(() => {});
+  connection.onMessage((message) => {
+    const id = message.id;
+    const method = (RENAMED[String(message.method)] ?? message.method) as RpcMethod;
+    if (!PHONE_METHODS.includes(method)) return connection.send({ id, error: `a phone can't do ${String(method)}` });
+    // JSON turns undefined arguments into null; turn them back so defaults apply.
+    const args = (Array.isArray(message.args) ? message.args : []).map((a) => (a === null ? undefined : a));
+    host.call(method, args).then(
+      (result) => connection.send({ id, result: result ?? null }),
+      (error: Error) => connection.send({ id, ...errorToWire(error) }),
+    );
+  });
+  return stop;
+}
+
+/** The DHT's socket as a connection: one JSON message per line, `rest` being what came after the hello. */
+function dhtConnection(socket: DhtSocket, rest: Buffer): RemoteConnection {
+  return {
+    send: (message) => send(socket, message),
+    onMessage: (handle) => onLines(socket, rest, handle),
+    onClose: (handle) => socket.on('close', handle),
+    close: () => socket.destroy(),
+  };
+}
+
+/**
+ * A connection over anything that carries text messages (a WebSocket, a test):
+ * `out` sends a message's text, `end` closes the carrier; the carrier hands
+ * what arrives to receive() and says when it's gone with closed(). A message
+ * that isn't a JSON object closes the connection, as a bad line does on the DHT.
+ */
+export class RemoteLink implements RemoteConnection {
+  #handle?: (message: Record<string, unknown>) => void;
+  #onClose: Array<() => void> = [];
+  #open = true;
+  readonly #out: (text: string) => void;
+  readonly #end: () => void;
+
+  constructor(out: (text: string) => void, end: () => void) {
+    this.#out = out;
+    this.#end = end;
+  }
+
+  send(message: unknown): void {
+    if (this.#open) this.#out(JSON.stringify(message));
+  }
+
+  onMessage(handle: (message: Record<string, unknown>) => void): void {
+    this.#handle = handle;
+  }
+
+  onClose(handle: () => void): void {
+    this.#onClose.push(handle);
+  }
+
+  close(): void {
+    if (!this.#open) return;
+    this.#open = false;
+    this.#end();
+    this.closed();
+  }
+
+  /** What arrived from the other side: a message's text. */
+  receive(text: string): void {
+    if (!this.#open) return;
+    let message: unknown;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return this.close();
+    }
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return this.close();
+    this.#handle?.(message as Record<string, unknown>);
+  }
+
+  /** The other side is gone (the carrier says so). */
+  closed(): void {
+    this.#open = false;
+    const handlers = this.#onClose;
+    this.#onClose = [];
+    for (const handle of handlers) handle();
+  }
+
+  get open(): boolean {
+    return this.#open;
+  }
+}
+
+/**
+ * Serve a remote client over a WebSocket: the upgrade request of an HTTP server
+ * (apps/web, once a session says who the browser is). Nothing when the request
+ * isn't a WebSocket upgrade. Who may connect is the caller's to decide first.
+ */
+export function serveRemoteOverWebSocket(host: Pick<RemoteHost, 'call' | 'watch'>, req: IncomingMessage, socket: Duplex, head: Buffer): RemoteLink | undefined {
+  let ws: WebSocketConnection | undefined;
+  const link = new RemoteLink(
+    (text) => ws?.send(text),
+    () => ws?.close(),
+  );
+  ws = acceptWebSocket(req, socket, head, { message: (text) => link.receive(text), close: () => link.closed() });
+  if (!ws) return undefined;
+  serveRemote(host, link);
+  return link;
 }
