@@ -145,6 +145,8 @@ Steps 1, 3, 4 and 6 are independent of each other and of step 2; they could run 
 
 ## 6. As built
 
+**Status (4 Nov):** steps 0–7 are built on `skala-node-split`, one commit each, the full suite green after each (133 files / 563 tests). node.ts: 10,783 → 5,879 lines; `grep canManage packages/node/src` is empty. The bench after step 7 reads at or below the baseline on every row (open 30 ms, feed first 174 ms, posts 11 ms); the heap snapshot after reads is 45 MB against 27, a single snapshot without a forced GC, to be checked in step 8. Steps 8–10 start from a merged main.
+
 Notes per step, where the build differed from the plan above.
 
 - **Steps 1–7 cut into flat modules** (`packages/node/src/companies.ts`, not `core/companies.ts`): a module that still needs `node:fs` or a loopback server cannot sit in `core/` before the ports of step 8 exist. The `layers.test.ts` list names each new module explicitly; moving what can move into `core/` is step 9's job, as planned.
