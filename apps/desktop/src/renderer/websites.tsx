@@ -137,6 +137,15 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
           )}
         </div>
         {!room.mine && !room.joined && room.mayJoin && <p className="small muted">{t('web.visiting.connects', { offered })}</p>}
+        {/* Yours, running a release's program with your rights: the consent you gave, and taking it back (which closes it). */}
+        {room.mine && room.program && (
+          <p className="small">
+            <Icon name="warning" /> {t('web.program.runs', { file: room.program.file })}{' '}
+            <AsyncButton onClick={async () => (await ask(t('web.program.withdraw.ask', { name: room.name }), t('web.program.withdraw'))) && attempt(() => api('withdrawProgramConsent', room.program!.consent).then(bump), t('web.program.withdrawn', { name: room.name }))}>
+              {t('web.program.withdraw')}
+            </AsyncButton>
+          </p>
+        )}
         {room.joined && <WebsiteChat room={room} />}
       </div>
     </article>
@@ -267,6 +276,7 @@ function Releases({ project, which, onDone }: { project: SpaceInfo; which: { art
           {t('rel.releases.of')} <b>{data.where ?? data.repo}</b>. {t('rel.reads.manifest')}
         </p>
       )}
+      {data && <p className="small muted">{t('rel.programs.note')}</p>}
       <ItemList
         title=""
         error={error}
@@ -366,7 +376,7 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
             <>
               {a.mine && a.kind === 'file' && <GetFileButton artifact={a} />}
               {a.mine && a.kind === 'website' && (
-                <button disabled={!a.runs} title={a.runs ? undefined : t(a.source?.provider === 'oci' || a.packaged ? 'art.needs.docker' : 'art.nothing.runs')} onClick={() => setLaunching(a)}>
+                <button disabled={!a.runs} title={a.runs === 'program' ? t('art.runs.as.program') : a.runs ? undefined : t(a.source?.provider === 'oci' || a.packaged ? 'art.needs.docker' : 'art.nothing.runs')} onClick={() => setLaunching(a)}>
                   {t('art.launch')}
                 </button>
               )}
@@ -442,6 +452,17 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
   const runs = artifact.command?.join(' ') ?? artifact.name;
   const [values, setValues] = useState<Record<string, string>>({});
+  // A program: the warning comes first, and only its "Run this version" launches (with the consent it stands for).
+  const [warning, setWarning] = useState(false);
+  const launch = (consent: boolean) =>
+    attempt(async () => {
+      await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, ...(consent ? { consent: true } : {}), announce, settings: givenSettings(values) });
+      bump();
+      onClose();
+      // Its Services: under Running websites it shows starting, then in Live once it serves its page.
+      location.hash = `#/p/${project!.id}/services`;
+    }, t('launch.launching', { name: artifact.name, project: project?.name }));
+  if (warning) return <ProgramWarning artifact={artifact} onRun={() => launch(true)} onCancel={() => setWarning(false)} />;
   return (
     <Modal title={t('launch.title', { name: artifact.name, tag: artifact.tag })} onClose={onClose}>
       {services && !projects.length ? (
@@ -460,7 +481,7 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
             </select>
           </div>
           <p className="small">
-            {t('launch.weave.runs')} <code>{runs}</code> {t('launch.from.release', { name: artifact.name, tag: artifact.tag, project: artifact.project.name, how: t(artifact.runs === 'wasm' ? 'launch.as.wasm' : 'launch.in.container') })}{' '}
+            {t('launch.weave.runs')} <code>{runs}</code> {t('launch.from.release', { name: artifact.name, tag: artifact.tag, project: artifact.project.name, how: t(runsWords(artifact)) })}{' '}
             {t(project ? 'launch.makes.website.in' : 'launch.makes.website', { project: project?.name })}
           </p>
           <p className="small muted">{t('launch.trust', { project: artifact.project.name })}</p>
@@ -472,22 +493,68 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
         </>
       )}
       <div className="buttons">
-        <AsyncButton
-          className="default"
-          disabled={!project || !settingsReady(artifact, values)}
-          onClick={() =>
-            attempt(async () => {
-              await api('launchWebsite', { project: project!.id, artifact: { project: artifact.project.id, id: artifact.id }, approve: true, announce, settings: givenSettings(values) });
-              bump();
-              onClose();
-              // Its Services: under Running websites it shows starting, then in Live once it serves its page.
-              location.hash = `#/p/${project!.id}/services`;
-            }, t('launch.launching', { name: artifact.name, project: project?.name }))
-          }
-        >
-          {t('launch.button')}
-        </AsyncButton>
+        {artifact.runs === 'program' ? (
+          <button className="default" disabled={!project || !settingsReady(artifact, values)} onClick={() => setWarning(true)}>
+            {t('launch.button.ellipsis')}
+          </button>
+        ) : (
+          <AsyncButton className="default" disabled={!project || !settingsReady(artifact, values)} onClick={() => launch(false)}>
+            {t('launch.button')}
+          </AsyncButton>
+        )}
         <button onClick={onClose}>{t('button.cancel')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** How a release would run here, in words: in Weave, in a container, or as a program with your rights. */
+const runsWords = (a: ArtifactInfo): string => (a.runs === 'wasm' ? 'launch.as.wasm' : a.runs === 'program' ? 'launch.as.program' : 'launch.in.container');
+
+/**
+ * The warning before a release's program runs: it runs on this computer with your rights, and Weave can't contain it;
+ * who published it, the file and its SHA-256, where the release is. Cancel is the default. "Run this version" is your
+ * consent to exactly this release and file (a new version asks again), kept until you withdraw it on the website.
+ * Only this dialog gives it: no agent or service can.
+ */
+function ProgramWarning({ artifact, onRun, onCancel }: { artifact: ArtifactInfo; onRun(): Promise<unknown>; onCancel(): void }) {
+  const { t } = useTexts();
+  const program = artifact.program!;
+  const by = artifact.released;
+  const publisher = `${by.name ?? shortDid(by.did)}${by.agent ? ` · ${by.agent}` : ''} · p/${artifact.project.name}`;
+  return (
+    <Modal title={t('program.warning.title', { name: artifact.name, tag: artifact.tag })} onClose={onCancel}>
+      <div className="notice alarm">
+        <Icon name="warning" /> {t('program.warning.runs', { name: artifact.name })}
+      </div>
+      <p className="small">{t('program.warning.contain')}</p>
+      <p className="small">
+        <b>{t('program.published.by')}</b> {publisher} ·{' '}
+        <a
+          href={`#/p/${artifact.project.id}/services`}
+          onClick={(e) => {
+            e.preventDefault();
+            onCancel();
+            navigate(`#/p/${artifact.project.id}/services`);
+          }}
+        >
+          {t('program.the.release', { tag: artifact.tag })}
+        </a>
+        <br />
+        <b>{t('program.file')}</b> <code>{program.file}</code>
+        {program.size ? ` · ${sizeText(program.size)}` : ''}
+        <br />
+        <b>{t('program.sha256')}</b> <code style={{ wordBreak: 'break-all' }}>{program.sha256}</code>
+        <br />
+        <b>{t('program.runs.command')}</b> <code>{program.command.join(' ')}</code>
+      </p>
+      <p className="small">{program.allowed ? t('program.allowed.before', { time: ago(program.allowed) }) : t('program.only.this.version')}</p>
+      <p className="small muted">{t('program.never.alone')}</p>
+      <div className="buttons">
+        <button className="default" autoFocus onClick={onCancel}>
+          {t('button.cancel')}
+        </button>
+        <AsyncButton onClick={onRun}>{t('program.run.this.version')}</AsyncButton>
       </div>
     </Modal>
   );
@@ -786,9 +853,11 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const looking = !released && !away && what !== 'port';
   const [values, setValues] = useState<Record<string, string>>({});
   const ready = looking ? false : picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
-  const launch = async () => {
+  // A program: its warning first; only "Run this version" there launches, with the consent it stands for.
+  const [warning, setWarning] = useState(false);
+  const launch = async (consent: boolean) => {
     setBusy(true);
-    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, announce, settings: givenSettings(values) }), t('launch.launching', { name: picked!.name, project: project.name }));
+    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, ...(consent ? { consent: true } : {}), announce, settings: givenSettings(values) }), t('launch.launching', { name: picked!.name, project: project.name }));
     setBusy(false);
     // It shows under Running websites, starting (its release on the way), then in Live once it serves its page.
     if (done !== undefined) {
@@ -797,7 +866,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
     }
   };
   const open = async () => {
-    if (picked) return launch();
+    if (picked) return picked.runs === 'program' ? setWarning(true) : launch(false);
     setBusy(true);
     // A new show is set up first; if the website then fails, it's picked, not set up twice.
     const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
@@ -815,6 +884,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
       onClose();
     }
   };
+  if (warning && picked) return <ProgramWarning artifact={picked} onRun={() => launch(true)} onCancel={() => setWarning(false)} />;
   return (
     <Modal title={t('open.title', { project: project.name })} onClose={onClose} wide>
       <div className="form">
@@ -826,7 +896,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
               <input id={`what-${a.id}`} type="radio" checked={picked?.id === a.id} onChange={() => setWhat(a.id)} />
               <label htmlFor={`what-${a.id}`}>
                 <span>
-                  <b>{a.name}</b> {a.tag} <span className="muted small">· {t('open.released.in', { project: a.project.name })} · {t(a.runs === 'wasm' ? 'open.runs.in.weave' : 'open.runs.in.container')}</span>
+                  <b>{a.name}</b> {a.tag} <span className="muted small">· {t('open.released.in', { project: a.project.name })} · {t(a.runs === 'wasm' ? 'open.runs.in.weave' : a.runs === 'program' ? 'open.runs.as.program' : 'open.runs.in.container')}</span>
                 </span>
               </label>
             </div>
@@ -838,7 +908,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
         </fieldset>
         {looking ? null : picked ? (
           <>
-            <p className="small">{t('open.weave.runs', { name: picked.name, tag: picked.tag, from: picked.project.name, how: t(picked.runs === 'wasm' ? 'launch.as.wasm' : 'launch.in.container'), project: project.name })}</p>
+            <p className="small">{t('open.weave.runs', { name: picked.name, tag: picked.tag, from: picked.project.name, how: t(runsWords(picked)), project: project.name })}</p>
             <p className="small muted">{t('launch.trust', { project: picked.project.name })}</p>
             <LaunchSettings artifact={picked} values={values} onChange={setValues} />
           </>
@@ -913,7 +983,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
         <div className="buttons">
           <button onClick={onClose}>{t('button.cancel')}</button>
           <button className="default" disabled={!ready || busy} onClick={() => void open()}>
-            {t(busy ? (picked ? 'open.launching' : 'open.opening') : picked ? 'launch.button' : 'open.button')}
+            {t(busy ? (picked ? 'open.launching' : 'open.opening') : picked ? (picked.runs === 'program' ? 'launch.button.ellipsis' : 'launch.button') : 'open.button')}
           </button>
         </div>
       </div>

@@ -50,11 +50,19 @@ export interface AppManifest {
   services: AppService[];
   /**
    * How it starts. `hint` and `command` (program and arguments, no shell) are for people and agents starting a
-   * checkout by hand: Weave never runs a program from a release, only its container (image) or its WebAssembly (wasm).
+   * checkout by hand. A release runs as its container (image) or its WebAssembly (wasm), sealed off from the
+   * computer; or, where it brings only a program per platform (its release files), as that program, with its
+   * person's rights, but only after a warning they accept in the app, for that release and file.
    */
   start?: {
     hint?: string;
     command?: string[];
+    /**
+     * For the program a release brings per platform (install.assets): the command to run in its unpacked folder, like
+     * {"win32-x64": ["./band-ab.exe"], "linux-x64": ["./band-ab"]}. A release file that is a program itself (no
+     * archive) runs as it is without this; an archive without it runs `command`.
+     */
+    release?: Record<string, string[]>;
     /**
      * A container image (stage: Weave and Docker), like "ghcr.io/martldennl/gameshow", without tag or digest:
      * weave app release pins the release's image by its digest (install.image), and hosts with Docker run it
@@ -619,8 +627,22 @@ export function checkManifest(input: unknown): ManifestCheck {
     return parts as string[];
   };
   const command = rawStart.command !== undefined ? commandOf(rawStart.command, 'start.command') : undefined;
-  // Programs built per platform: Weave runs none from a release any more (a container or WebAssembly instead).
-  if (rawStart.release !== undefined) warnings.push('"start.release" is ignored: Weave runs no programs from releases, only a container image (start.image) or WebAssembly (wasm)');
+  // Programs built per platform: run only after a warning the person accepts (a container or WebAssembly needs none).
+  let release: Record<string, string[]> | undefined;
+  if (rawStart.release !== undefined) {
+    if (!rawStart.release || typeof rawStart.release !== 'object' || Array.isArray(rawStart.release)) problems.push('"start.release" maps platforms to commands, like {"win32-x64": ["./band-ab.exe"]}');
+    else {
+      release = {};
+      for (const [platform, parts] of Object.entries(rawStart.release as Record<string, unknown>).slice(0, 12)) {
+        if (!PROGRAM_PLATFORM.test(platform)) problems.push(`"start.release" names platforms like win32-x64, darwin-arm64, darwin-x64, linux-x64 (not "${platform}")`);
+        else {
+          const c = commandOf(parts, `start.release.${platform}`);
+          if (c) release[platform] = c;
+        }
+      }
+      if (rawStart.image === undefined && !m.wasm) warnings.push('"start.release" is a program per platform: it runs on people\'s computers with their rights, and only after a warning each of them accepts. A container image (start.image) or WebAssembly (wasm) runs sealed off and needs none: prefer one where you can');
+    }
+  }
   let image: string | undefined;
   if (rawStart.image !== undefined) {
     const ref = text(rawStart.image, 255);
@@ -727,8 +749,12 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
     else hints = parsed.hints;
   }
-  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined) warnings.push('nothing for Weave to run: a release of it is refused until it has a container image (start.image) or WebAssembly (wasm); as a description alone, whoever wants it runs it themselves and opens a website by its port');
-  const start = hint || command || image ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(image ? { image } : {}) } : undefined;
+  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined && rawStart.release === undefined)
+    warnings.push('nothing for Weave to run sealed off: a release of it runs only as a container image (start.image) or WebAssembly (wasm), or as the program per platform it brings (start.release), behind a warning; as a description alone, whoever wants it runs it themselves and opens a website by its port');
+  const start =
+    hint || command || release || image
+      ? { ...(hint ? { hint } : {}), ...(command ? { command } : {}), ...(release && Object.keys(release).length ? { release } : {}), ...(image ? { image } : {}) }
+      : undefined;
 
   let install: AppInstall | undefined;
   try {
@@ -829,7 +855,8 @@ export const MANIFEST_RULES = [
   'app: a short id, lowercase letters, digits and dashes (it stays the same across versions). name: what people see.',
   'services: the ports the app listens on, at most 8. A room shares exactly these ports and nothing else on the host\'s computer. Each has a port, an optional id, and protocol "http" (default) or "tcp".',
   'services[].open: for http services, the pages people open from Weave: host (for whoever hosts the room) and joiner (for everyone who joins), each a path like "/play" and a button label. Without open, everyone opens "/". Either way anyone can type any path: to tell host and players apart for real, ask Weave with @weave/sdk.',
-  'start.command: how to start it from a checkout of the repository, as a list (program, then arguments, no shell), for people and agents doing it by hand. Weave never runs a program from a release: only its container (start.image) or its WebAssembly (wasm), sealed off from the computer. (start.release, programs per platform, is ignored.)',
+  'start.command: how to start it from a checkout of the repository, as a list (program, then arguments, no shell), for people and agents doing it by hand. A release runs sealed off from the computer as its container (start.image) or its WebAssembly (wasm): prefer one of those.',
+  'start.release: the command per platform (win32-x64, darwin-arm64, darwin-x64, linux-x64) for a program the release brings as its files, run in its unpacked folder, like {"win32-x64": ["./band-ab.exe"], "linux-x64": ["./band-ab"]}; a release file that is the program itself needs none. Such a program runs on a person\'s computer with their rights, and Weave can\'t contain it: it runs only after a warning that person accepts in the app, for exactly that release and file (a new version asks again), never through an agent. Where a release has both, the container or WebAssembly runs and the program stays unused.',
   'start.image: a container image without tag or digest, like "ghcr.io/you/app". Your release workflow (weave_release_workflow) builds and pushes it, tagged like the release (v1.2.0 or 1.2.0); weave app release pins it by its digest. Hosts with Docker run it with only the services\' ports (on 127.0.0.1), the settings in env, and nothing of their computer. Players are told apart by the X-Weave-Person header (@weave/sdk reads it), since a container sees no tunnel ports.',
   'start.hint: one line for hosts who start it by hand.',
   'env: settings each host fills in, like an API key: name (the environment variable), label, secret (hidden), optional (the app runs without it), hint (where to get it). Never put a value in the manifest: it lives in the repository. Whoever opens a room with it types it in Weave, it stays on their computer, and Weave hands it to that room\'s process alone. Read it from the environment (process.env.DEEPSEEK_API_KEY). A project’s maintainers can keep a service’s settings in the project instead (weave service setting): any of them changes them, a secret sealed for the service alone. "oauth": {"authorize": "https://…", "token": "https://…", "client": "<client id>", "scopes": [...]} makes a setting a sign-in: a maintainer signs in on the provider’s page (PKCE, back to 127.0.0.1), and the service gets a current access token, renewed by Weave. "yours": true keeps a setting with whoever runs the service instead, once for every project it’s in (a sign-in as them): never in a project. A setting picked from a list and yours is per project, but only whoever runs it picks (the repositories its access reaches, say: theirs to hand out). "register": {"page", "exchange", "manifest", "keep", "key", "then"} makes a setting an app of its own that whoever runs the service creates on the provider’s page (GitHub’s App manifest flow): yours, the service reads what "keep" names and signs with its key (sign), never reading the key. A service needing access to a platform declares it in its contract ("uses": {"github": {"contents": "read"}}) and gets it only from its person’s keyvault (token(), in the WIT), cut to those rights and to what they handed each project: it asks for no access of its own. A service’s "net" may name settings as placeholders: "{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com".',
@@ -868,18 +895,50 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   return 'website';
 }
 
+/** A platform a program is built for (never wasm or file: those aren't programs). */
+const PROGRAM_PLATFORM = /^(win32|darwin|linux)-(x64|arm64|ia32|arm)$/;
+
+const ARCHIVE_FILE = /\.(zip|tar|tar\.gz|tgz|tar\.xz|txz|tar\.bz2)$/i;
+
+/** The program a release brings for a platform, and what runs it; undefined without one. */
+export interface ReleaseProgram {
+  platform: string;
+  /** Its release file: downloaded, checked against this SHA-256, unpacked. */
+  asset: AppAsset;
+  /** What runs in its unpacked folder: start.release's for the platform, the file itself, or start.command. */
+  command: string[];
+}
+
 /**
- * Why a release of a website or service can't be published: it brings files (a tag, assets) but nothing Weave runs.
- * Weave never runs a program from a release, only its container image or its WebAssembly; a release of programs per
- * platform would sit in the project with nobody able to start it (Phil's MycrobiontaFinder, 2.11.2026). A description
- * without a release (start.command for a checkout, run by hand) is still fine. Undefined: nothing in the way.
+ * The program a release brings for a platform: its release file for it (install.assets), with the command that runs
+ * it (start.release for the platform; a file that is no archive runs as it is; an archive without start.release runs
+ * start.command). None for wasm or file assets, or without a way to run it. Whoever runs it is warned first: it runs
+ * on their computer with their rights, and Weave can't contain it.
+ */
+export function releaseProgram(m: AppManifest, platform: string): ReleaseProgram | undefined {
+  if (!PROGRAM_PLATFORM.test(platform)) return undefined;
+  const asset = m.install?.assets?.[platform];
+  if (!asset) return undefined;
+  const command = m.start?.release?.[platform] ?? (ARCHIVE_FILE.test(asset.file) ? m.start?.command : [`./${asset.file}`]);
+  return command?.length ? { platform, asset, command } : undefined;
+}
+
+/** The platforms a release brings a program for. */
+export const programPlatforms = (m: AppManifest): string[] => Object.keys(m.install?.assets ?? {}).filter((p) => !!releaseProgram(m, p));
+
+/**
+ * Why a release of a website or service can't be published: it brings files (a tag, assets) but nothing anyone can
+ * run. A release runs as its container image or its WebAssembly, or (behind a warning) as the program it brings per
+ * platform; one with none of these would sit in the project with nobody able to start it (Phil's MycrobiontaFinder,
+ * 2.11.2026, released as archives without a command). A description without a release (start.command for a checkout,
+ * run by hand) is still fine. Undefined: nothing in the way.
  */
 export function unrunnableRelease(m: AppManifest): string | undefined {
   const kind = artifactKindOf(m);
   if (kind !== 'website' && kind !== 'service') return undefined;
   const released = !!m.install && (!!m.install.tag || !!m.install.assets);
-  if (!released || m.wasm || m.start?.image || m.install?.image) return undefined;
-  return `${m.name} ${m.install?.tag ?? ''}`.trim() + ` isn't released: a ${kind} release needs a container image ("start.image") or WebAssembly ("wasm"), and Weave never runs programs from a release (${Object.keys(m.install?.assets ?? {}).join(', ') || 'its files'} would sit there with nobody able to start them). Build an image and set start.image, or a WebAssembly component (wasm), then release again; a description with start.command alone (no release) stays possible for running it by hand`;
+  if (!released || m.wasm || m.start?.image || m.install?.image || programPlatforms(m).length) return undefined;
+  return `${m.name} ${m.install?.tag ?? ''}`.trim() + ` isn't released: a ${kind} release needs a container image ("start.image"), WebAssembly ("wasm"), or a program per platform with a command to run it (${Object.keys(m.install?.assets ?? {}).join(', ') || 'its files'} would sit there with nobody able to start them). Build an image and set start.image, or a WebAssembly component (wasm), or name the program's command in start.release (or start.command for an archive), then release again; a description with start.command alone (no release) stays possible for running it by hand`;
 }
 
 /** Where an artifact's files are: its source, or its image (pulled by Weave itself). */

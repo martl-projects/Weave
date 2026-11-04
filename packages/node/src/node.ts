@@ -10470,6 +10470,14 @@ export class WeaveNode implements Backend {
     return service;
   }
 
+  programConsents(...args: Parameters<Services['programConsents']>): ReturnType<Services['programConsents']> {
+    return this.#services.programConsents(...args);
+  }
+
+  withdrawProgramConsent(...args: Parameters<Services['withdrawProgramConsent']>): ReturnType<Services['withdrawProgramConsent']> {
+    return this.#services.withdrawProgramConsent(...args);
+  }
+
   withdrawArtifact(...args: Parameters<Services['withdrawArtifact']>): ReturnType<Services['withdrawArtifact']> {
     return this.#services.withdrawArtifact(...args);
   }

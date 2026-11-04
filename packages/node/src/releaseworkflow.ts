@@ -2,8 +2,9 @@
  * A GitHub Actions workflow a project can add so that pushing a version tag
  * builds its app as a container image, pushes it to GitHub's registry
  * (ghcr.io) and publishes a GitHub release: hosts with Docker then run it
- * from Weave with one click, sealed off from their computer. Weave runs no
- * programs from releases, so a container (or WebAssembly) is how an app runs.
+ * from Weave with one click, sealed off from their computer. A container (or
+ * WebAssembly) is how an app runs without a warning: a program per platform
+ * runs only after each person accepts one, so this workflow builds none.
  * A repository without a Dockerfile gets one made for Node.js on the way.
  */
 
@@ -81,7 +82,7 @@ jobs:
       `Add start.image to weave.app.json as given${owner ? '' : ' (<owner>: the account the repository belongs to, lowercase)'}: Weave pins each release's image by its digest and runs it.`,
       'Make the package public once on GitHub (the repository, Packages, Package settings): hosts pull it without signing in.',
       'In the container the app listens on the ports in services, on all addresses (0.0.0.0, not 127.0.0.1), and reads its settings from the environment.',
-      'Hosts need Docker running; without, Weave says so instead of starting anything. Weave starts no programs from releases.',
+      'Hosts need Docker running; without, Weave says so instead of starting anything (a release with only a program per platform would run instead, but only after a warning each host accepts themselves).',
       'After pushing a tag, the workflow takes a few minutes; weave_app_release says so while the release is not there yet.',
     ],
   };

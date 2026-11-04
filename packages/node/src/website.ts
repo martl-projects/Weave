@@ -4,6 +4,7 @@ import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
 import { createHash, createHmac } from 'node:crypto';
 import { portOpen } from './live.ts';
+import { programConsent } from './runtime.ts';
 import { type AgentKey } from './keystore.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
 import { type StoredSpace } from './spacestore.ts';
@@ -318,6 +319,15 @@ export class Website {
     return room.host === this.h.identity.author && !!room.agent && !!this.svc.localServiceByKey(room.agent)?.hosted?.[room.id];
   }
 
+  /** A website of mine running a release's program on this computer: the file and the consent that lets it (to withdraw). */
+  programOf(room: Room): Pick<WebsiteInfo, 'program'> {
+    const stored = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id] : undefined;
+    const serving = stored?.servedBy ? this.svc.storedServices().find((s) => s.name === stored.servedBy) : undefined;
+    const a = serving?.launchedBy ? serving.artifact : undefined;
+    const program = a && this.h.runtime.runs(a.manifest) === 'program' ? this.h.runtime.program(a.manifest) : undefined;
+    return a && program ? { program: { file: program.asset.file, sha256: program.asset.sha256, consent: programConsent(a, program) } } : {};
+  }
+
   /** What a room's clients reach on this computer: its handler's port, where the room service runs. */
   roomService(room: Room) {
     const port = room.agent ? this.svc.localServiceByKey(room.agent)?.hosted?.[room.id]?.port : undefined;
@@ -344,6 +354,7 @@ export class Website {
       host: { did: room.host, name: this.h.nameOf(room.host) },
       offeredBy: { did: room.agent!, ...(name ? { name } : {}) },
       ...(room.release ? { from: this.releaseOf(room.release) } : {}),
+      ...(here ? this.programOf(room) : {}),
       mine: here,
       open: room.open,
       mayJoin: this.mayJoin(room, me),
