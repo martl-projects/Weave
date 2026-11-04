@@ -162,6 +162,8 @@ Notes per step, where the build differed from the plan above.
 
 - **Step 6 (content and people):** `content.ts` (`Content`, 726 lines, `ContentCore` with 42 members: posts, boards, co-authors, upvotes, saves, shares, pages, images and files, chat, threads, issues, proposals, votes) and `people.ts` (`People`, 493 lines, `PeopleCore` with 25: profiles, `resolve`/`nameOf`/contacts, the social graph, avatars, themes, the imprint, accounts elsewhere). Neither imports `node:*`. node.ts 6,856 → 6,066. The section markers lied twice: the "images" section went on into `setMaintainer`, `admit`, `decline` and `reconcile()` (the sweep that calls every module), and the "people" section held `#readersOf` (board access). The first cut moved them and got a 60-member interface; the cut was redone from the member list, not the markers, and `#readersOf` went back. The reading layer (`#spacePosts`, `#allPosts`, `#postAt`, `#messageInfo`, …) stays with the kernel: content is the write side over it. Content's 42-member interface is the measure of how entangled that layer still is, which is step 8's job.
 
+- **Step 7 (apps and releases):** `apps.ts` (`Apps`, about 300 lines, `AppsCore` with 11 members): a project's app manifest and texts, releases of artifacts, apps and services, release lines, this installation's updates. No `node:*`. `reach`, `preferences` and `#emitLive`, which sat between those sections, stay with the node. `services.ts` and `website.ts` were not touched, as promised to Shuttle.
+
 ## 7. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.
