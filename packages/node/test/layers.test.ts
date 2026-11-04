@@ -60,6 +60,7 @@ const MAY_USE_NODE = [
   'marks.ts',
   'mcpb.ts',
   'node.ts',
+  'payments.ts',
   'register.ts',
   'registry.ts',
   'remote.ts',

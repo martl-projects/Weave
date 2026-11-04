@@ -154,6 +154,8 @@ Notes per step, where the build differed from the plan above.
 
 - **Step 2 (one authorization function):** it is `mayDo(state, did, action)` and `mayDoAt(state, event, action)` in `packages/core/src/authz.ts`, not `mayAct`: core already has a `mayAct` for service actions (`serviceactions.ts`), and two functions of one name deciding two kinds of permission is what this step is against. `managersOf(state)` next to them is the set form of `curate`, for `boardRulesOf` and the like. `canManage` and `rekeyCounts` stay exported as two-line wrappers over `mayDo`/`mayDoAt` for callers outside the node (there are none in the repository). What stays as it was, on purpose: checks against `space.founder` (the stored space's creator, not the state's owner after a handover), facts shown in infos (`maintainer: state.maintainers.has(…)`), read-side filters (the feed's "mine"), and the services' own `mayAct` for who may trigger an action.
 
+- **Step 3 (money):** `payments.ts` (`Payments`, 1,416 lines, `PaymentsCore` with 20 members): tiers and membership requests, badges, treasuries and splits, Safe signing, paying from a wallet, ticketed shows, with the class-head fields the tests swap (`checkLicense`, `checkPayment`, `callChain`, `chainRpc`, `gumroadSetup`, …) as get/set delegations on `WeaveNode`. node.ts 9,239 → 8,031. Two kernel helpers that sat inside the money sections stayed where the kernel is: `#selfBodies` (own self-sealed bodies of a kind) and `#arrivals`/`#seenAt` (when an event first got here).
+
 ## 7. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.
