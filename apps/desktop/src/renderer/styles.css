@@ -347,6 +347,7 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .day-sep::before, .day-sep::after { content: ''; flex: 1; border-top: 1px dotted #999; }
 .msg-row { position: relative; padding: 4px 12px 2px; font-family: var(--content-font); }
 .msg-row.compact { padding-top: 0; }
+.msg-row.sending .msg-main { opacity: 0.55; }
 .msg-row:hover { background: #eef3ff; }
 .msg-row.mentioned { background: #fff7d6; box-shadow: inset 3px 0 #d4a000; }
 .msg-main { display: flex; gap: 10px; }

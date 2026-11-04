@@ -3,7 +3,7 @@ import { AuthorAvatar } from './avatar.tsx';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Picker } from 'emoji-mart';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent } from 'react';
-import type { MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
+import type { Actor, MemberInfo, MessageInfo, SpaceInfo } from '@weave/node/client';
 import type { Attachment } from '@weave/core';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { CharCount } from './editor.tsx';
@@ -41,7 +41,11 @@ export function EmojiPicker({ onPick, onClose }: { onPick(emoji: string): void; 
   return <div className="emoji-pop" ref={ref} />;
 }
 
-type Row = { kind: 'day'; label: string; key: string } | { kind: 'msg'; m: MessageInfo; compact: boolean; key: string };
+type Row = { kind: 'day'; label: string; key: string } | { kind: 'msg'; m: MessageInfo; compact: boolean; key: string; sending?: boolean };
+
+/** The id a message you sent has until the node answers with its own; it shows at once, dimmed, and settles on the answer. */
+const SENDING = 'sending:';
+let sendings = 0;
 
 /** Day separators, and consecutive messages from the same sender within 5 minutes shown without repeating the header. */
 function toRows(messages: MessageInfo[]): Row[] {
@@ -52,7 +56,7 @@ function toRows(messages: MessageInfo[]): Row[] {
     if (!prev || new Date(prev.time).toDateString() !== day) rows.push({ kind: 'day', label: dayLabel(m.time), key: `day-${day}` });
     const sameSender = prev && prev.by.did === m.by.did && prev.by.agent === m.by.agent;
     const compact = !!sameSender && !m.replyTo && Date.parse(m.time) - Date.parse(prev!.time) < 5 * 60_000 && rows.at(-1)?.kind === 'msg';
-    rows.push({ kind: 'msg', m, compact, key: m.id });
+    rows.push({ kind: 'msg', m, compact, key: m.id, ...(m.id.startsWith(SENDING) ? { sending: true } : {}) });
     prev = m;
   }
   return rows;
@@ -77,7 +81,7 @@ function Message({
   /** You maintain or moderate the space: you may take down anyone's message. */
   moderating: boolean;
 }) {
-  const { m, compact } = row;
+  const { m, compact, sending } = row;
   const { t } = useTexts();
   const [picking, setPicking] = useState(false);
   const html = useMemo(() => renderMarkdown(m.text), [m.text]);
@@ -110,7 +114,7 @@ function Message({
   );
 
   return (
-    <div className={`msg-row${compact ? ' compact' : ''}${mentionsMe ? ' mentioned' : ''}${hint.tone ? ` tint-${hint.tone}` : ''}`} title={hint.tooltip}>
+    <div className={`msg-row${compact ? ' compact' : ''}${sending ? ' sending' : ''}${mentionsMe ? ' mentioned' : ''}${hint.tone ? ` tint-${hint.tone}` : ''}`} title={hint.tooltip}>
       {m.replyTo && (
         <div className="reply-ref">
           <span className="reply-line" />
@@ -183,6 +187,8 @@ function Composer({
   replyTo,
   onCancelReply,
   members,
+  me,
+  onSending,
   onSent,
 }: {
   space: SpaceInfo;
@@ -191,8 +197,12 @@ function Composer({
   replyTo?: MessageInfo;
   onCancelReply(): void;
   members: MemberInfo[];
-  /** A message went out: the chat reads its messages again, now. */
-  onSent(): void;
+  /** Who writes here: the message shows under this name before the node answers. */
+  me: Actor;
+  /** A message is going out: the chat shows it now. */
+  onSending(message: MessageInfo): void;
+  /** The node took the message (its own id and time) or refused it (undefined): the chat settles or drops the one it shows. */
+  onSent(pending: string, message?: MessageInfo): void;
 }) {
   const { t } = useTexts();
   const [text, setText] = useState('');
@@ -258,13 +268,27 @@ function Composer({
     setText('');
     setFile(undefined);
     onCancelReply();
+    // Shown at once, in your name with this moment's time; the node's answer brings its id and time, and the list catches up on the event.
+    const pending: MessageInfo = {
+      id: `${SENDING}${++sendings}`,
+      short: '',
+      by: me,
+      text: message,
+      time: new Date().toISOString(),
+      channel,
+      ...(replyTo ? { replyTo: { id: replyTo.id, by: replyTo.by, text: replyTo.text } } : {}),
+      reactions: [],
+      ...(attachment ? { file: attachment } : {}),
+    };
+    onSending(pending);
     const where = post ? { post } : { space: space.id, channel };
-    const sent = await attempt(() => api('say', { ...where, text: message, replyTo: replyTo?.id, ...(attachment ? { file: attachment } : {}) }));
+    const sent = await attempt(() => api<MessageInfo>('say', { ...where, text: message, replyTo: replyTo?.id, ...(attachment ? { file: attachment } : {}) }));
+    onSent(pending.id, sent);
     if (sent === undefined) {
       // Keep it all if sending failed.
       setText(message);
       setFile(file);
-    } else onSent(); // this chat shows it now, also when the daemon's events are late or their stream is down; the rest of the app waits for the event
+    }
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -347,16 +371,31 @@ function Composer({
  * virtualized history. Either a channel of a space, or the chat of one post.
  */
 export function ChatView({ space, channel = 'general', post, meDid, meName, members }: { space: SpaceInfo; channel?: string; post?: string; meDid: string; meName?: string; members: MemberInfo[] }) {
-  const { data: messages, reload: reloadMessages } = useApi(
+  const { data: messages } = useApi(
     () => api<MessageInfo[]>('messages', post ? null : space.id, post ? { post, limit: 1000 } : { channel, limit: 1000 }),
     [space.id, channel, post],
   );
+  // Messages you sent that the list hasn't caught up with: shown at once (dimmed until the node answers), in time order
+  // with the rest, and dropped once the list has them, or when the node refused them.
+  const [sent, setSent] = useState<MessageInfo[]>([]);
+  const shown = useMemo(() => {
+    if (!sent.length) return messages ?? [];
+    const known = new Set(messages?.map((m) => m.id));
+    return [...(messages ?? []), ...sent.filter((m) => !known.has(m.id))].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+  }, [messages, sent]);
+  useEffect(() => {
+    if (!messages || !sent.length) return;
+    const known = new Set(messages.map((m) => m.id));
+    if (sent.some((m) => known.has(m.id))) setSent((s) => s.filter((m) => !known.has(m.id)));
+  }, [messages, sent]);
+  const sending = (message: MessageInfo) => setSent((s) => [...s, message]);
+  const settled = (pending: string, message?: MessageInfo) => setSent((s) => (message ? s.map((m) => (m.id === pending ? message : m)) : s.filter((m) => m.id !== pending)));
   const seenKey = post ? `post/${post}` : `${space.id}/${channel}`;
   const { t } = useTexts();
   const [replyTo, setReplyTo] = useState<MessageInfo>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const stuck = useStickToBottom(scroller);
-  const rows = useMemo(() => toRows(messages ?? []), [messages]);
+  const rows = useMemo(() => toRows(shown), [shown]);
   const mentionNames = useMemo(() => {
     const mine = members.find((m) => m.did === meDid);
     return [meName, ...(mine?.agents ?? [])].filter((n): n is string => !!n);
@@ -384,9 +423,9 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
   }, [rows.length, virtualizer, stuck]);
 
   useEffect(() => {
-    const last = messages?.at(-1);
+    const last = shown.at(-1);
     if (last) markSeen(seenKey, last.time);
-  }, [messages, seenKey]);
+  }, [shown, seenKey]);
 
   useEffect(() => {
     setReplyTo(undefined);
@@ -430,7 +469,17 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
           })}
         </div>
       </div>
-      <Composer space={space} channel={channel} post={post} replyTo={replyTo} onCancelReply={() => setReplyTo(undefined)} members={members} onSent={reloadMessages} />
+      <Composer
+        space={space}
+        channel={channel}
+        post={post}
+        replyTo={replyTo}
+        onCancelReply={() => setReplyTo(undefined)}
+        members={members}
+        me={{ did: meDid as Actor['did'], ...(meName ? { name: meName } : {}) }}
+        onSending={sending}
+        onSent={settled}
+      />
     </div>
   );
 }
