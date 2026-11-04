@@ -126,7 +126,24 @@ Steps 1, 3, 4 and 6 are independent of each other and of step 2; they could run 
 - **Private fields.** `#x` members are per class; a moved method loses them, which is where the real work per cut is (it was on `criticals` too). Answer: the `…Core` interfaces, 9 to 22 members each, are the measure of a cut's coupling; one above 25 means the cut line is wrong.
 - **Two stale branches.** `criticals` and `merge-main` will look like the real thing to a newcomer. Answer: once step 2 is on main, both get a last commit note and are deleted (their worktrees `weave-wallet` and `weave-merge` with them, by martl).
 
-## 5. What "done" looks like
+## 5. The baseline (step 0)
+
+`npm run typecheck` and `npm test` green at `ba48b52`. `scripts/bench.ts` on a seeded home of 3,015 events (`seed … 3000`, then `run`), the numbers every later step is held to, within noise:
+
+| Read | ms |
+| --- | ---: |
+| open (first, imports logs) | 1,221 |
+| open | 52 |
+| feed, first | 348 |
+| feed, again | 20 |
+| posts of the busy project | 20 |
+| posts again | 12 |
+| one post by id | 24 |
+| say, then posts again | 44 |
+| members | 1 |
+| heap after reads | 27 MB |
+
+## 6. What "done" looks like
 
 - node.ts under 1,000 lines: fields, constructor, `open`/`close`, the facade.
 - `packages/node/src/core/` imports no `node:*` and nothing from `host/`, enforced by `layers.test.ts`; an esbuild browser bundle of the kernel resolves.
