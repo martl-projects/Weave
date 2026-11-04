@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Passkey PRF check</title>
+<!--
+  Weave Web's spike (OVb4TP5x, milestone 1): can this browser and this passkey provider give a fixed secret per
+  passkey (the WebAuthn PRF extension), the key that would wrap a hosted node's home key? Nothing leaves the page:
+  the passkey is made for this host (a test account "weave-prf-check"), and the result is shown to copy.
+
+  1. Create: a passkey with PRF asked for. Does the provider say PRF is enabled, and does it give a value already?
+  2. Sign in: the PRF value for a fixed salt, through HKDF to an AES-GCM key; a random home key is wrapped with it.
+  3. Sign in again: the same value? Then the wrapped home key opens again: what logging in will do.
+  "Sign in with any passkey" lets you pick one made on another device (a synced passkey): the same fingerprint there
+  means the secret travels with the passkey.
+-->
+<style>
+  :root { --bg: #fbfaf7; --fg: #1d1b16; --muted: #6b665c; --line: #e2ddd2; --ok: #1f7a3a; --bad: #b3261e; --accent: #3a5bd9; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161513; --fg: #ece8df; --muted: #a39d90; --line: #34312b; --ok: #6fcf8d; --bad: #f08a80; --accent: #8ea6ff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-word; }
+  td:first-child { color: var(--muted); width: 38%; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  pre { background: color-mix(in srgb, var(--fg) 6%, transparent); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+  #log div { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Passkey PRF check</h1>
+  <p class="lead">Does this browser and passkey provider give each passkey a fixed secret (PRF)? Weave Web would use it to lock a hosted home.</p>
+  <div class="buttons">
+    <button class="primary" id="create">1. Create test passkey</button>
+    <button id="get">2. Sign in with it</button>
+    <button id="any">Sign in with any passkey</button>
+    <button id="copy">Copy result</button>
+  </div>
+  <table id="result"></table>
+  <pre id="json"></pre>
+  <div id="log"></div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const enc = new TextEncoder();
+  const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+  const log = (text) => { const d = document.createElement('div'); d.textContent = `${new Date().toLocaleTimeString()}  ${text}`; $('log').prepend(d); };
+  const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+  // Known providers by AAGUID (the authenticator's model, when it tells it).
+  const AAGUIDS = {
+    '08987058-cadc-4b81-b6e1-30de50dcbe96': 'Windows Hello', '9ddd1817-af5a-4672-a2b9-3e3dd95000a9': 'Windows Hello', '6028b017-b1d4-4c02-b4b3-afcdafc96bb2': 'Windows Hello',
+    'fbfc3007-154e-4ecc-8c0b-6e020557d7bd': 'iCloud Keychain', 'dd4ec289-e01d-41c9-bb89-70fa845d4bf2': 'iCloud Keychain (managed)',
+    'ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4': 'Google Password Manager', 'adce0002-35bc-c60a-648b-0b25f1f05503': 'Chrome on Mac',
+    'bada5566-a7aa-401f-bd96-45619a55120d': '1Password', 'd548826e-79b4-db40-a3d8-11116f7e8349': 'Bitwarden', '531126d6-e717-415c-9320-3d9aa6981239': 'Dashlane',
+  };
+  const uuid = (b) => { const h = hex(b); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`; };
+
+  const state = {
+    page: location.origin,
+    browser: navigator.userAgentData ? navigator.userAgentData.brands.map((b) => `${b.brand} ${b.version}`).filter((s) => !/Not.A.Brand/i.test(s)).join(', ') : navigator.userAgent,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+    userAgent: navigator.userAgent,
+    webauthn: !!window.PublicKeyCredential,
+  };
+  let salt;
+  let wrapped; // {iv, data, homeKey} from the first sign-in: the second has to open it
+
+  const render = () => {
+    const rows = [
+      ['Browser', state.browser], ['Platform', state.platform],
+      ['Provider', state.provider], ['Attachment', state.attachment],
+      ['PRF enabled at create', state.prfAtCreate], ['PRF value at create', state.prfValueAtCreate],
+      ['PRF value at sign-in', state.prfAtGet], ['Secret fingerprint', state.fingerprint],
+      ['Same secret again', state.sameAgain], ['Home key unwraps', state.unwraps], ['Error', state.error],
+    ].filter(([, v]) => v !== undefined);
+    $('result').replaceChildren(...rows.map(([k, v]) => {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'); a.textContent = k;
+      const b = document.createElement('td'); b.textContent = v === true ? 'yes' : v === false ? 'no' : String(v);
+      if (v === true) b.className = 'ok'; if (v === false || k === 'Error') b.className = 'bad';
+      tr.append(a, b); return tr;
+    }));
+    $('json').textContent = JSON.stringify(state, null, 2);
+  };
+
+  const fail = (where, e) => { state.error = `${where}: ${e?.name ?? ''} ${e?.message ?? e}`.trim(); log(state.error); render(); };
+
+  async function create() {
+    state.error = undefined;
+    try {
+      const credential = await navigator.credentials.create({ publicKey: {
+        rp: { name: 'Weave PRF check', id: location.hostname },
+        user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'weave-prf-check', displayName: 'Weave PRF check' },
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -8 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        attestation: 'none',
+        extensions: { prf: { eval: { first: salt } } },
+      } });
+      const ext = credential.getClientExtensionResults();
+      store.set('weave-prf-credential', credential.id);
+      state.attachment = credential.authenticatorAttachment ?? 'not said';
+      state.transports = credential.response.getTransports?.() ?? [];
+      const auth = credential.response.getAuthenticatorData?.();
+      if (auth && auth.byteLength >= 53) {
+        const id = uuid(auth.slice(37, 53));
+        state.aaguid = id;
+        state.provider = AAGUIDS[id] ?? (/^0{8}-/.test(id) ? 'not said (zero AAGUID)' : `unknown (${id})`);
+      }
+      state.prfAtCreate = ext.prf?.enabled ?? false;
+      state.prfValueAtCreate = !!ext.prf?.results?.first;
+      log(`created ${credential.id.slice(0, 12)}…, prf ${JSON.stringify({ enabled: ext.prf?.enabled, value: !!ext.prf?.results?.first })}`);
+      render();
+    } catch (e) { fail('create', e); }
+  }
+
+  async function signIn(anyPasskey) {
+    state.error = undefined;
+    const id = store.get('weave-prf-credential');
+    if (!anyPasskey && !id) return fail('sign-in', 'create a test passkey first');
+    try {
+      const assertion = await navigator.credentials.get({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rpId: location.hostname,
+        userVerification: 'required',
+        ...(anyPasskey ? {} : { allowCredentials: [{ type: 'public-key', id: unb64u(id) }] }),
+        extensions: { prf: { eval: { first: salt } } },
+      } });
+      const first = assertion.getClientExtensionResults().prf?.results?.first;
+      state.prfAtGet = !!first;
+      if (!first) { log('signed in, no PRF value'); return render(); }
+      // The wrap key: HKDF over the PRF value, never the value itself.
+      const ikm = await crypto.subtle.importKey('raw', first, 'HKDF', false, ['deriveKey', 'deriveBits']);
+      const fp = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: enc.encode('weave/prf-check/fingerprint') }, ikm, 64);
+      const wrapKey = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: enc.encode('weave/home-key-wrap/v1') }, ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      const fingerprint = hex(fp);
+      if (state.fingerprint && wrapped && assertion.id === wrapped.credential) {
+        state.sameAgain = state.fingerprint === fingerprint;
+        try {
+          const opened = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.iv }, wrapKey, wrapped.data);
+          state.unwraps = hex(opened) === wrapped.homeKey;
+        } catch { state.unwraps = false; }
+      } else {
+        const homeKey = crypto.getRandomValues(new Uint8Array(32));
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        wrapped = { credential: assertion.id, iv, data: await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrapKey, homeKey), homeKey: hex(homeKey) };
+        log('home key wrapped: sign in again to open it');
+      }
+      state.fingerprint = fingerprint;
+      state.signedInWith = `${assertion.id.slice(0, 12)}…`;
+      state.attachment ??= assertion.authenticatorAttachment ?? 'not said';
+      log(`signed in with ${assertion.id.slice(0, 12)}…, secret ${fingerprint}`);
+      render();
+    } catch (e) { fail('sign-in', e); }
+  }
+
+  $('create').onclick = create;
+  $('get').onclick = () => signIn(false);
+  $('any').onclick = () => signIn(true);
+  $('copy').onclick = () => navigator.clipboard.writeText(JSON.stringify(state, null, 2)).then(() => log('copied'), (e) => fail('copy', e));
+
+  (async () => {
+    salt = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode('weave/prf-check/salt/v1')));
+    if (!state.webauthn) state.error = 'no WebAuthn in this browser';
+    else if (PublicKeyCredential.getClientCapabilities) {
+      try { const caps = await PublicKeyCredential.getClientCapabilities(); state.capabilityPrf = caps['extension:prf'] ?? 'not said'; } catch {}
+    }
+    state.platformAuthenticator = await PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.().catch(() => undefined);
+    if (!isSecureContext) state.error = 'not a secure context: open it on https or localhost';
+    render();
+  })();
+})();
+</script>
+</body>
+</html>

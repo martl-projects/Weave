@@ -309,19 +309,32 @@ export interface RemoteConnection {
   close(): void;
 }
 
+/** Which calls a remote client may make: a phone's by default; a browser's (Weave Web) are its own list. */
+export interface RemoteOptions {
+  methods?: readonly string[];
+  /** Who it is in a refusal ("a phone can't do …"). */
+  who?: string;
+  /** A call refused, for the caller to log (the spike's list of what a browser lacks). */
+  refused?(method: string): void;
+}
+
 /**
  * Serve a remote client on a connection: live events out as they happen,
- * calls in, a phone's methods only (PHONE_METHODS; older names translated).
- * The stop ends the session; the connection's close does too.
+ * calls in, a phone's methods only unless told otherwise (PHONE_METHODS; older
+ * names translated). The stop ends the session; the connection's close does too.
  */
-export function serveRemote(host: Pick<RemoteHost, 'call' | 'watch'>, connection: RemoteConnection): AbortController {
+export function serveRemote(host: Pick<RemoteHost, 'call' | 'watch'>, connection: RemoteConnection, options: RemoteOptions = {}): AbortController {
+  const allowed: readonly string[] = options.methods ?? PHONE_METHODS;
   const stop = new AbortController();
   connection.onClose(() => stop.abort());
   void host.watch((item) => connection.send({ event: item }), stop.signal).catch(() => {});
   connection.onMessage((message) => {
     const id = message.id;
     const method = (RENAMED[String(message.method)] ?? message.method) as RpcMethod;
-    if (!PHONE_METHODS.includes(method)) return connection.send({ id, error: `a phone can't do ${String(method)}` });
+    if (!allowed.includes(method)) {
+      options.refused?.(String(method));
+      return connection.send({ id, error: `${options.who ?? 'a phone'} can't do ${String(method)}` });
+    }
     // JSON turns undefined arguments into null; turn them back so defaults apply.
     const args = (Array.isArray(message.args) ? message.args : []).map((a) => (a === null ? undefined : a));
     host.call(method, args).then(
@@ -350,6 +363,8 @@ function dhtConnection(socket: DhtSocket, rest: Buffer): RemoteConnection {
  */
 export class RemoteLink implements RemoteConnection {
   #handle?: (message: Record<string, unknown>) => void;
+  /** What arrived before anyone listened (a WebSocket's first frames can come with its upgrade): handed on in order. */
+  #early: Array<Record<string, unknown>> = [];
   #onClose: Array<() => void> = [];
   #open = true;
   readonly #out: (text: string) => void;
@@ -366,6 +381,9 @@ export class RemoteLink implements RemoteConnection {
 
   onMessage(handle: (message: Record<string, unknown>) => void): void {
     this.#handle = handle;
+    const early = this.#early;
+    this.#early = [];
+    for (const message of early) if (this.#open) handle(message);
   }
 
   onClose(handle: () => void): void {
@@ -389,7 +407,9 @@ export class RemoteLink implements RemoteConnection {
       return this.close();
     }
     if (!message || typeof message !== 'object' || Array.isArray(message)) return this.close();
-    this.#handle?.(message as Record<string, unknown>);
+    if (this.#handle) this.#handle(message as Record<string, unknown>);
+    else if (this.#early.length < 64) this.#early.push(message as Record<string, unknown>);
+    else this.close();
   }
 
   /** The other side is gone (the carrier says so). */
@@ -410,7 +430,7 @@ export class RemoteLink implements RemoteConnection {
  * (apps/web, once a session says who the browser is). Nothing when the request
  * isn't a WebSocket upgrade. Who may connect is the caller's to decide first.
  */
-export function serveRemoteOverWebSocket(host: Pick<RemoteHost, 'call' | 'watch'>, req: IncomingMessage, socket: Duplex, head: Buffer): RemoteLink | undefined {
+export function serveRemoteOverWebSocket(host: Pick<RemoteHost, 'call' | 'watch'>, req: IncomingMessage, socket: Duplex, head: Buffer, options?: RemoteOptions): RemoteLink | undefined {
   let ws: WebSocketConnection | undefined;
   const link = new RemoteLink(
     (text) => ws?.send(text),
@@ -418,6 +438,6 @@ export function serveRemoteOverWebSocket(host: Pick<RemoteHost, 'call' | 'watch'
   );
   ws = acceptWebSocket(req, socket, head, { message: (text) => link.receive(text), close: () => link.closed() });
   if (!ws) return undefined;
-  serveRemote(host, link);
+  serveRemote(host, link, options);
   return link;
 }

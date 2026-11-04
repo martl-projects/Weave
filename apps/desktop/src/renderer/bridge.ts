@@ -16,7 +16,7 @@ export interface AppState {
   companyOnly?: boolean;
 }
 
-interface Bridge {
+export interface Bridge {
   state(): Promise<AppState>;
   /** Start the daemon again; restart also ends one that holds the home but doesn't answer. Not in the browser preview. */
   reconnect?(restart: boolean): Promise<void>;
@@ -143,6 +143,70 @@ const webBridge: Bridge = {
 };
 
 /**
+ * Weave Web (OVb4TP5x): the node's remote protocol over one WebSocket, as a phone speaks it over the DHT.
+ *   → {id, method, args}   ← {id, result} | {id, error, name?, values?}   ← {event}
+ * Calls wait while it (re)connects; a call in flight when it drops fails, since whether it ran isn't known.
+ * In the spike, dev-web.ts serves /ws behind a token in the page's address (?ws=<token>).
+ */
+export function wsBridge(base: Bridge, address: string): Bridge {
+  let socket: WebSocket | undefined;
+  let open: Promise<WebSocket> | undefined;
+  let next = 1;
+  let retry = 500;
+  const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
+  const listeners: Array<(item: FeedItem) => void> = [];
+  const connect = (): Promise<WebSocket> =>
+    (open ??= new Promise<WebSocket>((resolve, reject) => {
+      const ws = new WebSocket(address);
+      ws.onopen = () => {
+        socket = ws;
+        retry = 500;
+        resolve(ws);
+      };
+      ws.onmessage = (message) => {
+        const data = JSON.parse(String(message.data)) as { id?: number; event?: FeedItem; result?: unknown } & Partial<ErrorAnswer>;
+        if (data.event) return listeners.forEach((listen) => listen(data.event!));
+        const call = data.id === undefined ? undefined : pending.get(data.id);
+        if (!call) return;
+        pending.delete(data.id!);
+        if (data.error !== undefined) call.reject(errorFromWire(data as ErrorAnswer, 'the call failed'));
+        else call.resolve(data.result);
+      };
+      ws.onclose = () => {
+        const wasOpen = socket === ws;
+        socket = undefined;
+        open = undefined;
+        for (const [id, call] of pending) {
+          pending.delete(id);
+          call.reject(new Error('the connection to your node dropped'));
+        }
+        if (!wasOpen) reject(new Error('could not reach your node'));
+        // Live events need the socket: come back, a little later each time.
+        if (listeners.length) setTimeout(() => void connect().catch(() => {}), (retry = Math.min(retry * 2, 15_000)));
+      };
+    }));
+  return {
+    ...base,
+    call: async (method, ...args) => {
+      const ws = socket ?? (await connect());
+      const id = next++;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        ws.send(JSON.stringify({ id, method, args }));
+      });
+    },
+    onEvent: (listener) => {
+      listeners.push(listener);
+      void connect().catch(() => {});
+    },
+  };
+}
+
+/** The spike's switch: a page opened as /?ws=<token> talks over the WebSocket. */
+const wsToken = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('ws') : null;
+const webOrSocket: Bridge = wsToken ? wsBridge(webBridge, `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(wsToken)}`) : webBridge;
+
+/**
  * Electron's preload answers a call with {result} or {error, name?, values?} instead of throwing: an error thrown in the
  * main process would arrive as "Error invoking remote method…" without its name. Thrown here, as the daemon threw it.
  */
@@ -155,7 +219,7 @@ const electronBridge = (w: Bridge): Bridge => ({
   },
 });
 
-export const bridge: Bridge = window.weave ? (window.weave.phone ? window.weave : electronBridge(window.weave)) : webBridge;
+export const bridge: Bridge = window.weave ? (window.weave.phone ? window.weave : electronBridge(window.weave)) : webOrSocket;
 
 /** Typed shorthand for backend calls. */
 export const api = <T>(method: RendererMethod, ...args: unknown[]): Promise<T> => bridge.call(method, ...args) as Promise<T>;
