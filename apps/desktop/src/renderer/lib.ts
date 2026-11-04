@@ -129,6 +129,20 @@ function readSeen(): Record<string, string> {
   }
 }
 
+/*
+ * Marking a chat seen changes what's unread, nothing on the node: the views that
+ * show unread marks re-render from this, and nothing is fetched again (a bump
+ * here had every view ask the node for everything on every chat opened).
+ */
+let seenTick = 0;
+const seenListeners = new Set<() => void>();
+const subscribeSeen = (listener: () => void) => {
+  seenListeners.add(listener);
+  return () => seenListeners.delete(listener);
+};
+/** Re-render when something was marked seen (unread marks live in localStorage). */
+export const useSeenTick = () => useSyncExternalStore(subscribeSeen, () => seenTick);
+
 export function markSeen(key: string, time: string): void {
   const seen = readSeen();
   if ((seen[key] ?? '') >= time) return;
@@ -136,7 +150,8 @@ export function markSeen(key: string, time: string): void {
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
   } catch {}
-  bump();
+  seenTick++;
+  for (const listener of seenListeners) listener();
 }
 
 export const isUnread = (key: string, latest?: string): boolean => !!latest && latest > (readSeen()[key] ?? '');

@@ -23,7 +23,7 @@ import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
-import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useTick, type AppState, type Mode, type Skin } from './lib.ts';
+import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useSeenTick, type AppState, type Mode, type Skin } from './lib.ts';
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
@@ -74,13 +74,14 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
 
 /** A space in the tree; the open one shows its boards and channels underneath. */
 function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[]; waiting: number }) {
-  useTick(); // unread state lives in localStorage; re-check on every live update
+  useSeenTick(); // unread state lives in localStorage; re-check when something was marked seen
   const { t } = useTexts();
   const base = spaceHref(space);
   const open = route[1] === space.id;
-  const { data: channels } = useApi(() => api<ChannelInfo[]>('channels', space.id), [space.id]);
+  // Its channels come with the space itself: one `spaces` answer for the whole tree, not a call per space (G5N4EzO0).
+  const channels = space.channels;
   const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
-  const { data: rooms } = useApi(() => (space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id]);
+  const { data: rooms } = useApi(() => (open && space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
@@ -125,7 +126,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
 }
 
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
-  useTick(); // unread state lives in localStorage
+  useSeenTick(); // unread state lives in localStorage
   const { t } = useTexts();
   const chatHints = useHints('place', chats.map((c) => ({ space: c.space.id })));
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {

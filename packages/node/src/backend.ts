@@ -185,6 +185,8 @@ export interface FeedQuery {
 
 /** A group, project or community this node belongs to. */
 export interface SpaceInfo extends SpaceRef {
+  /** Its chat channels, with when each was last written in: the sidebar shows unread marks from this without asking per space. */
+  channels?: ChannelInfo[];
   /** Projects: the icon from the project's page (wblob: reference), if it has one. */
   icon?: string;
   /** A photo of its own (wblob: reference) instead of everyone's avatars as a group photo. */

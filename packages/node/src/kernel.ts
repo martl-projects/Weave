@@ -15,6 +15,7 @@ import type { Services } from './services.ts';
 import type { Decoded, WeaveNode } from './node.ts';
 import { replicaOrder, photoOrderOf, photoPosesOf, DEFAULT_PAGE, carriedItem, meetTopic, summary, KIND_PAGE, KIND_SPACE_PHOTO } from './shared.ts';
 import { newSpace, directSpace } from '@weave/core';
+import { channelsOf } from '@weave/core';
 /*
  * The kernel: the spaces this node holds and their keys, epochs, rekeys and
  * carries, decoding what it can read (once, cached), each space's state, the
@@ -938,6 +939,7 @@ export class Kernel {
       founderName: this.node.nameOf(state.founder),
       members: state.members.size,
       epoch: currentEpoch(space),
+      ...(space.kind !== 'direct' ? { channels: channelsOf(this.entries(space)) } : {}),
       ...(space.kind === 'project' && this.page(space, state).icon ? { icon: this.page(space, state).icon } : {}),
       ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
