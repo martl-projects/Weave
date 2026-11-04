@@ -67,6 +67,8 @@ interface Hosting {
   chat: RoomMessage[];
   /** Whether the app answers on the room's port, as last checked. */
   appReady: boolean;
+  /** Who was in the room when peers were last told and the node last notified: a second connection of the same person changes nothing. */
+  peersTold?: string;
   watch?: NodeJS.Timeout;
   /** The room's HTTP proxy, which adds X-Weave-Person to every request (started with the first tunnel that needs it). */
   proxy?: Promise<{ server: HttpServer; port: number }>;
@@ -219,13 +221,25 @@ export class LiveRooms {
     hosting.controls.set(socket, person);
     socket.on('close', () => {
       hosting.controls.delete(socket);
-      this.#broadcastState(hosting);
-      this.#host.changed();
+      this.#peersChanged(hosting);
     });
     onLines(socket, rest, (message) => {
       if (message.type === 'say' && typeof message.text === 'string') this.#post(hosting, person, message.text);
     });
     send(socket, { type: 'state', peers: this.peers(hosting.room.id), chat: hosting.chat.slice(-50) as unknown as Json, appReady: hosting.appReady });
+    this.#peersChanged(hosting);
+  }
+
+  /**
+   * Tell the room's peers and the node who is in the room, when that changed.
+   * A person's second connection, or one the swarm closes at once as a
+   * duplicate, leaves the room as it was: nobody is told (G5N4EzO0: such a
+   * close every few seconds had the whole app reload every few seconds).
+   */
+  #peersChanged(hosting: Hosting): void {
+    const now = this.peers(hosting.room.id).join(' ');
+    if (now === hosting.peersTold) return;
+    hosting.peersTold = now;
     this.#broadcastState(hosting);
     this.#host.changed();
   }

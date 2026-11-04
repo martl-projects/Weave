@@ -110,15 +110,31 @@ export function answerOf(line: string): SessionText | undefined {
   return { text, session: typeof e.sessionId === 'string' ? e.sessionId : '', ...(typeof e.cwd === 'string' ? { cwd: e.cwd } : {}) };
 }
 
+/**
+ * Where the transcripts are, by session id: one listing of the projects folder, kept for a second. The Sessions view
+ * asks for dozens of sessions at once and again every few seconds; a listing per session, folder by folder, was most
+ * of what it cost. A session not in the listing is looked for again at once (a transcript that just appeared).
+ */
+const transcriptIndex = new Map<string, { at: number; files: Map<string, string> }>();
+const INDEX_FOR_MS = 1000;
+
+function transcriptFiles(dir: string, now = Date.now()): Map<string, string> {
+  const kept = transcriptIndex.get(dir);
+  if (kept && now - kept.at < INDEX_FOR_MS) return kept.files;
+  const files = new Map<string, string>();
+  for (const folder of readdirSync(dir, { withFileTypes: true })) {
+    if (!folder.isDirectory()) continue;
+    for (const name of readdirSync(join(dir, folder.name))) if (name.endsWith('.jsonl')) files.set(basename(name, '.jsonl'), join(dir, folder.name, name));
+  }
+  transcriptIndex.set(dir, { at: now, files });
+  return files;
+}
+
 /** A Claude Code session's transcript file, if it's on this computer. */
 export function transcriptOf(session: string, dir = claudeProjectsDir()): string | undefined {
   if (!/^[A-Za-z0-9-]{8,80}$/.test(session) || !existsSync(dir)) return undefined;
-  for (const folder of readdirSync(dir, { withFileTypes: true })) {
-    if (!folder.isDirectory()) continue;
-    const file = join(dir, folder.name, `${session}.jsonl`);
-    if (existsSync(file)) return file;
-  }
-  return undefined;
+  const file = transcriptFiles(dir).get(session) ?? transcriptFiles(dir, Infinity).get(session);
+  return file && existsSync(file) ? file : undefined;
 }
 
 /** A Claude Code session seen in its transcript: when it last wrote, and the folder it works in. */
@@ -146,8 +162,19 @@ export function recentSessions(since: number, dir = claudeProjectsDir()): Recent
   return out.sort((a, b) => b.active.localeCompare(a.active));
 }
 
+/** Transcript file → the folder its session works in, once seen: it doesn't change. */
+const folders = new Map<string, string>();
+
 /** The folder a session works in: the cwd of its first lines. */
 function folderOf(file: string): { folder?: string } {
+  const known = folders.get(file);
+  if (known) return { folder: known };
+  const found = readFolderOf(file);
+  if (found.folder) folders.set(file, found.folder);
+  return found;
+}
+
+function readFolderOf(file: string): { folder?: string } {
   const length = Math.min(statSync(file).size, 64 * 1024);
   const buffer = Buffer.alloc(length);
   const fd = openSync(file, 'r');
@@ -171,12 +198,23 @@ export function transcriptActive(session: string, dir = claudeProjectsDir()): st
   return file ? statSync(file).mtime.toISOString() : undefined;
 }
 
+/** Transcript file → its title as last read, and the size and time it was read at: read again only when it grew or changed. */
+const titles = new Map<string, { size: number; mtimeMs: number; title?: string }>();
+
 /** The title a Claude Code session goes by (the Claude app's sidebar name): its latest custom-title line. */
 export function transcriptTitle(session: string, dir = claudeProjectsDir()): string | undefined {
   const file = transcriptOf(session, dir);
   if (!file) return undefined;
+  const { size, mtimeMs } = statSync(file);
+  const kept = titles.get(file);
+  if (kept && kept.size === size && kept.mtimeMs === mtimeMs) return kept.title;
+  const title = readTranscriptTitle(file, size);
+  titles.set(file, { size, mtimeMs, ...(title !== undefined ? { title } : {}) });
+  return title;
+}
+
+function readTranscriptTitle(file: string, size: number): string | undefined {
   // Titles are written again and again; the end of the file has the latest.
-  const size = statSync(file).size;
   const length = Math.min(size, 256 * 1024);
   const buffer = Buffer.alloc(length);
   const fd = openSync(file, 'r');

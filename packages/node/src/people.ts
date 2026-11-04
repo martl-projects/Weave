@@ -470,11 +470,20 @@ export class People {
   }
 
   /** Display name for an author: the name in their latest profile, else the one their contact link gave. */
+  /** Each person's profile name as last read, and the events it was read from: read again only once they wrote more. */
+  readonly #names = new Map<Did, { events: WeaveRecord[]; length: number; name?: string }>();
+
   nameOf(author: Did): string | undefined {
+    const events = this.core.eventsOf(author);
+    const kept = this.#names.get(author);
     let name: string | undefined;
-    for (const event of this.core.eventsOf(author)) {
-      const body = event.body as { name?: unknown } | null;
-      if (event.kind === KIND_PROFILE && typeof body?.name === 'string') name = body.name;
+    if (kept && kept.events === events && kept.length === events.length) name = kept.name;
+    else {
+      for (const event of events) {
+        const body = event.body as { name?: unknown } | null;
+        if (event.kind === KIND_PROFILE && typeof body?.name === 'string') name = body.name;
+      }
+      this.#names.set(author, { events, length: events.length, ...(name !== undefined ? { name } : {}) });
     }
     return name ?? this.contacts().get(author);
   }

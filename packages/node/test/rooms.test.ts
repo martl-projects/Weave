@@ -203,6 +203,19 @@ describe('rooms of the room service', () => {
     // Nothing of it is in anyone's logs.
     for (const node of [martin, lena]) expect(JSON.stringify(node.replica.events())).not.toContain('ready!');
 
+    // The node tells the app about the room only when who is in it changes (G5N4EzO0): nothing while everyone stays,
+    // once when Lena leaves. (A second connection of the same person, or one the swarm closes at once, is no change.)
+    const notices: string[] = [];
+    const watching = new AbortController();
+    void martin.watch((item) => notices.push(item.kind), watching.signal).catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(notices.filter((k) => k === 'weave.live')).toEqual([]);
+    await lena.leaveWebsite(seen.id);
+    await until(() => notices.includes('weave.live'));
+    watching.abort();
+    await lena.visitWebsite(seen.id);
+    await until(async () => (await lena.websites('Gameshow'))[0].connected);
+
     // The host's app stops: players stay connected but wait for it, with no address to open onto nothing.
     app.closeAllConnections();
     await new Promise<void>((resolve) => app.close(() => resolve()));

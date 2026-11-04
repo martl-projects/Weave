@@ -1335,8 +1335,13 @@ export class WeaveNode implements Backend {
     const hidden = this.#kernel.hiddenAuthors();
     const states = new Map<string, SpaceState>();
 
+    // The last `limit` that match (0: all), from the end: items are made only for those, not for the whole history.
+    const limit = query.limit ?? 50;
+    const max = limit > 0 ? limit : Infinity;
     const items: FeedItem[] = [];
-    for (const decoded of this.#kernel.decodeAll()) {
+    const all = this.#kernel.decodeAll();
+    for (let i = all.length - 1; i >= 0 && items.length < max; i--) {
+      const decoded = all[i];
       if (onlySpace && decoded.space?.id !== onlySpace.id) continue;
       if (onlyAuthor && decoded.event.author !== onlyAuthor) continue;
       if (query.publicOnly && (decoded.space || decoded.private)) continue;
@@ -1348,7 +1353,7 @@ export class WeaveNode implements Backend {
       }
       items.push(this.#kernel.toItem(decoded));
     }
-    return items.slice(-(query.limit ?? 50));
+    return items.reverse();
   }
 
   // Membership (membership.ts): the node delegates.
