@@ -45,6 +45,7 @@ const MAY_USE_NODE = [
   'filestore.ts',
   'gumroad.ts',
   'harnesses.ts',
+  'holding.ts',
   'home.ts',
   'homekey.ts',
   'keyproviders.ts',
