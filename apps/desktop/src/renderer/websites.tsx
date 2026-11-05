@@ -441,13 +441,14 @@ function ArtifactList({ title, artifacts, maintainer, via, add }: { title: strin
  * Launch a website artifact: a running website in a project where you host websites. It's code from others, run on
  * this computer: you approve it here, and it's there until its website is closed.
  */
-function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose(): void }) {
+function LaunchDialog({ artifact, into, askedBy, onClose }: { artifact: ArtifactInfo; into?: string; askedBy?: string; onClose(): void }) {
   const { t } = useTexts();
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
   // Where you host websites, here.
   const hosts = (services ?? []).filter((s) => (s.builtin === 'website' || s.contract.websites === 'host') && s.enabled && !s.node);
   const projects = [...new Map(hosts.flatMap((s) => s.spaces).filter((x) => x.kind === 'project').map((x) => [x.id, x])).values()];
-  const [where, setWhere] = useState<string>();
+  // An agent's request names the project to launch it in: picked already, still the person's to change.
+  const [where, setWhere] = useState<string | undefined>(into);
   const [announce, setAnnounce] = useState(true);
   const project = projects.find((p) => p.id === (where ?? (projects.length === 1 ? projects[0].id : undefined)));
   const runs = artifact.command?.join(' ') ?? artifact.name;
@@ -465,6 +466,8 @@ function LaunchDialog({ artifact, onClose }: { artifact: ArtifactInfo; onClose()
   if (warning) return <ProgramWarning artifact={artifact} onRun={() => launch(true)} onCancel={() => setWarning(false)} />;
   return (
     <Modal title={t('launch.title', { name: artifact.name, tag: artifact.tag })} onClose={onClose}>
+      {/* Opened by one of the person's agents (weave_open_in_app website): why it's here, and that the click is theirs. */}
+      {askedBy && <p className="notice">{t('launch.asked.by', { agent: askedBy, name: artifact.name })}</p>}
       {services && !projects.length ? (
         <p className="small">{t('launch.host.nowhere')}</p>
       ) : (
@@ -1279,6 +1282,14 @@ export function openServices(request: { project: string; service?: string; asked
   for (const listener of wantedListeners) listener();
 }
 
+/** A launch an agent asked for (weave_open_in_app website): a release, and the project to launch it in. Taken by that project's services view once it shows. */
+let wantedLaunch: { project: string; release: { project: string; id: string }; askedBy?: string } | undefined;
+
+export function openLaunch(request: { project: string; release: { project: string; id: string }; askedBy?: string }): void {
+  wantedLaunch = request;
+  for (const listener of wantedListeners) listener();
+}
+
 export function ProjectServicesView({ project, members, meDid, focus }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; focus?: string }) {
   const { t } = useTexts();
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
@@ -1306,6 +1317,22 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
     setAdding({ ...(request.service ? { pick: request.service } : {}), ...(request.askedBy ? { askedBy: request.askedBy } : {}) });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profiles, asked, project.id]);
+  // An agent's request to launch a release here: its Launch dialog, filled in; launching it is the person's click.
+  const [launching, setLaunching] = useState<{ artifact: ArtifactInfo; askedBy?: string }>();
+  useEffect(() => {
+    if (!wantedLaunch || wantedLaunch.project !== project.id) return;
+    const request = wantedLaunch;
+    wantedLaunch = undefined;
+    void api<ArtifactInfo[]>('artifacts', request.release.project).then(
+      (released) => {
+        const artifact = released.find((a) => a.id === request.release.id);
+        if (artifact) setLaunching({ artifact, ...(request.askedBy ? { askedBy: request.askedBy } : {}) });
+        else toast(t('launch.asked.gone'), 'error');
+      },
+      (error: Error) => toast(error.message, 'error'),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, project.id]);
 
   // Room services first, then the rest.
   // Websites that are only that run in Live.
@@ -1331,6 +1358,7 @@ export function ProjectServicesView({ project, members, meDid, focus }: { projec
         </p>
       )}
       {adding && <ServiceCatalog project={project} services={services ?? []} maintainer={!!info?.maintainer} {...(adding.pick ? { pick: adding.pick } : {})} {...(adding.askedBy ? { askedBy: adding.askedBy } : {})} onClose={() => setAdding(false)} />}
+      {launching && <LaunchDialog artifact={launching.artifact} into={project.id} {...(launching.askedBy ? { askedBy: launching.askedBy } : {})} onClose={() => setLaunching(undefined)} />}
     </Page>
   );
 }

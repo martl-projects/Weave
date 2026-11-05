@@ -2568,6 +2568,8 @@
     "web.program.withdraw.ask": "Withdraw your consent to the program behind {name}? The website closes, and the program runs again only after a new warning.",
     "web.program.withdrawn": "{name} is closed, and the consent withdrawn",
     "rel.programs.note": "A release that brings only a program per platform (no container image, no WebAssembly) is published too: whoever launches it sees a warning first, since it runs on their computer with their rights.",
+    "launch.asked.by": "Your agent {agent} asks you to launch {name}. It can't start it itself: launching it is yours to do. Have a look, then launch it, or close this.",
+    "launch.asked.gone": "The release your agent pointed to isn't there any more.",
     "time.ago": "{time, ago}",
     "day.today": "Today",
     "day.yesterday": "Yesterday",

@@ -2568,6 +2568,8 @@
     "web.program.withdraw.ask": "Deine Erlaubnis für das Programm hinter {name} zurücknehmen? Die Website schließt, und das Programm läuft erst nach einer neuen Warnung wieder.",
     "web.program.withdrawn": "{name} ist geschlossen, die Erlaubnis zurückgenommen",
     "rel.programs.note": "Ein Release, das nur ein Programm pro Plattform bringt (kein Container-Image, kein WebAssembly), wird auch veröffentlicht: wer es startet, sieht zuerst eine Warnung, denn es läuft auf seinem Computer mit seinen Rechten.",
+    "launch.asked.by": "Dein Agent {agent} bittet dich, {name} zu starten. Er kann es nicht selbst: das Starten ist deine Sache. Schau es dir an und starte es, oder schließe das hier.",
+    "launch.asked.gone": "Das Release, auf das dein Agent gezeigt hat, gibt es nicht mehr.",
     "time.ago": "{time, ago}",
     "day.today": "Heute",
     "day.yesterday": "Gestern",
