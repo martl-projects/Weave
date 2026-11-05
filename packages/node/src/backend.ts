@@ -2152,7 +2152,7 @@ export interface Backend {
    * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
    * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
    */
-  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; invite?: string[]; show?: string; groups?: string[]; announce?: boolean }): Promise<ServiceInfo>;
   /** The programs from releases you let run on this computer (the warning accepted), and what runs under each now. */
   programConsents(): Promise<ProgramConsentInfo[]>;
   /** Take a consent back: its websites close, and the program runs again only after a new warning. */

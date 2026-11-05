@@ -1134,9 +1134,9 @@ export class Services {
   /**
    * Launch a website artifact in a project you host websites in: your website service runs it here (approved, as any
    * code from others) and hosts what it serves, and closing that website ends it. It's no service of its own: no key,
-   * no name anyone sees, nothing listed but the running website.
+   * no name anyone sees, nothing listed but the running website. Who may visit: as for any website (Website.visitors).
    */
-  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string> }): Promise<ServiceInfo> {
+  async launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; invite?: string[]; show?: string; groups?: string[] }): Promise<ServiceInfo> {
     const project = this.h.project(input.project);
     const from = this.h.project(input.artifact.project);
     const a = artifactsOf(this.h.entries(from), this.h.state(from).maintainers).find((x) => x.id === input.artifact.id);
@@ -1146,6 +1146,7 @@ export class Services {
     if (no) throw new Error(no);
     const site = this.storedServices().find((s) => hostsWebsites(s) && s.enabled && s.spaces.includes(project.id) && this.h.agents.some((k) => k.name === s.name));
     if (!site) throw new WeaveError('daemon.website.no.host', { space: this.h.spaceName(project) }, `you host no websites in ${this.h.spaceName(project)}: add the Websites service there first`);
+    const access = this.web.visitors(input);
     const manifest = a.manifest;
     if (!this.h.runtime.runs(manifest)) throw new Error(this.h.runtime.whyNot(manifest));
     const found = this.artifact(from.id, a.id);
@@ -1184,6 +1185,7 @@ export class Services {
       name,
       launched: true,
       launchedBy: site.name,
+      ...(Object.keys(access).length ? { access } : {}),
       description: `${manifest.name} ${found.artifact.tag}, from ${from.name}`,
       contract: this.artifactContract(manifest),
       spaces: [project.id],

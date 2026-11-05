@@ -227,6 +227,8 @@ export interface StoredService {
    * runs that website, and that website service signs for it. Before 0.22 a launched website had a key of its own.
    */
   launchedBy?: string;
+  /** Launched for some only: who may visit the website it serves (see StoredRoom.access). */
+  access?: StoredRoom['access'];
   description: string;
   icon?: string;
   contract: ServiceContract;
