@@ -21,6 +21,22 @@ on:
         description: The tag whose release (a draft) gets the installers; empty keeps them as workflow artifacts
         type: string
         required: false
+      store:
+        description: Build only the Microsoft Store package (.appx), kept as a workflow artifact
+        type: boolean
+        default: false
+      store_identity:
+        description: Partner Center, Package/Identity/Name
+        type: string
+        required: false
+      store_publisher:
+        description: Partner Center, Package/Identity/Publisher (CN=...)
+        type: string
+        required: false
+      store_publisher_name:
+        description: Partner Center, Package/Properties/PublisherDisplayName
+        type: string
+        required: false
 
 # Write: called for a release, each job attaches its installers to the draft.
 permissions:
@@ -29,6 +45,7 @@ permissions:
 jobs:
   package:
     name: ${{ matrix.os }}
+    if: ${{ !inputs.store }}
     strategy:
       fail-fast: false
       matrix:
@@ -89,4 +106,30 @@ jobs:
             apps/desktop/release/*.AppImage
           if-no-files-found: error
           # Only for the release job: the release keeps them, and old ones fill the storage quota.
+          retention-days: 2
+
+  # The Microsoft Store's package: unsigned, the Store signs it when it's submitted in Partner Center.
+  store:
+    name: microsoft-store
+    if: ${{ inputs.store }}
+    runs-on: ${{ fromJSON(vars.WINDOWS_RUNNER || '["self-hosted","windows-vm"]') }}
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run package -- --store
+        env:
+          GH_TOKEN: ${{ secrets.WEAVE_SERVICES_TOKEN }}
+          WEAVE_STORE_IDENTITY: ${{ inputs.store_identity }}
+          WEAVE_STORE_PUBLISHER: ${{ inputs.store_publisher }}
+          WEAVE_STORE_PUBLISHER_NAME: ${{ inputs.store_publisher_name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-microsoft-store
+          path: apps/desktop/release/*.appx
+          if-no-files-found: error
           retention-days: 2
