@@ -4,6 +4,10 @@
 //
 //   npm run package                 installers in apps/desktop/release/
 //   npm run package -- --dir        just the unpacked app, for a quick look
+//   npm run package -- --store      only the .appx for the Microsoft Store: unsigned (the Store
+//                                   signs it), with the identity from Partner Center in
+//                                   WEAVE_STORE_IDENTITY, WEAVE_STORE_PUBLISHER (CN=…) and
+//                                   WEAVE_STORE_PUBLISHER_NAME
 //
 // Signed when the credentials are in the environment (the Installers workflow
 // passes them from the repository's secrets), unsigned or ad-hoc otherwise:
@@ -144,6 +148,7 @@ if (process.platform === 'win32' && !azure) console.log('no AZURE_SIGN_ACCOUNT: 
 if (process.platform === 'darwin' && !developerId) console.log('no CSC_LINK: the Mac app is only ad-hoc signed and not notarized');
 
 // --- installers
+const store = process.argv.includes('--store');
 const config: Configuration = {
   appId: 'org.weave.desktop',
   productName: 'Weave',
@@ -169,7 +174,9 @@ const config: Configuration = {
   nativeModules: { npmRebuild: false },
   publish: null,
   // nsis: per person, with the weave command on PATH. msi: per machine, for IT to push silently (msiexec /i … /qn).
-  win: { target: [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }], sign: azure },
+  win: { target: store ? [{ target: 'appx', arch: ['x64'] }] : [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }], sign: store ? null : azure },
+  // The Microsoft Store's package. Tiles from build/appx. The Store updates it (src/updatestate.ts); no weave command on the PATH.
+  appx: { applicationId: 'Weave', displayName: 'Weave', identityName: env.WEAVE_STORE_IDENTITY, publisher: env.WEAVE_STORE_PUBLISHER, publisherDisplayName: env.WEAVE_STORE_PUBLISHER_NAME, languages: ['en-US', 'de-DE'], backgroundColor: 'transparent' },
   msi: { perMachine: true, oneClick: true, runAfterFinish: false },
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
