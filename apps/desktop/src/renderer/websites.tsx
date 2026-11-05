@@ -852,12 +852,30 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   // Until it's known what there is to launch, nothing below: the form for a port of yours would flash, then go.
   const looking = !released && !away && what !== 'port';
   const [values, setValues] = useState<Record<string, string>>({});
-  const ready = looking ? false : picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port) && !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const visitorsReady = !(who === 'people' && !people.length) && !(who === 'tiers' && !tiers.length);
+  const ready = !looking && visitorsReady && (picked ? settingsReady(picked, values) : !!name.trim() && !!Number(port));
+  // Who may visit, for opening it. A new show is set up first; if the website then fails, it's picked, not set up twice.
+  const visitors = async (title: string) => {
+    const made = who === 'tickets' && show === 'new' ? await newShow.create(title) : show;
+    if (made === undefined) return undefined;
+    if (made !== show) {
+      setShow(made);
+      // Selling tickets turns the project's payments on: its treasury and split show in Settings.
+      if (!payments.on) payments.turn(true);
+    }
+    return who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
+  };
   // A program: its warning first; only "Run this version" there launches, with the consent it stands for.
   const [warning, setWarning] = useState(false);
   const launch = async (consent: boolean) => {
     setBusy(true);
-    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, ...(consent ? { consent: true } : {}), announce, settings: givenSettings(values) }), t('launch.launching', { name: picked!.name, project: project.name }));
+    const access = await visitors(picked!.name);
+    // Its show didn't come about: back to the form, where the price is.
+    if (!access) {
+      setWarning(false);
+      return setBusy(false);
+    }
+    const done = await attempt(() => api('launchWebsite', { project: project.id, artifact: { project: picked!.project.id, id: picked!.id }, approve: true, ...(consent ? { consent: true } : {}), ...access, announce, settings: givenSettings(values) }), t('launch.launching', { name: picked!.name, project: project.name }));
     setBusy(false);
     // It shows under Running websites, starting (its release on the way), then in Live once it serves its page.
     if (done !== undefined) {
@@ -868,15 +886,8 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
   const open = async () => {
     if (picked) return picked.runs === 'program' ? setWarning(true) : launch(false);
     setBusy(true);
-    // A new show is set up first; if the website then fails, it's picked, not set up twice.
-    const made = who === 'tickets' && show === 'new' ? await newShow.create(name.trim()) : show;
-    if (made === undefined) return setBusy(false);
-    if (made !== show) {
-      setShow(made);
-      // Selling tickets turns the project's payments on: its treasury and split show in Settings.
-      if (!payments.on) payments.turn(true);
-    }
-    const access = who === 'people' ? { invite: people } : who === 'tickets' ? { show: made, ...(tiers.length ? { groups: tiers } : {}) } : who === 'tiers' ? { groups: tiers } : {};
+    const access = await visitors(name.trim());
+    if (!access) return setBusy(false);
     const room = await attempt(() => api<WebsiteInfo>('openWebsite', { service, project: project.id, name: name.trim(), port: Number(port), ...access, announce }), t(away ? 'open.goes.to.node' : 'open.is.open', { name: name.trim(), node: away, port }));
     setBusy(false);
     if (room) {
@@ -908,7 +919,7 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
         </fieldset>
         {looking ? null : picked ? (
           <>
-            <p className="small">{t('open.weave.runs', { name: picked.name, tag: picked.tag, from: picked.project.name, how: t(runsWords(picked)), project: project.name })}</p>
+            <p className="small">{t('open.weave.runs', { name: picked.name, tag: picked.tag, from: picked.project.name, how: t(runsWords(picked)) })}</p>
             <p className="small muted">{t('launch.trust', { project: picked.project.name })}</p>
             <LaunchSettings artifact={picked} values={values} onChange={setValues} />
           </>
@@ -923,58 +934,60 @@ function OpenWebsiteDialog({ project, service, away, members, meDid, groups, sho
               <input id="room-port" inputMode="numeric" placeholder="3000" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ''))} />
               <p className="small muted">{t('open.starts.nothing', { where: away ?? t('open.your.computer') })}</p>
             </div>
-            <fieldset>
-              <legend>{t('open.who.may.visit')}</legend>
-              {(
-                [
-                  ['everyone', t('who.everyone.in', { space: `p/${project.name}` })],
-                  ['people', t('open.only')],
-                  ['tickets', t('open.ticket.holders')],
-                  ...(groups.length ? [['tiers', t('open.members.of.tiers')]] : []),
-                ] as Array<[typeof who, string]>
-              ).map(([value, label]) => (
-                <div key={value}>
-                  <div className="field-row">
-                    <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
-                    <label htmlFor={`who-${value}`}>{label}</label>
-                  </div>
-                  {who === 'people' &&
-                    value === 'people' &&
-                    members
-                      .filter((m) => m.did !== meDid)
-                      .map((m) => (
-                        <div className="field-row indent" key={m.did}>
-                          <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
-                          <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
-                        </div>
-                      ))}
-                  {who === 'tickets' && value === 'tickets' && (
-                    <>
-                      <div className="field-row indent">
-                        <label htmlFor="who-show">{t('word.show.cap')}</label>
-                        <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
-                          {myShows.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name}
-                            </option>
-                          ))}
-                          <option value="new">{t('open.a.new.show')}</option>
-                        </select>
-                      </div>
-                      {show === 'new' && <div className="indent">{newShow.fields}</div>}
-                    </>
-                  )}
-                  {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
-                    groups.map((g) => (
-                      <div className="field-row indent" key={g.id}>
-                        <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
-                        <label htmlFor={`who-tier-${g.id}`}>{t(who === 'tickets' ? 'open.also.members.of' : 'web.members.of', { tier: g.name })}</label>
+          </>
+        )}
+        {!looking && (
+          <fieldset>
+            <legend>{t('open.who.may.visit')}</legend>
+            {(
+              [
+                ['everyone', t('who.everyone.in', { space: `p/${project.name}` })],
+                ['people', t('open.only')],
+                ['tickets', t('open.ticket.holders')],
+                ...(groups.length ? [['tiers', t('open.members.of.tiers')]] : []),
+              ] as Array<[typeof who, string]>
+            ).map(([value, label]) => (
+              <div key={value}>
+                <div className="field-row">
+                  <input id={`who-${value}`} type="radio" checked={who === value} onChange={() => setWho(value)} />
+                  <label htmlFor={`who-${value}`}>{label}</label>
+                </div>
+                {who === 'people' &&
+                  value === 'people' &&
+                  members
+                    .filter((m) => m.did !== meDid)
+                    .map((m) => (
+                      <div className="field-row indent" key={m.did}>
+                        <input id={`who-${m.did}`} type="checkbox" checked={people.includes(m.did)} onChange={(e) => setPeople((p) => (e.target.checked ? [...p, m.did] : p.filter((x) => x !== m.did)))} />
+                        <label htmlFor={`who-${m.did}`}>{m.name ?? shortDid(m.did)}</label>
                       </div>
                     ))}
-                </div>
-              ))}
-            </fieldset>
-          </>
+                {who === 'tickets' && value === 'tickets' && (
+                  <>
+                    <div className="field-row indent">
+                      <label htmlFor="who-show">{t('word.show.cap')}</label>
+                      <select id="who-show" value={show} onChange={(e) => setShow(e.target.value)}>
+                        {myShows.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                        <option value="new">{t('open.a.new.show')}</option>
+                      </select>
+                    </div>
+                    {show === 'new' && <div className="indent">{newShow.fields}</div>}
+                  </>
+                )}
+                {((who === 'tickets' && value === 'tickets') || (who === 'tiers' && value === 'tiers')) &&
+                  groups.map((g) => (
+                    <div className="field-row indent" key={g.id}>
+                      <input id={`who-tier-${g.id}`} type="checkbox" checked={tiers.includes(g.id)} onChange={(e) => setTiers((t) => (e.target.checked ? [...t, g.id] : t.filter((x) => x !== g.id)))} />
+                      <label htmlFor={`who-tier-${g.id}`}>{t(who === 'tickets' ? 'open.also.members.of' : 'web.members.of', { tier: g.name })}</label>
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </fieldset>
         )}
         <div className="field-row">
           <input type="checkbox" id="open-announce" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />

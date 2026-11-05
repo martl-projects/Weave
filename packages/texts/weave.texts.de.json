@@ -1788,7 +1788,7 @@
     "open.runs.in.container": "läuft in einem Container",
     "open.program.here": "Ein Programm von dir, auf einem Port dieses Computers",
     "open.program.on.node": "Ein Programm von dir, auf einem Port von {node}",
-    "open.weave.runs": "Weave startet {name} {tag}, veröffentlicht in p/{from}, {how}. Es zeigt nur seine Seite: es liest nichts und schreibt nichts im Projekt. Es ist eine laufende Website, die alle in p/{project} besuchen können, in Live, bis du sie schließt.",
+    "open.weave.runs": "Weave startet {name} {tag}, veröffentlicht in p/{from}, {how}. Es zeigt nur seine Seite: es liest nichts und schreibt nichts im Projekt. Es ist eine laufende Website, in Live, bis du sie schließt.",
     "open.name.placeholder": "Samstagsrennen",
     "open.port.here": "Port eines Programms, das auf diesem Computer läuft",
     "open.port.on.node": "Port eines Programms, das auf {node} läuft",
