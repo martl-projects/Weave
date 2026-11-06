@@ -160,6 +160,8 @@ export interface Status {
   shippedMissing?: true;
   /** When a backup file was last saved here (or this computer restored from one); absent: never. Nobody else can bring a person's data back. */
   lastBackup?: string;
+  /** A backup is due: none was ever saved here ('never'), or the last one is over a month old ('again'). Only for people with recovery words of their own. */
+  backupDue?: 'never' | 'again';
 }
 
 /** Where a home's key is kept (stage 2, 14, 17). */

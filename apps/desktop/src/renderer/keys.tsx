@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
-import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
+import type { BackupInfo, IdentityInfo, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
@@ -63,6 +63,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
   const [words, setWords] = useState<string>();
   const [wrote, setWrote] = useState(false);
   const [restoring, setRestoring] = useState('');
+  // A backup file to restore from, with the words: then nobody else has to be online.
+  const [backupFile, setBackupFile] = useState('');
   const [busy, setBusy] = useState(false);
 
   const window = (title: string, body: React.ReactNode) => (
@@ -85,6 +87,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </p>
         <Words words={words} />
         <p className="small">{t('onboard.words.why')}</p>
+        <p className="small">{t('onboard.words.backup')}</p>
         <div className="field-row">
           <input id="wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
           <label htmlFor="wrote">{t('onboard.words.wrote')}</label>
@@ -160,13 +163,26 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           setBusy(true);
-          const ok = await attempt(() => bridge.restore(restoring).then(() => true), t('onboard.restore.done'));
+          const ok = await attempt(() => bridge.restore(restoring, backupFile.trim() || undefined).then(() => true), t(backupFile.trim() ? 'onboard.restore.done.backup' : 'onboard.restore.done'));
           setBusy(false);
           if (ok) onDone();
         }}
       >
         <p className="small">{t('onboard.restore.intro')}</p>
         <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
+        <div className="field-row-stacked">
+          <label htmlFor="restore-backup">{t('onboard.restore.backup')}</label>
+          <div className="field-row">
+            <input id="restore-backup" className="grow" spellCheck={false} placeholder={t('onboard.restore.backup.placeholder')} value={backupFile} onChange={(e) => setBackupFile(e.target.value)} />
+            {bridge.pickFile && (
+              <button type="button" onClick={async () => setBackupFile((await bridge.pickFile!(t('onboard.restore.backup.pick'))) ?? backupFile)}>
+                {t('onboard.restore.backup.choose')}
+              </button>
+            )}
+          </div>
+          <p className="small muted">{t('onboard.restore.backup.why')}</p>
+        </div>
         <div className="buttons">
           <button type="button" onClick={() => setMode('create')}>
             {t('button.back')}
@@ -516,6 +532,39 @@ function KeystoreChoice({ current }: { current: Status['keystore'] }) {
   );
 }
 
+/**
+ * Your own backup: one file with everything this computer holds of your Weave, sealed with a key from your recovery
+ * words. Nobody else can bring your data back, so this says when you last saved one, and saves the next.
+ */
+function BackupBox({ last }: { last?: string }) {
+  const { t } = useTexts();
+  const [saved, setSaved] = useState<BackupInfo>();
+  const save = async () => {
+    const folder = await bridge.pickFolder(t('backup.pick.folder'));
+    if (!folder) return;
+    const done = await attempt(() => api<BackupInfo>('saveBackup', { to: folder }));
+    if (done) {
+      setSaved(done);
+      bump();
+    }
+  };
+  return (
+    <fieldset>
+      <legend>{t('backup.legend')}</legend>
+      <p className="small">{t('backup.about')}</p>
+      <p className="small">
+        {saved ? t('backup.saved', { file: saved.file, mb: (saved.bytes / 1048576).toFixed(1) }) : last ? t('backup.last', { time: ago(last) }) : <b>{t('backup.never')}</b>}
+      </p>
+      <div className="buttons">
+        <AsyncButton className="default" onClick={save}>
+          {t('backup.save')}
+        </AsyncButton>
+      </div>
+      <p className="small muted">{t('backup.where')}</p>
+    </fieldset>
+  );
+}
+
 export function KeysView() {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
@@ -609,6 +658,7 @@ export function KeysView() {
           <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
         </fieldset>
       )}
+      {!company && info.recoverable && <BackupBox last={status?.lastBackup} />}
       <WalletBox />
       <fieldset>
         <legend>{t('devices.legend')}</legend>

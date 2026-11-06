@@ -22,13 +22,16 @@ interface Bridge {
   reconnect?(restart: boolean): Promise<void>;
   /** Create the identity; resolves to the recovery words, shown once. */
   init(name: string): Promise<string | undefined>;
-  restore(words: string): Promise<void>;
+  /** Set this computer up from the recovery words; with a backup file (its path), everything it holds comes back too, with no network. */
+  restore(words: string, backup?: string): Promise<void>;
   /** Set up a company account: the company's sign-in opens in the browser. Resolves to who was set up. */
   enroll(link: string): Promise<{ name?: string; company?: { name?: string } }>;
   /** Open a room's shared app in its own window. */
   openApp(url: string, title: string): Promise<void>;
   /** Let the person pick a folder on this computer; undefined if they cancel. */
   pickFolder(title: string): Promise<string | undefined>;
+  /** Let the person pick a backup file on this computer; undefined if they cancel. Missing in a browser. */
+  pickFile?(title: string): Promise<string | undefined>;
   /** Show a file Weave got (an artifact's) in its folder. */
   reveal?(path: string): Promise<void>;
   /** Bring the app's window to the front (a notification was clicked). */

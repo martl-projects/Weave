@@ -145,9 +145,9 @@ ipcMain.handle('weave:init', async (_event, name: string) => {
   return words;
 });
 
-ipcMain.handle('weave:restore', async (_event, words: string) => {
+ipcMain.handle('weave:restore', async (_event, words: string, backup?: string) => {
   if (hasIdentity(home)) throw new Error('this computer already has an identity');
-  await restoreIdentity(home, words);
+  await restoreIdentity(home, words, typeof backup === 'string' && backup.trim() ? backup.trim() : undefined);
   if (!daemon) await connect();
 });
 
@@ -495,6 +495,13 @@ ipcMain.handle('weave:new-session', async (_event, input: { folder?: unknown; ro
 
 ipcMain.handle('weave:pick-folder', async (_event, title: string) => {
   const options = { title: String(title ?? t('main.choose.folder')).slice(0, 80), properties: ['openDirectory' as const] };
+  const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  return result.canceled ? undefined : result.filePaths[0];
+});
+
+// A backup file to restore from (onboarding): the person picks it; only its path leaves this dialog.
+ipcMain.handle('weave:pick-file', async (_event, title: string) => {
+  const options = { title: String(title ?? '').slice(0, 80), properties: ['openFile' as const], filters: [{ name: 'Weave backup', extensions: ['weavebackup'] }] };
   const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
   return result.canceled ? undefined : result.filePaths[0];
 });

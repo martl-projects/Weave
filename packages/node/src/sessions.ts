@@ -264,10 +264,20 @@ export class Sessions {
       ...(vaultOf(this.node.home).warning ? { keystoreWarning: vaultOf(this.node.home).warning } : {}),
       ...(this.shippedMissing ? { shippedMissing: true as const } : {}),
       ...(this.node.config.lastBackup ? { lastBackup: this.node.config.lastBackup } : {}),
+      ...this.#backupDue(),
     };
   }
 
   /** No services Weave ships next to this daemon: a checkout whose packages/shipped/dist isn't built. Everything from Unread to Websites is missing then. */
+/** Whether a backup is due, for the reminder: never saved, or over a month ago; not for company accounts or identities without words. */
+  #backupDue(): { backupDue?: 'never' | 'again' } {
+    const state = this.node.replica.authority.keys(this.node.identity.author);
+    if (state.org || !state.next || this.node.config.archive) return {};
+    const last = this.node.config.lastBackup;
+    if (!last) return { backupDue: 'never' };
+    return this.node.clock() - Date.parse(last) > 30 * 24 * 3600 * 1000 ? { backupDue: 'again' } : {};
+  }
+
   get shippedMissing(): boolean {
     const dir = this.node.wasmSetup.shippedDir ?? SHIPPED_DIR;
     return !dir || !existsSync(joinPath(dir, 'shipped.json'));
