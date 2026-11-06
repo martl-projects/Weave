@@ -2,25 +2,23 @@
 //
 // Starts a storage node and one person (a real WeaveNode) in temporary folders, nothing of any real home, and bundles the
 // page and its Worker. The stand-in for the DHT connects the person to whatever the storage node looks for.
-// POST /dev/say?text=… has the person say something in their group.
+// POST /dev/say?text=… has the person say something in their group; GET /dev/messages is what the person reads there.
+// The folders are new each time, so after a restart the browser's account is unknown: clear the site's data.
 
-import { copyFileSync, createReadStream, mkdirSync, mkdtempSync } from 'node:fs';
+import { createReadStream, mkdtempSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
-import { build } from 'esbuild';
 import { duplexPair, PeerSession2 } from '@weave/net';
-import { loadSpaces, StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
+import { StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
+import { buildWeb } from './build.ts';
 
 const port = Number(process.env.PORT ?? 8790);
 const dist = join(import.meta.dirname, 'dist');
 const ORIGINS = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
 
-mkdirSync(dist, { recursive: true });
-await build({ entryPoints: { page: join(import.meta.dirname, 'src/page.ts'), worker: join(import.meta.dirname, 'src/worker.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', sourcemap: 'inline', logLevel: 'info' });
-copyFileSync(join(createRequire(import.meta.url).resolve('@sqlite.org/sqlite-wasm/package.json'), '..', 'dist', 'sqlite3.wasm'), join(dist, 'sqlite3.wasm'));
+await buildWeb(dist);
 
 const scratch = mkdtempSync(join(tmpdir(), 'weave-web-dev-'));
 const person = WeaveNode.init('Lena', join(scratch, 'lena'));
@@ -28,19 +26,20 @@ await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 
 const network: StorageOptions['network'] = (replica, access) => {
-  let met = false;
+  let session: PeerSession2 | undefined;
+  let theirs: PeerSession2 | undefined;
   return {
     join: async () => {
-      if (met) return;
-      met = true;
-      setTimeout(() => {
-        const [a, b] = duplexPair();
-        new PeerSession2(replica, a, { access });
-        new PeerSession2(person.replica, b, { access: person.sessionAccess() });
-      }, 50);
+      if (session) return;
+      const [a, b] = duplexPair();
+      session = new PeerSession2(replica, a, { access });
+      theirs = new PeerSession2(person.replica, b, { access: person.sessionAccess() });
     },
     leave: async () => {},
-    announce: () => {},
+    announce: () => {
+      session?.announce();
+      theirs?.announce();
+    },
     destroy: async () => {},
   };
 };
@@ -48,10 +47,12 @@ const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network 
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-  if (url.pathname === '/dev/space') {
+  const json = (value: unknown) => {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ invite: storage.invite(), space: loadSpaces(person.home).find((s) => s.name === 'Climb') }));
-  }
+    res.end(JSON.stringify(value));
+  };
+  if (url.pathname === '/dev/invite') return json({ invite: storage.invite(), link: await person.invite('Climb') });
+  if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
   if (url.pathname === '/dev/say' && req.method === 'POST') {
     await person.say({ space: 'Climb', text: url.searchParams.get('text') ?? '…' });
     return res.writeHead(204).end();

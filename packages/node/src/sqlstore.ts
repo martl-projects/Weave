@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS keep (stream TEXT NOT NULL, tag TEXT NOT NULL, data T
 `;
 
 /** The values a statement takes. */
-export type SqlValue = string | number | null;
+export type SqlValue = string | number | null | Uint8Array;
 
 export interface SqlStatement {
   run(...values: SqlValue[]): unknown;

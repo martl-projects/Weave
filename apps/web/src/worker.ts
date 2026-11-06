@@ -1,12 +1,15 @@
-import { b64u, createIdentity, KIND_MSG, openIn, Replica, spaceScope, spaceTopics, type Did, type SigningIdentity, type SpaceKeys } from '@weave/core';
-import { authKey, StorageClient, type TextSocket } from '@weave/net/browser';
-import { SqlStore } from '@weave/node/web';
+import './host/globals.ts';
+import type { WeaveNode } from '@weave/node';
+import { existsSync, readFileSync, useFiles, writeFileSync } from './host/fs.ts';
+import { accountOf, accountRecord, useStorage } from './host/net.ts';
+import { useStore } from './host/sqlitestore.ts';
+import { WEB_METHODS } from './methods.ts';
 import { openWasmDatabase } from './wasmdb.ts';
 
 /*
- * The node in a Worker (docs/web-stage2.md, steps 4 and 5). So far the first cut through it: a store on OPFS, a sync with
- * the storage node over a WebSocket, and reading a space. It speaks {id, method, args} to the page, as /ws does.
- * The account key lies in the database as it is, and the space comes from the page: both are for step 7.
+ * The node in a Worker (docs/web-stage2.md, step 5): the real WeaveNode over the host in ./host. It speaks
+ * {id, method, args} to the page and {event} when something happens, as /ws does. The account key at the storage node
+ * lies in the home as it is, and so does the home key: both go under the passkey in step 7.
  */
 
 declare const self: { onmessage: ((event: { data: Call }) => void) | null; postMessage(message: unknown): void };
@@ -17,77 +20,49 @@ interface Call {
   args: unknown[];
 }
 
-function socketTo(url: string): Promise<TextSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.addEventListener('error', () => reject(new Error(`no connection to ${url}`)));
-    ws.addEventListener('open', () =>
-      resolve({
-        send: (text) => ws.send(text),
-        close: () => ws.close(),
-        onMessage: (handle) => ws.addEventListener('message', (e) => handle(String(e.data))),
-        onClose: (handle) => ws.addEventListener('close', () => handle()),
-      }),
-    );
-  });
-}
+const HOME = '/weave';
+const ACCOUNT = `${HOME}/storage.json`;
 
-let store: SqlStore | undefined;
-let replica: Replica | undefined;
-let space: SpaceKeys | undefined;
+let node: WeaveNode | undefined;
 
-function account(): { identity: SigningIdentity; fresh: boolean } {
-  const kept = store!.meta('account');
-  if (kept) {
-    const { did, publicKey, secretKey } = JSON.parse(kept) as { did: Did; publicKey: string; secretKey: string };
-    return { identity: { author: did, did, keys: { publicKey: b64u.decode(publicKey), secretKey: b64u.decode(secretKey) } }, fresh: false };
-  }
-  const identity = createIdentity();
-  store!.setMeta('account', JSON.stringify({ did: identity.did, publicKey: b64u.encode(identity.keys.publicKey), secretKey: b64u.encode(identity.keys.secretKey) }));
-  return { identity, fresh: true };
-}
-
-const epochs = (s: SpaceKeys) => Object.keys(s.keys).map(Number).sort((a, b) => b - a);
-
-const methods: Record<string, (...args: never[]) => unknown> = {
-  /** A tab's turn: the files of the database open for one tab at a time. Answers when it is this tab's. */
-  async open() {
+const lifecycle: Record<string, (...args: never[]) => unknown> = {
+  /** This tab's turn: the home opens for one tab at a time. Answers when it is this tab's. */
+  async open(name: string) {
     const turn = new Promise<void>((resolve) => void navigator.locks.request('weave-node', () => (resolve(), new Promise(() => {}))));
-    const waiting = await navigator.locks.query();
-    if (waiting.held?.some((lock) => lock.name === 'weave-node') && waiting.pending?.some((lock) => lock.name === 'weave-node')) self.postMessage({ event: 'waiting' });
+    const locks = await navigator.locks.query();
+    if (locks.pending?.some((lock) => lock.name === 'weave-node')) self.postMessage({ event: 'waiting' });
     await turn;
     const started = performance.now();
-    store = new SqlStore(await openWasmDatabase('weave.db'));
-    replica = new Replica(store);
-    return { ms: Math.round(performance.now() - started), events: store.all2().length };
+    const db = await openWasmDatabase('weave.db');
+    useFiles(db);
+    useStore(db);
+    // Only now: the node reads files as it loads.
+    const { resolveHome, WeaveNode } = await import('@weave/node');
+    const fresh = !existsSync(resolveHome(HOME).identity);
+    node = fresh ? WeaveNode.init(name, HOME) : WeaveNode.open(HOME);
+    node.replica.onAppend(() => self.postMessage({ event: 'changed' }));
+    return { fresh, ms: Math.round(performance.now() - started) };
   },
 
-  async connect(url: string, invite: string, keys: SpaceKeys) {
-    space = keys;
-    const client = await StorageClient.connect(await socketTo(url));
-    const { identity, fresh } = account();
-    if (fresh) await client.register(identity, invite);
-    else await client.signIn(identity);
-    const secrets = epochs(keys).map((epoch) => b64u.decode(keys.keys[String(epoch)]));
-    await client.hold([{ space: spaceScope(keys), auths: secrets.map(authKey), topics: spaceTopics(keys) }]);
-    await client.sync(replica!, { spaces: () => [{ space: spaceScope(keys), keys: secrets }] });
-    return { fresh };
-  },
-
-  messages() {
-    const scope = space && spaceScope(space);
-    const records = replica!.events((r) => r.scope === scope);
-    const texts = records.flatMap((record) => {
-      const inner = openIn(space!, record);
-      return inner?.kind === KIND_MSG ? [(inner.body as { text?: string }).text ?? ''] : [];
+  async connect(url: string, invite?: string) {
+    useStorage({
+      url,
+      invite,
+      account: () => (existsSync(ACCOUNT) ? accountOf(JSON.parse(readFileSync(ACCOUNT, 'utf8') as string)) : undefined),
+      keepAccount: (account) => writeFileSync(ACCOUNT, JSON.stringify(accountRecord(account))),
+      status: (state, detail) => self.postMessage({ event: 'status', state, detail }),
     });
-    return { events: records.length, texts };
+    await node!.goOnline();
   },
 };
 
 self.onmessage = async ({ data: { id, method, args } }) => {
   try {
-    self.postMessage({ id, result: await (methods[method] as (...a: unknown[]) => unknown)(...args) });
+    const own = lifecycle[method] as ((...a: unknown[]) => unknown) | undefined;
+    if (own) return self.postMessage({ id, result: await own(...args) });
+    if (!(WEB_METHODS as readonly string[]).includes(method)) throw new Error(`${method} isn't on the web`);
+    const call = (node as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
+    self.postMessage({ id, result: await call.apply(node, args) });
   } catch (error) {
     self.postMessage({ id, error: error instanceof Error ? `${error.message}\n${error.stack}` : String(error) });
   }

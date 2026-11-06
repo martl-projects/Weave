@@ -188,6 +188,7 @@ export class StorageNode {
       for (const topic of after) if (!before.has(topic)) await account.network.join(topic).catch(() => {});
     }
     account.network.announce();
+    for (const session of account.sessions) session.announce();
   }
 
   async #delete(account: Account): Promise<void> {
