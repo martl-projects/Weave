@@ -146,10 +146,11 @@ export interface KeepAccess {
   /** As a keeper: this peer asked about these streams we hold. Only their owner can name them: it is still around. */
   asked?(shared: ReadonlySet<string>, ids: string[]): void;
   /**
-   * As an owner: how many items of ours this peer said it holds, in all our streams, and whether it takes more from
-   * us (it keeps copies with our person). Returns true when that changes who keeps what: the session asks once more.
+   * As an owner: how many items of ours this peer said it holds, in all our streams, whether it takes more from us (it
+   * keeps copies with our person), and which of our streams it holds something of. Told once every part of a question
+   * is answered. Returns true when that changes who keeps what: the session asks once more.
    */
-  holds?(shared: ReadonlySet<string>, items: number, takes: boolean): boolean | void;
+  holds?(shared: ReadonlySet<string>, items: number, takes: boolean, ids: string[]): boolean | void;
   /** As a keeper: may this peer tell us to let this stream go? Not when we know it as someone else's. */
   mayDrop?(shared: ReadonlySet<string>, id: string): boolean;
 }
@@ -469,8 +470,11 @@ export class PeerSession2 {
           // Weave from before that was a choice, is asked and never sent to.
           const takes = message.takes === true;
           let sent = false;
+          // An answer nobody asked for would be matched to the wrong question: not taken.
+          const asked = this.#keepAsked.shift();
+          if (!asked) break;
           // What this answer was asked about and leaves out isn't held there (any more).
-          for (const id of this.#keepAsked.shift() ?? []) if (!Object.hasOwn(message.streams, id)) this.#keepHeld.delete(id);
+          for (const id of asked) if (!Object.hasOwn(message.streams, id)) this.#keepHeld.delete(id);
           for (const [id, tags] of Object.entries(message.streams)) {
             const stream = mine.get(id);
             if (!stream || !Array.isArray(tags)) continue;
@@ -495,9 +499,13 @@ export class PeerSession2 {
               sent = true;
             }
           }
-          let held = 0;
-          for (const [id, items] of this.#keepHeld) if (mine.has(id)) held += items;
-          const changed = this.#access.keep.holds?.(this.#shared, held, takes) === true;
+          // Where things stand is told once every part is answered: a part alone would say too little.
+          let changed = false;
+          if (!this.#keepAsked.length) {
+            const ids = [...this.#keepHeld].filter(([id, items]) => items > 0 && mine.has(id)).map(([id]) => id);
+            const held = ids.reduce((sum, id) => sum + this.#keepHeld.get(id)!, 0);
+            changed = this.#access.keep.holds?.(this.#shared, held, takes, ids) === true;
+          }
           // What we just sent (or told it to let go) isn't in this answer, and who keeps what may have changed: asked
           // once more, so the node knows where things stand.
           if ((sent || changed) && this.#keepConfirms < 2) {

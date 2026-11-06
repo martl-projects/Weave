@@ -574,11 +574,14 @@ function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boo
   const { t } = useTexts();
   const nameOf = (f: KeeperFriend) => f.who.name ?? shortDid(f.who.did);
   const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
-  const friends = keeping.friends.filter((f) => !f.gone);
+  // A computer still on a Weave from before the choice (a phone paired with one) says nothing of friends.
+  const all = keeping.friends ?? [];
+  const friends = all.filter((f) => !f.gone);
   const mayHold = (f: KeeperFriend) => (f.holds ? f.holds.items > 0 : !!f.before);
   // People you don't keep copies with who hold one all the same: from before it was a choice.
-  const leftovers = keeping.friends.filter((f) => !f.on && !f.lettingGo && mayHold(f));
-  const holding = keeping.friends.filter((f) => f.kept);
+  const leftovers = all.filter((f) => !f.on && !f.lettingGo && mayHold(f));
+  const holding = all.filter((f) => f.kept);
+  const forUnknown = keeping.forUnknown ?? 0;
   const on = friends.filter((f) => f.on).length;
   // A phone shows where things stand; what's kept is decided at the computer.
   const fixed = !!bridge.phone;
@@ -650,10 +653,10 @@ function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boo
                 {t('keepers.kept.for', { name: nameOf(f), mb: mb(f.kept!.bytes), time: ago(f.kept!.asked) })} {!fixed && <AsyncButton onClick={() => drop(f)}>{t('keepers.drop')}</AsyncButton>}
               </li>
             ))}
-            {keeping.forUnknown > 0 && <li>{t('keepers.kept.unknown', { mb: mb(keeping.forUnknown) })}</li>}
+            {forUnknown > 0 && <li>{t('keepers.kept.unknown', { mb: mb(forUnknown) })}</li>}
           </ul>
           <p className="small muted">
-            {t('keepers.grace', { months: Math.round(keeping.graceDays / 30.4) })} {!fixed && (holding.length > 1 || keeping.forUnknown > 0) && <AsyncButton onClick={() => drop()}>{t('keepers.drop.all')}</AsyncButton>}
+            {keeping.graceDays ? t('keepers.grace', { months: Math.round(keeping.graceDays / 30.4) }) : ''} {!fixed && (holding.length > 1 || forUnknown > 0) && <AsyncButton onClick={() => drop()}>{t('keepers.drop.all')}</AsyncButton>}
           </p>
         </>
       )}
