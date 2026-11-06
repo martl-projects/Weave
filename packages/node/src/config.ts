@@ -25,6 +25,8 @@ export interface Config {
   scim?: { port: number; invite?: boolean };
   /** A standby company server (stage 14): it follows the active one and writes nothing, until promoted. */
   standby?: boolean;
+  /** When this person last saved a backup file here (saveBackup), or restored from one: for the reminder that nobody else can bring their data back. */
+  lastBackup?: string;
   /** Which server of an identity this is (nQ9JHlUV): promoting a standby counts it up; an older one that sees a newer one stands down. */
   generation?: number;
   /** The company's node serves the admin console on this port (stage 12). */

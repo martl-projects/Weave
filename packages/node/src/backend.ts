@@ -158,6 +158,8 @@ export interface Status {
   keystoreWarning?: string;
   /** No folder of the services Weave ships next to this daemon (a checkout whose packages/shipped isn't built): no Unread counts, no Websites, no GitHub releases. */
   shippedMissing?: true;
+  /** When a backup file was last saved here (or this computer restored from one); absent: never. Nobody else can bring a person's data back. */
+  lastBackup?: string;
 }
 
 /** Where a home's key is kept (stage 2, 14, 17). */
@@ -697,6 +699,19 @@ export interface AuditLine {
   agent?: string;
   /** What changed, without keys, boxes or wrapped parts. */
   detail: Json;
+}
+
+/**
+ * A backup file saved (6.11.2026): one file with everything this node holds, sealed with a key from the person's
+ * recovery words. The file alone opens nothing; the words and the file restore it on a new computer.
+ */
+export interface BackupInfo {
+  file: string;
+  bytes: number;
+  events: number;
+  spaces: number;
+  attachments: number;
+  created: string;
 }
 
 /** Keepers (stage 5): friends who keep a wrapped copy of your small spaces, and what you keep for friends. */
@@ -2047,6 +2062,8 @@ export interface Backend {
   signInStatus(): Promise<SignInStatus>;
   /** A backup of this home into an empty folder: its files and a consistent copy of its database (stage 14). */
   backup(input: { to: string }): Promise<{ to: string; files: number; bytes: number; keystore: KeystoreKind; note?: string }>;
+  /** Save your Weave as one encrypted file, into a folder (or as a file ending in .weavebackup): only your recovery words open it. */
+  saveBackup(input: { to: string }): Promise<BackupInfo>;
   /**
    * Answer an always-on node's request (stage 18): its key may host your rooms, and it gets your encryption keys and
    * spaces (but direct chats), boxed to it. The answer goes back to the node (weave node join).
@@ -2646,7 +2663,7 @@ export { LENS_CSP } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',

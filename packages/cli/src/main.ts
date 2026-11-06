@@ -90,6 +90,8 @@ A company's own projects and groups are its company spaces.
                              set up a company account: the company holds it and its recovery (no words shown)
   recover-request / recover <answer>   a company account on a new computer: ask, then set up from the company's answer
   restore                    set up this computer as another device of your identity, from your recovery words
+                             [--backup <file>] and bring back everything a backup file holds: the words and the file are enough, no network
+  backup <folder or file>    save your Weave as one encrypted file (only your recovery words open it): nobody else can bring your data back
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   daemon stop | restart      stop the running daemon properly (or restart it, e.g. for new code)   [--force: end it hard if it won't]
@@ -99,7 +101,7 @@ A company's own projects and groups are its company spaces.
   node add <request>         on your computer: answer it (the node keeps your spaces and serves your websites; weave revoke node:<name> ends it)
   node join <answer>         on the always-on node: finish with the answer, then run weave daemon
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
-  export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
+  export <dir>               write every log out as JSON lines, unencrypted (for going back to an older Weave; to keep your data safe: weave backup)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
@@ -446,6 +448,7 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
+    backup: { type: 'string' },
     until: { type: 'string' },
     people: { type: 'boolean' },
     bare: { type: 'boolean', default: false },
@@ -1135,8 +1138,9 @@ async function main(): Promise<void> {
 
     case 'restore': {
       const words = await readWords();
-      console.error('looking for your identity on the network (keep another device or a friend online)…');
-      const node = await WeaveNode.restore(words, home.dir, { online: true });
+      // With a backup file: the words and the file are enough (no network, nobody else).
+      if (!values.backup) console.error('looking for your identity on the network (keep another device or a friend online)…');
+      const node = values.backup ? await WeaveNode.restoreBackup(words, resolvePath(process.env.INIT_CWD ?? process.cwd(), values.backup), home.dir) : await WeaveNode.restore(words, home.dir, { online: true });
       const me = await node.whoami();
       await node.close();
       return out(me, () => `this computer is now a device of ${me.name ?? me.did}\n  ${me.did}\n  device key ${me.signer}`);
@@ -1224,6 +1228,14 @@ async function main(): Promise<void> {
       process.on('SIGTERM', shutdown);
       if (stopAsked) void shutdown();
       return new Promise(() => {}); // run until stopped
+    }
+
+    case 'backup': {
+      if (!args[0]) throw new Error('usage: weave backup <folder or file.weavebackup>');
+      const saved = await (await backend()).saveBackup({ to: resolvePath(process.env.INIT_CWD ?? process.cwd(), args[0]) });
+      return out(saved, () => `saved ${saved.file}
+  ${(saved.bytes / 1048576).toFixed(1)} MB: ${saved.events} events, ${saved.spaces} spaces with their keys, ${saved.attachments} attachments
+  only your recovery words open it (weave restore --backup <file>). Keep it where this computer isn't.`);
     }
 
     case 'export': {

@@ -263,6 +263,7 @@ export class Sessions {
       keystore: vaultOf(this.node.home).keystore,
       ...(vaultOf(this.node.home).warning ? { keystoreWarning: vaultOf(this.node.home).warning } : {}),
       ...(this.shippedMissing ? { shippedMissing: true as const } : {}),
+      ...(this.node.config.lastBackup ? { lastBackup: this.node.config.lastBackup } : {}),
     };
   }
 
