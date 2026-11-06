@@ -1887,6 +1887,7 @@ export class WeaveNode implements Backend {
     changed += this.#retention.applyShreds();
     changed += this.#retention.forget();
     changed += this.#holding.release();
+    this.#holding.purgeKept();
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#kernel.state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
@@ -2730,6 +2731,18 @@ export class WeaveNode implements Backend {
     return this.#holding.keepers(...args);
   }
 
+  setKeeper(...args: Parameters<Holding['setKeeper']>): ReturnType<Holding['setKeeper']> {
+    return this.#holding.setKeeper(...args);
+  }
+
+  letCopiesGo(...args: Parameters<Holding['letCopiesGo']>): ReturnType<Holding['letCopiesGo']> {
+    return this.#holding.letCopiesGo(...args);
+  }
+
+  dropKept(...args: Parameters<Holding['dropKept']>): ReturnType<Holding['dropKept']> {
+    return this.#holding.dropKept(...args);
+  }
+
   get pulledAbove() {
     return this.#holding.pulledAbove;
   }
@@ -3241,6 +3254,7 @@ export class WeaveNode implements Backend {
       friends: n.#kernel.friends.bind(n.#kernel),
       // Lazily: retention is built after this module.
       held: (state) => n.#retention.held(state),
+      resolve: (who) => n.resolve(who),
       get isLinkedNode() {
         return n.#isLinkedNode;
       },

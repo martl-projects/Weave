@@ -34,11 +34,12 @@ const sync = (from: WeaveNode, to: WeaveNode) => from.replica.events().forEach((
 const syncAll = (all: WeaveNode[]) => {
   for (const from of all) for (const to of all) if (from !== to) sync(from, to);
 };
-/** Everyone follows everyone: friends all round. */
+/** Everyone follows everyone: friends all round, who all keep copies with each other (a choice since 6.11.2026). */
 async function befriend(all: WeaveNode[]): Promise<void> {
   syncAll(all);
   for (const a of all) for (const b of all) if (a !== b) await a.setEdge({ edge: 'follow', who: b.identity.author, on: true });
   syncAll(all);
+  for (const a of all) for (const b of all) if (a !== b) await a.setKeeper({ who: b.identity.author, on: true });
 }
 
 /** Two nodes connected as over the network (the v2 session, keepers included). */

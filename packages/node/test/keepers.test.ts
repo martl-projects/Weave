@@ -43,6 +43,13 @@ describe('keepers', () => {
     // Everyone is friends with everyone.
     for (const a of everyone) for (const b of everyone) if (a !== b) await a.setEdge({ edge: 'follow', who: b.identity.author, on: true });
     syncAll();
+    // Keepers are a choice between two friends: the two keep copies with each of the three, and each of them with the two.
+    for (const person of [martin, lena]) {
+      for (const k of keepers) {
+        await person.setKeeper({ who: k.identity.author, on: true });
+        await k.setKeeper({ who: person.identity.author, on: true });
+      }
+    }
 
     // From here on only the two of them hand each other events, as members-only sync does.
     const between = () => (sync(martin, lena), sync(lena, martin));

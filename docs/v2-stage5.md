@@ -4,6 +4,8 @@ Built on stages 1–4. Spec: "Keepers" (change 17's companion) and the guarantee
 
 Small spaces have few copies: a direct chat lives on two people's devices. If both lose them, it's gone. Keepers fix that: friends who keep a wrapped, padded copy of your small spaces, which they can't read and can't tell apart.
 
+**Since 6.11.2026 keepers are off unless two friends both turn them on, and your own backup file is the first answer to losing your devices.** What follows describes keepers as first built; the two sections at the end ("The backup file", "Keepers are a choice") say what changed.
+
 ## What is kept
 
 Your **self space**, your **direct chats**, and **groups and projects with 3 members or fewer**. For each, every event (as it travels, signed) goes to 3 keepers.
@@ -65,7 +67,7 @@ Both people of a direct chat can recover it this way, each from their own keeper
 
 ## The backup file (6.11.2026)
 
-Decided by martl on 6.11.2026: backing up your own data is your own job, and Weave gives you the tool. Keepers among friends become an option beside it (that change follows; until then they work as above).
+Decided by martl on 6.11.2026: backing up your own data is your own job, and Weave gives you the tool. Keepers among friends are an option beside it (next section).
 
 - **What it is:** one file, `weave-backup-<name>-<date>.weavebackup`, with everything the node holds: every event as it travels (your own space, direct chats, groups, projects, what is public), the keys of your spaces (so they open again), and your attachments.
 - **What opens it:** a key from your recovery words, `H("weave/backup/v1" ‖ selfSecret)`, the same root the keepers' wrap keys come from. The file's head says whose it is and when it was made, in the clear; nothing else is readable, and the file alone opens nothing. The words are never stored with it.
@@ -73,3 +75,23 @@ Decided by martl on 6.11.2026: backing up your own data is your own job, and Wea
 - **Saving:** Keys & devices → Backup → Save a backup…, or `weave backup <folder or file>`. The node remembers when; the app says so until a first backup exists and again when the last one is a month old (not for company accounts, whose company backs them up).
 - **Restoring:** on a new computer, the recovery words and the file: in the app's "I have recovery words" form with the backup file picked, or `weave restore --backup <file>`. No peer, keeper or network is needed. Without a file, `weave restore` works as before and brings back only what others still hold.
 - **Tested as a total loss:** every device gone and nobody else around; the words and the file bring back a direct chat, a small group, a project with its keys and a saved post, and the person can write in their spaces again. Other words, a changed file and a file cut short are refused, and leave the computer as it was (`packages/node/test/backupfile.test.ts`).
+
+## Keepers are a choice (6.11.2026)
+
+Before, every node kept up to 500 MB of its friends' sealed data without anyone agreeing to it: a friend couldn't know what was on their disk, and copies of abandoned accounts stayed for good. Now nothing is offered or taken unless both friends turned it on.
+
+- **The switch:** per friend, "keep copies with each other" (Keys & devices → Keepers, or `weave keepers on <friend>`). It is one person's side: their node chooses keepers only among the friends they switched on, and takes streams only from those. So a copy exists only where both did. Whether the friend did shows by itself: a keeper that isn't willing leaves a new stream out of its `keeping` answer, and nothing is sent. No new message was needed.
+- **Choosing keepers:** up to 3 of the switched-on friends per space, in an order that comes from the person's secret (`H("weave/keep/choice/v1" ‖ selfSecret ‖ space ‖ friend)`) and no longer at random, so two computers of the same person choose the same. The switch itself is kept per computer (`keepers.json`).
+- **The update deletes nothing.** A node that ran before finds its keepers file without switches: nobody is on. As a keeper it keeps what it holds, read-only: it still answers `keeping?` and `kept?`, so anyone can take theirs back (old versions and people restoring too), and accepts nothing new. As an owner it sends nothing new and tells nobody to let go. Keys & devices says who still holds a copy from before.
+- **Copies go by a decision, never by themselves** (`drop` in the stream list a node offers: told only once it holds everything that keeper has):
+  - *The owner lets them go:* "Let the copies go" (`weave keepers let-go`): every friend not switched on is told when next met. It warns when no backup was saved yet; it doesn't refuse.
+  - *The owner ends it with one friend:* switching them off tells that friend to let go.
+  - *Among switched-on friends* the stream of a space no longer kept, or one another keeper took over, goes as before (4.11).
+  - *The keeper lets go:* "Let go of it", per friend or all (`weave keepers drop [friend]`), with a warning that it may be someone's only copy. A keeper knows whose a stream is once its owner asked about it (only the owner can name its id).
+  - *Nobody asked for a year:* a stream nobody asked about for 365 days is let go. An owner's node asks at every contact, so only streams of accounts that are gone age out. The year starts when the keeper first counts (this release), not when the stream was made.
+- **A node that just restored tells nobody to let go:** its keepers file is new, so friends are only asked, and what they give back stays with them until its person decides.
+- **What the owner knows:** each `keeping` answer says how many items that friend holds; the node writes it down (and asks once more after sending, so what was just taken counts). Keys & devices shows per friend: holds a copy, holds nothing yet (they haven't turned it on), holds a copy from before.
+- **Not for a phone:** a paired phone sees where things stand; switching, letting go and dropping are done at the computer.
+- **Tested** (`packages/node/test/keeperschoice.test.ts`): nothing lands at a friend until both turned it on; a keeper that ended it keeps what it holds and takes nothing new; after an update on both sides nothing is deleted and nothing new is sent; someone who loses everything right after the update still gets their chat back from a copy from before, and that copy stays; "Let the copies go" empties the keepers at the next contact; a keeper lets go of one friend's, of everything, and by itself after a year without being asked.
+
+**For the release notes, at the top:** "Friends no longer keep copies of your chats by default. Save a backup file now (Keys & devices → Backup): it is yours, encrypted with your recovery words. Copies your friends hold from before stay until you let them go there, and what you hold for friends stays until you let go of it or nobody asked about it for a year. If you want a friend to keep a copy as well, turn it on with them under Keepers; it works once they do the same."

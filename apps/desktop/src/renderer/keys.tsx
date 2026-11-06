@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
-import type { BackupInfo, IdentityInfo, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
+import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
@@ -565,6 +565,98 @@ function BackupBox({ last }: { last?: string }) {
   );
 }
 
+/**
+ * Keepers, an option beside your own backup (a choice since 6.11.2026): with a friend you both turned it on with, each
+ * holds a sealed copy of the other's own space, direct chats and small groups. Nothing is offered or taken otherwise.
+ * Copies from before stay where they are until someone decides: you let yours go, or a keeper lets go of what it holds.
+ */
+function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boolean }) {
+  const { t } = useTexts();
+  const nameOf = (f: KeeperFriend) => f.who.name ?? shortDid(f.who.did);
+  const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
+  const friends = keeping.friends.filter((f) => !f.gone);
+  const mayHold = (f: KeeperFriend) => (f.holds ? f.holds.items > 0 : !!f.before);
+  // Friends you don't keep copies with who hold one all the same: from before it was a choice.
+  const leftovers = friends.filter((f) => !f.on && !f.lettingGo && mayHold(f));
+  const holding = keeping.friends.filter((f) => f.kept);
+  const on = friends.filter((f) => f.on).length;
+  // A phone shows where things stand; what's kept is decided at the computer.
+  const fixed = !!bridge.phone;
+  const noBackup = backedUp ? '' : ` ${t('keepers.no.backup')}`;
+  const standing = (f: KeeperFriend): string => {
+    if (f.on && !f.chosen && !mayHold(f)) return t('keepers.friend.spare');
+    if (f.on) return f.holds ? (f.holds.items > 0 ? t('keepers.friend.holds', { time: ago(f.holds.at) }) : t('keepers.friend.not.yet')) : t('keepers.friend.not.met');
+    if (f.lettingGo) return t('keepers.friend.letting.go');
+    return mayHold(f) ? t('keepers.friend.before') : '';
+  };
+  const set = async (f: KeeperFriend, to: boolean) => {
+    if (!to && !(await ask(t('keepers.end.ask', { name: nameOf(f) }) + (mayHold(f) ? noBackup : ''), t('keepers.end')))) return;
+    await attempt(() => api('setKeeper', { who: f.who.did, on: to }).then(bump));
+  };
+  const letGo = async () => (await ask(t('keepers.let.go.ask', { names: leftovers.map(nameOf) }) + noBackup, t('keepers.let.go'))) && attempt(() => api('letCopiesGo').then(bump), t('keepers.let.go.done'));
+  const drop = async (f?: KeeperFriend) =>
+    (await ask(f ? t('keepers.drop.ask', { name: nameOf(f) }) : t('keepers.drop.all.ask'), t('keepers.drop'))) && attempt(() => api('dropKept', f ? { who: f.who.did } : {}).then(bump), t('keepers.dropped'));
+  return (
+    <fieldset>
+      <legend>{t('keepers.legend')}</legend>
+      <p className="small">
+        {t('keepers.about')}{' '}
+        <Info>
+          {t('keepers.about.more')}
+          {on > 0 && (
+            <ul>
+              {keeping.spaces.map((s) => (
+                <li key={s.space.id}>
+                  {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Info>
+      </p>
+      {friends.length === 0 ? (
+        <p className="small muted">{t('keepers.no.friends')}</p>
+      ) : (
+        <details className="small" open={on > 0 || friends.length <= 8}>
+          <summary>{t('keepers.choose', { on, of: friends.length })}</summary>
+          <ul className="keepers-friends">
+            {friends.map((f) => (
+              <li key={f.who.did}>
+                <label>
+                  <input type="checkbox" checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} /> {nameOf(f)}
+                </label>{' '}
+                <span className="muted">{standing(f)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {leftovers.length > 0 && (
+        <p className="notice">
+          {t('keepers.before', { names: leftovers.map(nameOf), count: leftovers.length })}{' '}
+          {!fixed && <AsyncButton onClick={letGo}>{t('keepers.let.go')}</AsyncButton>}
+        </p>
+      )}
+      <p className="small muted">{keeping.forOthers ? t('keepers.you.keep', { mb: mb(keeping.forOthers), max: Math.round(keeping.quota / 1048576) }) : t('keepers.you.keep.nothing')}</p>
+      {keeping.forOthers > 0 && (
+        <>
+          <ul className="small keepers-friends">
+            {holding.map((f) => (
+              <li key={f.who.did}>
+                {t('keepers.kept.for', { name: nameOf(f), mb: mb(f.kept!.bytes), time: ago(f.kept!.asked) })} {!fixed && <AsyncButton onClick={() => drop(f)}>{t('keepers.drop')}</AsyncButton>}
+              </li>
+            ))}
+            {keeping.forUnknown > 0 && <li>{t('keepers.kept.unknown', { mb: mb(keeping.forUnknown) })}</li>}
+          </ul>
+          <p className="small muted">
+            {t('keepers.grace', { months: Math.round(keeping.graceDays / 30.4) })} {!fixed && (holding.length > 1 || keeping.forUnknown > 0) && <AsyncButton onClick={() => drop()}>{t('keepers.drop.all')}</AsyncButton>}
+          </p>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 export function KeysView() {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
@@ -578,8 +670,6 @@ export function KeysView() {
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   if (!info || !keys) return <Page title={t('nav.keys')}>{null}</Page>;
   const keystoreWhy = status?.keystoreWarning ? /\((.*)\)$/.exec(status.keystoreWarning)?.[1] : undefined;
-  // Who keeps anything of yours, each once.
-  const keeperNames = keeping ? [...new Map(keeping.spaces.flatMap((s) => s.keepers).map((k) => [k.did, k.name ?? shortDid(k.did)])).values()] : [];
   return (
     <Page
       title={
@@ -639,26 +729,8 @@ export function KeysView() {
           <KeystoreChoice current={status.keystore} />
         </fieldset>
       )}
-      {keeping && (
-        <fieldset>
-          <legend>{t('keepers.legend')}</legend>
-          <p className="small">
-            {keeperNames.length ? t('keepers.names', { names: keeperNames }) : t('keepers.none')}{' '}
-            <Info>
-              {t('keepers.about')}
-              <ul>
-                {keeping.spaces.map((s) => (
-                  <li key={s.space.id}>
-                    {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
-                  </li>
-                ))}
-              </ul>
-            </Info>
-          </p>
-          <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
-        </fieldset>
-      )}
       {!company && info.recoverable && <BackupBox last={status?.lastBackup} />}
+      {keeping && <KeepersBox keeping={keeping} backedUp={!!status?.lastBackup} />}
       <WalletBox />
       <fieldset>
         <legend>{t('devices.legend')}</legend>

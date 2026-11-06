@@ -126,14 +126,23 @@ export interface SpaceAccess {
 const MAX_FROM_BEHIND = 16;
 
 export interface KeepAccess {
-  /** Our streams this peer may hold (to recover them), with the tags of the items we have; `keeper`: it's one we chose to keep them. */
-  streams(shared: ReadonlySet<string>): Array<{ id: string; tags: string[]; keeper: boolean }>;
+  /**
+   * Our streams this peer may hold (to recover them), with the tags of the items we have. `keeper`: it's one we chose
+   * to keep them, so it gets what it lacks. `drop`: it isn't, and our person decided that what it still holds goes
+   * (told once we hold all of it). Neither: only asked, and what it holds stays (a copy from before keepers became a
+   * choice, or of someone who just restored: nothing is let go without a decision).
+   */
+  streams(shared: ReadonlySet<string>): Array<{ id: string; tags: string[]; keeper: boolean; drop?: boolean }>;
   /** Our items of a stream with these tags, wrapped for the keeper. */
   wrapped(id: string, tags: string[]): Array<{ tag: string; data: string }>;
   /** Items a keeper gave back: unwrap and take them. */
   take(id: string, items: Array<{ tag: string; data: string }>): void;
-  /** As a keeper: will we keep (more of) this stream for this peer? */
+  /** As a keeper: will we keep (more of) this stream for this peer? Only for a friend our person keeps copies with. */
   accepts(shared: ReadonlySet<string>, id: string, bytes: number): boolean;
+  /** As a keeper: this peer asked about these streams we hold. Only their owner can name them: it is still around. */
+  asked?(shared: ReadonlySet<string>, ids: string[]): void;
+  /** As an owner: how many items of ours this peer said it holds, in all our streams. */
+  holds?(shared: ReadonlySet<string>, items: number): void;
 }
 
 const MAX_FRAME = 4 * 1024 * 1024;
@@ -200,6 +209,8 @@ export class PeerSession2 {
   readonly neg: boolean;
   /** Asking a keeper again is due (after new events in a kept space). */
   #keepSoon?: ReturnType<typeof setTimeout>;
+  /** Asked once more after the first items went to a keeper (once per connection: a keeper that refuses isn't asked in a loop). */
+  #keepConfirmed = false;
   /** What the peer is known to hold: v1 heads, and v2 events by canonical id (`<id>+body` with the body). */
   #peerHeads = new Map<string, number>();
   #peerHas = new Set<string>();
@@ -421,27 +432,43 @@ export class PeerSession2 {
             const tags = this.replica.store.keepTags(id);
             if (tags.length || this.#access.keep.accepts(this.#shared, id, 0)) streams[id] = tags;
           }
+          const held = Object.keys(streams).filter((id) => streams[id].length);
+          if (held.length) this.#access.keep.asked?.(this.#shared, held);
           this.#send({ t: 'keeping', streams });
         }
         break;
       case 'keeping':
         if (v2 && message.streams && typeof message.streams === 'object' && this.#access.keep) {
           const mine = new Map(this.#access.keep.streams(this.#shared).map((s) => [s.id, s]));
+          let held = 0;
+          let sent = false;
           for (const [id, tags] of Object.entries(message.streams)) {
             const stream = mine.get(id);
             if (!stream || !Array.isArray(tags)) continue;
             const ours = new Set(stream.tags);
             const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
+            held += theirs.size;
             const missing = stream.keeper ? [...ours].filter((t) => !theirs.has(t)) : [];
             if (missing.length) {
               const items = this.#access.keep.wrapped(id, missing);
               for (let i = 0; i < items.length; i += BATCH) this.#send({ t: 'keep', id, items: items.slice(i, i + BATCH) });
+              sent = true;
             }
             // It holds what we don't: we lost it, it's ours to take back.
             if ([...theirs].some((t) => !ours.has(t))) this.#send({ t: 'kept?', id });
-            // It keeps a stream we no longer want kept there (another keeper took its place, or the space isn't kept any
-            // more), and nothing of it is ours to take back: it lets the stream go. Never while we're missing something.
-            else if (!stream.keeper && theirs.size) this.#send({ t: 'drop', id });
+            // It keeps a stream our person no longer wants kept there (another keeper took its place, the space isn't
+            // kept any more, or they ended keeping with this friend), and nothing of it is ours to take back: it lets
+            // the stream go. Never while we're missing something, and never without that decision.
+            else if (stream.drop && !stream.keeper && theirs.size) {
+              this.#send({ t: 'drop', id });
+              held -= theirs.size;
+            }
+          }
+          this.#access.keep.holds?.(this.#shared, held);
+          // What we just sent isn't in this answer: asked once more, so the node knows what the keeper took.
+          if (sent && !this.#keepConfirmed) {
+            this.#keepConfirmed = true;
+            this.#askKeepingSoon();
           }
         }
         break;

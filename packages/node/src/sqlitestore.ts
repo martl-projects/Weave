@@ -92,7 +92,7 @@ export class SqliteStore implements LogStore {
   readonly #get: StatementSync;
   readonly #range: StatementSync;
   readonly #insert: StatementSync;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'order' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll' | 'keepDrop', StatementSync>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'order' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll' | 'keepDrop' | 'keepStreams', StatementSync>;
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
   readonly #chainHeads = new Map<string, ControlEventV2>();
@@ -138,6 +138,7 @@ export class SqliteStore implements LogStore {
       keepBytes: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep WHERE stream = ?'),
       keepAll: this.#db.prepare('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM keep'),
       keepDrop: this.#db.prepare('DELETE FROM keep WHERE stream = ?'),
+      keepStreams: this.#db.prepare('SELECT DISTINCT stream FROM keep'),
     };
     for (const row of this.#db.prepare('SELECT signer, MAX(n) AS n FROM events2 GROUP BY signer').all() as Array<{ signer: Did; n: number }>) this.#numbers.set(row.signer, row.n);
     const chainHeads = this.#db.prepare('SELECT e.json FROM events2 e JOIN (SELECT signer, space, MAX(seq) AS seq FROM events2 WHERE seq IS NOT NULL GROUP BY signer, space) h ON e.signer = h.signer AND e.space = h.space AND e.seq = h.seq').all() as Array<{ json: string }>;
@@ -277,6 +278,10 @@ export class SqliteStore implements LogStore {
 
   keepDrop(stream: string): void {
     this.#v2.keepDrop.run(stream);
+  }
+
+  keepStreams(): string[] {
+    return (this.#v2.keepStreams.all() as Array<{ stream: string }>).map((r) => r.stream);
   }
 
   /** How many events each signer has, from the table itself (for checking an import). */

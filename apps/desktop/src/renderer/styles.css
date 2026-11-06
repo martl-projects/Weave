@@ -117,6 +117,8 @@ button .icon { vertical-align: -3px; }
 .field-row > * + * { margin-left: 0; }
 .rule-line { margin: 4px 8px; display: flex; gap: 6px; align-items: center; }
 .lifetime { display: flex; gap: 4px; align-items: center; margin: 2px 0 6px; }
+.keepers-friends { list-style: none; margin: 4px 0; padding: 0; }
+.keepers-friends li { padding: 2px 0; }
 .notice { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #ffffe1; border: 1px solid #000; color: #000; text-decoration: none; font-family: var(--content-font); font-size: 12px; }
 
 /* ---------- places tree */

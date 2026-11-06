@@ -161,6 +161,10 @@ export class FileStore implements LogStore {
     const lines = this.#memory.keepStreams().flatMap((s) => this.#memory.keepItems(s).map(({ tag, data }) => JSON.stringify({ stream: s, tag, data })));
     writeFileSync(join(this.dir, KEEP_FILE), lines.length ? lines.join('\n') + '\n' : '');
   }
+
+  keepStreams(): string[] {
+    return this.#memory.keepStreams();
+  }
 }
 
 const V2_FILE = 'v2.jsonl';
