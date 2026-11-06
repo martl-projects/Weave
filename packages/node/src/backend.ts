@@ -1264,9 +1264,11 @@ export interface MembershipRequestInfo {
 /** A post naming you (or one of your agents) as co-author, waiting for your answer. */
 /** Where an agent asks the Weave app to take its person: a space, its Link a repository dialog, or the Inbox. */
 export interface AppOpen {
-  what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service';
-  /** For keyvault: a project to hand something to there; for service: the project; else the space to show. */
+  what: 'space' | 'inbox' | 'post' | 'person' | 'keyvault' | 'service' | 'website';
+  /** For keyvault: a project to hand something to there; for service: the project; for website: the project to launch it in; else the space to show. */
   space?: SpaceRef;
+  /** For website: the release to launch (a website artifact of that project), for the Launch dialog to open filled in. The person launches it. */
+  website?: { project: SpaceRef; id: string; name: string; tag: string };
   /** For service: one the project runs (its name or did), shown alone; else what to pick in its Add a service catalog (one Weave ships, a setup pack, a release), or nothing: the catalog. */
   service?: string;
   /** The person's agent that asked (its name, as it signs): said in the dialog, so they know why it's open. */
@@ -2150,7 +2152,7 @@ export interface Backend {
    * Launch a website artifact as a running website of a project you host websites in: Weave runs it here (after you
    * approve it, as any code from others) and your website service hosts it, in Live. Closing it ends it.
    */
-  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; announce?: boolean }): Promise<ServiceInfo>;
+  launchWebsite(input: { project: string; artifact: { project: string; id: string }; approve?: boolean; consent?: boolean; settings?: Record<string, string>; invite?: string[]; show?: string; groups?: string[]; announce?: boolean }): Promise<ServiceInfo>;
   /** The programs from releases you let run on this computer (the warning accepted), and what runs under each now. */
   programConsents(): Promise<ProgramConsentInfo[]>;
   /** Take a consent back: its websites close, and the program runs again only after a new warning. */
@@ -2248,7 +2250,7 @@ export interface Backend {
   /** An agent asks its person to hand a project repositories from their keyvault for a platform (github): waits in their Inbox, like a permission. */
   requestHand(input: { as: string; project: string; resources: string[]; platform?: string; reason?: string }): Promise<PermissionRequest>;
   /** Bring the Weave app on this computer to the front, at a space, its Link a repository dialog or the Inbox: for steps only the person can take. */
-  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen>;
+  openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; website?: string; from?: string; as?: string }): Promise<AppOpen>;
   /** Show posts to your person in Weave's Mentions panel, newest first, with an optional note. Nothing is posted. */
   showPosts(input: { posts: string[]; note?: string; as?: string }): Promise<MentionInfo[]>;
   /** The Mentions panel: posts agents pointed to on this computer, newest first. */

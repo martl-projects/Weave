@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { WeaveNode } from '@weave/node';
+import { parseManifest, type Json } from '@weave/core';
 import { createWeaveMcp, sessionFromEnv } from '../src/index.ts';
 import { pinnedRelease } from '../../shipped/pinned.ts';
 
@@ -207,6 +208,29 @@ describe('Weave over MCP', () => {
     const opened = await call('weave_open_in_app', { what: 'service', space: 'Weave', service: 'github-releases' });
     expect(opened.data).toMatchObject({ what: 'service', space: { kind: 'project', name: 'Weave' }, service: 'github-releases', askedBy: 'forge' });
     expect((await call('weave_open_in_app', { what: 'service' })).error).toMatch(/say which project/);
+    close();
+  });
+
+  it("brings the app to the front at the Launch dialog of a released website: launching it stays the person's click", async () => {
+    const { node, client, call, close } = await setup();
+    const site = (app: string, name: string, tag: string) =>
+      parseManifest({ app, name, version: 1, services: [{ port: 3000 }], start: { image: `ghcr.io/martl/${app}` }, install: { source: { provider: 'github', ref: `martl/${app}` }, tag, image: { ref: `ghcr.io/martl/${app}`, tag, digest: `sha256:${'ab'.repeat(32)}` } } }) as unknown as Json;
+    expect((await call('weave_open_in_app', { what: 'website' })).error).toMatch(/say which project to launch it in/);
+    expect((await call('weave_open_in_app', { what: 'website', space: 'Weave' })).error).toMatch(/Weave has released no website to launch/);
+    await node.publish({ kind: 'weave.app', body: site('horses', 'Horse race', 'v1.0'), space: 'Weave' });
+    // The project's one website, its latest release: the dialog opens filled in, and says which agent asked.
+    const opened = await call('weave_open_in_app', { what: 'website', space: 'Weave' });
+    expect(opened.data).toMatchObject({ what: 'website', space: { kind: 'project', name: 'Weave' }, website: { project: { name: 'Weave' }, name: 'Horse race', tag: 'v1.0' }, askedBy: 'forge' });
+    expect(opened.data.website.id).toBe((await node.artifacts('Weave'))[0].id);
+    // With a second website, it has to be named (by its name or app id); one that isn't there is said so.
+    await node.publish({ kind: 'weave.app', body: site('quiz', 'Quiz night', 'v0.3'), space: 'Weave' });
+    expect((await call('weave_open_in_app', { what: 'website', space: 'Weave' })).error).toMatch(/say which website: Weave has .*Horse race/);
+    expect((await call('weave_open_in_app', { what: 'website', space: 'Weave', website: 'quiz' })).data.website).toMatchObject({ name: 'Quiz night', tag: 'v0.3' });
+    expect((await call('weave_open_in_app', { what: 'website', space: 'Weave', website: 'Horse race@v1.0' })).data.website).toMatchObject({ name: 'Horse race', tag: 'v1.0' });
+    expect((await call('weave_open_in_app', { what: 'website', space: 'Weave', website: 'pong' })).error).toMatch(/Weave has no website "pong" to launch \(its websites: /);
+    // Opening the dialog is all an agent gets: there is no tool that launches.
+    expect((await client.listTools()).tools.map((t) => t.name).filter((n) => /launch/.test(n))).toEqual([]);
+    expect(await node.services()).toEqual([]);
     close();
   });
 

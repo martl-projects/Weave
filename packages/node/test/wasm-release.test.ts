@@ -236,6 +236,46 @@ describe('WebAssembly services as releases', { timeout: 120_000 }, () => {
     }
   });
 
+  it('launches a website for some only: who may visit is set before it runs, and kept on the website', async () => {
+    process.env.FAKE_DOCKER_DOWN = '1';
+    const label = { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' }, wasm: { component: 'counter.wasm', site: 'site' } };
+    const fetchImpl = registry({ 'counter:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(label) }, wasm: layer } });
+    const martl = person('martl', fetchImpl);
+    const lena = person('Lena', fetchImpl);
+    const kofi = person('Kofi', fetchImpl);
+    await martl.createProject({ name: 'Arcade' });
+    await lena.joinSpace(await martl.invite('Arcade'));
+    await kofi.joinSpace(await martl.invite('Arcade'));
+    sync([martl, lena, kofi]);
+    await martl.releaseService({ project: 'Arcade', image: 'ghcr.io/martl/counter:1.0' });
+    const artifact = (await martl.artifacts('Arcade'))[0];
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    try {
+      await martl.addService({ builtin: 'website', spaces: ['Arcade'] });
+      const launch = { project: 'Arcade', artifact: { project: 'Arcade', id: artifact.id }, approve: true };
+      // Refused before anything runs.
+      await expect(martl.launchWebsite({ ...launch, groups: ['Arcade'] })).rejects.toThrow(/is a project, not a group or tier/);
+      expect(await martl.websites('Arcade')).toEqual([]);
+      const launched = await martl.launchWebsite({ ...launch, invite: [kofi.identity.author] });
+      await martl.serviceReady(launched.name);
+      const site = await vi.waitFor(
+        async () => {
+          const found = (await martl.websites('Arcade')).find((r) => r.name === 'Counter');
+          expect(found).toBeTruthy();
+          return found!;
+        },
+        { timeout: 30_000, interval: 200 },
+      );
+      sync([martl, lena, kofi]);
+      expect((await kofi.websites('Arcade')).find((r) => r.id === site.id)?.mayJoin).toBe(true);
+      expect((await lena.websites('Arcade')).find((r) => r.id === site.id)?.mayJoin).toBe(false);
+      await martl.closeWebsite(site.id);
+    } finally {
+      await api.close();
+    }
+  });
+
   it('takes over a website that ran as a service of its own: its website service runs it, and its key goes', async () => {
     process.env.FAKE_DOCKER_DOWN = '1';
     const label = { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' }, wasm: { component: 'counter.wasm', site: 'site' } };
