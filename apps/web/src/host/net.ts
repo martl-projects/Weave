@@ -19,6 +19,8 @@ export interface StorageLink {
   /** The account: read and kept by the Worker. */
   account(): SigningIdentity | undefined;
   keepAccount(account: SigningIdentity): void;
+  /** After the storage node took a new list: what else goes with it (the boxes). */
+  afterHold?(client: StorageClient): Promise<void>;
   /** What the connection is doing, for the page. */
   status?(state: 'connecting' | 'connected' | 'offline', detail?: string): void;
 }
@@ -31,7 +33,7 @@ export const useStorage = (storage: StorageLink): void => void (link = storage);
 export const accountRecord = (account: SigningIdentity) => ({ did: account.did, publicKey: b64u.encode(account.keys.publicKey), secretKey: b64u.encode(account.keys.secretKey) });
 export const accountOf = (record: { did: Did; publicKey: string; secretKey: string }): SigningIdentity => ({ author: record.did, did: record.did, keys: { publicKey: b64u.decode(record.publicKey), secretKey: b64u.decode(record.secretKey) } });
 
-function socketTo(url: string): Promise<TextSocket> {
+export function socketTo(url: string): Promise<TextSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
     ws.addEventListener('error', () => reject(new Error(`no connection to ${url}`)));
@@ -114,6 +116,7 @@ export class SwarmNode {
       const client = await this.#signedIn(socket);
       const held = this.#held();
       await client.hold(held);
+      await link.afterHold?.(client);
       this.#sent = JSON.stringify(held);
       this.sessions.add(await client.sync(this.replica, this.#access));
       link.status?.('connected');
@@ -149,6 +152,7 @@ export class SwarmNode {
       const socket = await socketTo(link.url);
       const client = await this.#signedIn(socket);
       await client.hold(held);
+      await link.afterHold?.(client);
       this.#sent = text;
       client.close();
     } catch (error) {

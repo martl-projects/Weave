@@ -2,14 +2,14 @@ import { Buffer } from 'buffer';
 
 /*
  * What the node takes for granted of its surroundings: `process`, `Buffer`, and timers it can `unref`. This is imported
- * first. The keystore is the file one until step 7 puts the home key under the person's passkey.
+ * first.
  */
 
 const scope = globalThis as unknown as Record<string, unknown>;
 
 scope.Buffer = Buffer;
 scope.process = {
-  env: { WEAVE_KEYSTORE: 'file' },
+  env: {},
   platform: 'browser',
   pid: 1,
   argv: [],

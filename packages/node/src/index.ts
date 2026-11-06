@@ -121,7 +121,7 @@ export { loadConfig, parseBootstrap, saveConfig, type Config } from './config.ts
 export { startDaemon, type Daemon } from './daemon.ts';
 export { FileStore } from './filestore.ts';
 export { closeOpenStores, openStore, readJsonlLogs, SqliteStore } from './sqlitestore.ts';
-export { loadSpaces, type StoredSpace } from './spacestore.ts';
+export { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 export { resolveHome, type Home } from './home.ts';
 export { WeaveNode, type Bundle } from './node.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './shared.ts';
@@ -136,3 +136,4 @@ export { moveHomeKeyToKeyService, serverCredentials, unlockHomeKey } from './hom
 export { browserSignIn, openInBrowser, refreshSignIn, signInNonce, type SignInConfig, type SignInTokens } from './signin.ts';
 export type { AuditSinkInput } from './auditsinks.ts';
 export { HARDWARE_KEYSTORES, KEYSTORE_NAMES, type HardwareKeystore, type Keystore } from './vault.ts';
+export { readSecretJson, useHomeKey, writeSecretJson } from './vault.ts';
