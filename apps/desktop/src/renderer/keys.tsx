@@ -576,24 +576,28 @@ function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boo
   const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
   const friends = keeping.friends.filter((f) => !f.gone);
   const mayHold = (f: KeeperFriend) => (f.holds ? f.holds.items > 0 : !!f.before);
-  // Friends you don't keep copies with who hold one all the same: from before it was a choice.
-  const leftovers = friends.filter((f) => !f.on && !f.lettingGo && mayHold(f));
+  // People you don't keep copies with who hold one all the same: from before it was a choice.
+  const leftovers = keeping.friends.filter((f) => !f.on && !f.lettingGo && mayHold(f));
   const holding = keeping.friends.filter((f) => f.kept);
   const on = friends.filter((f) => f.on).length;
   // A phone shows where things stand; what's kept is decided at the computer.
   const fixed = !!bridge.phone;
   const noBackup = backedUp ? '' : ` ${t('keepers.no.backup')}`;
   const standing = (f: KeeperFriend): string => {
-    if (f.on && !f.chosen && !mayHold(f)) return t('keepers.friend.spare');
-    if (f.on) return f.holds ? (f.holds.items > 0 ? t('keepers.friend.holds', { time: ago(f.holds.at) }) : t('keepers.friend.not.yet')) : t('keepers.friend.not.met');
     if (f.lettingGo) return t('keepers.friend.letting.go');
-    return mayHold(f) ? t('keepers.friend.before') : '';
+    if (!f.on) return mayHold(f) ? t('keepers.friend.before') : f.holds?.takes ? t('keepers.friend.offers') : '';
+    if (!f.holds) return t('keepers.friend.not.met');
+    // They say whether they take from you: only someone who turned it on with you does.
+    if (!f.holds.takes) return f.holds.items > 0 ? t('keepers.friend.before') : t('keepers.friend.not.yet');
+    if (f.holds.items > 0) return t('keepers.friend.holds', { time: ago(f.holds.at) });
+    return f.chosen ? t('keepers.friend.soon') : t('keepers.friend.spare');
   };
   const set = async (f: KeeperFriend, to: boolean) => {
     if (!to && !(await ask(t('keepers.end.ask', { name: nameOf(f) }) + (mayHold(f) ? noBackup : ''), t('keepers.end')))) return;
     await attempt(() => api('setKeeper', { who: f.who.did, on: to }).then(bump));
   };
   const letGo = async () => (await ask(t('keepers.let.go.ask', { names: leftovers.map(nameOf) }) + noBackup, t('keepers.let.go'))) && attempt(() => api('letCopiesGo').then(bump), t('keepers.let.go.done'));
+  const letOne = async (f: KeeperFriend) => (await ask(t('keepers.let.go.ask', { names: [nameOf(f)] }) + noBackup, t('keepers.let.go.one'))) && attempt(() => api('setKeeper', { who: f.who.did, on: false }).then(bump), t('keepers.let.go.done'));
   const drop = async (f?: KeeperFriend) =>
     (await ask(f ? t('keepers.drop.ask', { name: nameOf(f) }) : t('keepers.drop.all.ask'), t('keepers.drop'))) && attempt(() => api('dropKept', f ? { who: f.who.did } : {}).then(bump), t('keepers.dropped'));
   return (
@@ -625,7 +629,7 @@ function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boo
                 <label>
                   <input type="checkbox" checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} /> {nameOf(f)}
                 </label>{' '}
-                <span className="muted">{standing(f)}</span>
+                <span className="muted">{standing(f)}</span> {!fixed && !f.on && !f.lettingGo && mayHold(f) && <AsyncButton onClick={() => letOne(f)}>{t('keepers.let.go.one')}</AsyncButton>}
               </li>
             ))}
           </ul>

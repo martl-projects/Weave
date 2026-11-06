@@ -2345,20 +2345,15 @@ ${postLine(p)}`);
       const name = (a: { name?: string; did: string }) => a.name ?? a.did.slice(8, 16);
       const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
       const friends = k.friends.filter((f) => !f.gone);
-      const standing = (f: (typeof friends)[number]) =>
-        f.on
-          ? !f.chosen && !(f.holds && f.holds.items > 0)
-            ? 'on, stands by: three other friends keep your spaces'
-            : f.holds
-            ? f.holds.items > 0
-              ? `on, holds a copy of yours (asked ${f.holds.at.slice(0, 10)})`
-              : "on, holds nothing yet: they haven't turned it on with you"
-            : 'on, not met since'
-          : f.lettingGo
-            ? 'off, lets go of their copy when you next meet'
-            : (f.holds ? f.holds.items > 0 : f.before)
-              ? 'off, holds a copy from before and gets nothing new (weave keepers let-go ends that)'
-              : 'off';
+      const standing = (f: (typeof friends)[number]) => {
+        const holding = f.holds ? f.holds.items > 0 : !!f.before;
+        if (f.lettingGo) return 'off, lets go of their copy when you next meet';
+        if (!f.on) return holding ? `off, holds a copy from before and gets nothing new (weave keepers off ${name(f.who)} lets it go, weave keepers let-go all of them)` : f.holds?.takes ? 'off; they turned it on with you' : 'off';
+        if (!f.holds) return 'on, not met since';
+        if (!f.holds.takes) return holding ? "on, holds a copy from before; nothing new until they turn it on with you" : "on, holds nothing: they haven't turned it on with you";
+        if (holding) return `on, holds a copy of yours (asked ${f.holds.at.slice(0, 10)})`;
+        return f.chosen ? 'on, takes a copy when you next meet' : 'on, stands by: three other friends keep your spaces';
+      };
       return out(k, () =>
         [
           friends.length ? 'keeping copies with friends is off unless you both turn it on (weave keepers on <friend>):' : 'no friends yet (people you follow who follow you back): nobody to keep copies with',

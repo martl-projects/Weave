@@ -194,14 +194,75 @@ describe('keepers as a choice', { timeout: 90_000 }, () => {
     expect(bytes(ben)).toBe(before[1]);
     expect(bytes(ada)).toBe(before[0]);
 
-    // He decides that the copies go (after saving a backup): each keeper lets go when they next meet.
+    // He decides that Ben's copy goes (after saving a backup): Ben lets go when they next meet, Ada isn't told.
     await martin.saveBackup({ to: temp() });
-    await martin.letCopiesGo();
+    await martin.setKeeper({ who: 'Ben', on: false });
+    expect(await friendOf(martin, ben)).toMatchObject({ on: false, lettingGo: true });
     await meet(martin, ben);
+    await meet(martin, ada);
     expect(bytes(ben)).toBe(0);
     expect(bytes(ada)).toBe(before[0]);
+    // Told once, not for good: Ben answered that he holds nothing, and that's the end of it.
+    expect((await friendOf(martin, ben)).lettingGo).toBeUndefined();
+
+    // Then all of them. Ada isn't his friend any more by then, but they still meet (in a group they share): she is
+    // told all the same.
+    await martin.createGroup('Pair');
+    await ada.joinSpace(await martin.invite('Pair'));
+    sync(ada, martin);
+    await martin.setEdge({ edge: 'follow', who: ada.identity.author, on: false });
+    await martin.letCopiesGo();
+    expect((await martin.keepers()).friends.find((f) => f.who.name === 'Ada')).toMatchObject({ gone: true, lettingGo: true });
     await meet(martin, ada);
     expect(bytes(ada)).toBe(0);
+  });
+
+  it("choose among friends who take: one who hasn't turned it on doesn't block a place, and nothing is sent to them", async () => {
+    const martin = person('Martin');
+    const friends = ['Ada', 'Ben', 'Cleo', 'Dev', 'Eli'].map((n) => person(n));
+    await befriend([martin, ...friends]);
+    await martin.reconcile();
+    // He keeps copies with all five; only Dev and Eli do with him.
+    for (const f of friends) await martin.setKeeper({ who: f.identity.author, on: true });
+    const [ada, ben, cleo, dev, eli] = friends;
+    for (const f of [dev, eli]) await f.setKeeper({ who: 'Martin', on: true });
+    // What his node wraps for a keeper, counted: nothing is wrapped (or sent) for one who takes nothing.
+    let wrapped = 0;
+    const meetCounting = async (other: WeaveNode) => {
+      const [sa, sb] = duplexPair();
+      const access = martin.sessionAccess();
+      const keep = { ...access.keep!, wrapped: (id: string, tags: string[]) => ((wrapped += tags.length), access.keep!.wrapped(id, tags)) };
+      const left = new PeerSession2(martin.replica, sa, { access: { ...access, keep, firewall: access.firewall } });
+      const right = new PeerSession2(other.replica, sb, { access: other.sessionAccess() });
+      await settle();
+      left.close();
+      right.close();
+    };
+    for (const f of [ada, ben, cleo]) await meetCounting(f);
+    expect(wrapped).toBe(0);
+    for (const f of [ada, ben, cleo]) expect(await friendOf(martin, f)).toMatchObject({ on: true, holds: { items: 0, takes: false } });
+    // The two who take get it, whoever came first in his order.
+    for (const f of [dev, eli]) await meet(martin, f);
+    for (const f of [dev, eli]) await meet(martin, f);
+    expect(bytes(dev)).toBeGreaterThan(0);
+    expect(bytes(eli)).toBeGreaterThan(0);
+    for (const f of [ada, ben, cleo]) expect(bytes(f)).toBe(0);
+    expect((await martin.keepers()).spaces[0].keepers.map((k) => k.name).sort()).toEqual(['Dev', 'Eli']);
+    expect(await friendOf(martin, dev)).toMatchObject({ on: true, chosen: true, holds: { takes: true } });
+
+    // Ada turns it on later: she gets the third place when they meet.
+    await ada.setKeeper({ who: 'Martin', on: true });
+    await meet(martin, ada);
+    expect(bytes(ada)).toBeGreaterThan(0);
+    expect((await martin.keepers()).spaces[0].keepers.map((k) => k.name).sort()).toEqual(['Ada', 'Dev', 'Eli']);
+
+    // Ben does too, but three hold it: he stands by, and nobody is told to let go.
+    await ben.setKeeper({ who: 'Martin', on: true });
+    await meet(martin, ben);
+    expect(bytes(ben)).toBe(0);
+    for (const f of [ada, dev, eli]) expect(bytes(f)).toBeGreaterThan(0);
+    expect(await friendOf(martin, ben)).toMatchObject({ on: true, holds: { items: 0, takes: true } });
+    expect((await friendOf(martin, ben)).chosen).toBeUndefined();
   });
 
   it('let a keeper let go: of one friend, of everyone, and by itself of what nobody asked about for a year', async () => {
@@ -224,25 +285,46 @@ describe('keepers as a choice', { timeout: 90_000 }, () => {
     expect(kept('Martin') + kept('Lena')).toBe(info.forOthers);
     expect(info.graceDays).toBe(365);
 
-    // Kofi lets go of Martin's: Lena's stays.
+    // Kofi lets go of Martin's: Lena's stays. Keeping copies with Martin ends with it, so the next meeting doesn't
+    // bring it all back.
     const after = await kofi.dropKept({ who: 'Martin' });
     expect(kept('Martin', after)).toBe(0);
     expect(kept('Lena', after)).toBe(kept('Lena'));
     expect(bytes(kofi)).toBe(kept('Lena'));
-
-    // Eleven months on, Lena was never seen again: still kept. Martin came by and Kofi keeps his again.
-    kofi.clock = () => start + 330 * day;
+    expect(await friendOf(kofi, martin)).toMatchObject({ on: false });
     await meet(martin, kofi);
-    await kofi.reconcile();
+    expect(bytes(kofi)).toBe(kept('Lena'));
+
+    // Kofi's computer runs on, day after day (a year counts only while it runs).
+    let now = start;
+    const run = async (days: number) => {
+      for (let i = 0; i < days; i++) {
+        now += day;
+        await kofi.reconcile();
+      }
+    };
+    kofi.clock = () => now;
+    // Eleven months on, Lena was never seen again: still kept. Kofi keeps copies with Martin again, who comes by.
+    await run(330);
+    await kofi.setKeeper({ who: 'Martin', on: true });
+    await meet(martin, kofi);
     expect(kept('Lena', await kofi.keepers())).toBe(kept('Lena'));
     expect(kept('Martin', await kofi.keepers())).toBeGreaterThan(0);
 
-    // After a year nobody asked about Lena's stream: it goes. Martin's, asked about a month ago, stays.
-    kofi.clock = () => start + 366 * day;
-    await kofi.reconcile();
+    // After a year nobody asked about Lena's stream: its time is over, and a week later it goes. Martin's, asked
+    // about a month ago, stays.
+    await run(36);
+    expect(kept('Lena', await kofi.keepers())).toBe(kept('Lena'));
+    await run(8);
     const later = await kofi.keepers();
     expect(kept('Lena', later)).toBe(0);
     expect(kept('Martin', later)).toBeGreaterThan(0);
+
+    // Kofi's computer is off for two years: nobody could ask in that time, so nothing goes when it comes back.
+    now += 730 * day;
+    await kofi.reconcile();
+    await run(30);
+    expect(kept('Martin', await kofi.keepers())).toBe(kept('Martin', later));
 
     // And everything at once.
     expect((await kofi.dropKept()).forOthers).toBe(0);

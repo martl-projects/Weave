@@ -725,8 +725,8 @@ export interface KeeperFriend {
   gone?: true;
   /** One of the (up to three) keepers chosen for at least one of your spaces; others you keep with stand by. */
   chosen?: true;
-  /** What they said they hold of yours when last asked: how many items, and when. Absent: not asked yet. */
-  holds?: { items: number; at: string };
+  /** What they said when last asked: how many items of yours they hold, whether they take more (they keep copies with you), and when. Absent: not asked yet. */
+  holds?: { items: number; at: string; takes?: boolean };
   /** They kept yours before keepers became a choice and weren't asked since: they may still hold a copy. */
   before?: true;
   /** You decided their copy goes: they're told when you next meet. */
@@ -743,7 +743,7 @@ export interface KeepersInfo {
   /** Your small spaces, and the friends chosen to keep each (among those you keep copies with). */
   spaces: Array<{ space: SpaceRef; keepers: Actor[] }>;
   friends: KeeperFriend[];
-  /** When you said that every copy at a friend you don't keep with goes. */
+  /** When you last said that every copy at a friend you don't keep with goes. */
   letGo?: string;
   /** Bytes you keep for others; of those, what nobody asked about since this computer knows whose it is; and the most you would keep. */
   forOthers: number;
@@ -2131,11 +2131,11 @@ export interface Backend {
   fading(): Promise<PostInfo[]>;
   /** Your small spaces and who keeps them (stage 5), and what you keep for others. */
   keepers(): Promise<KeepersInfo>;
-  /** Keep copies with a friend (it works once they turn it on with you too), or end it: they're told to let yours go. */
+  /** Keep copies with a friend (it works once they turn it on with you too), or end it: they're told to let yours go (also someone who only holds a copy from before). */
   setKeeper(input: { who: string; on: boolean }): Promise<KeepersInfo>;
   /** Every copy of yours at a friend you don't keep with goes, each when you next meet. Save a backup first. */
   letCopiesGo(): Promise<KeepersInfo>;
-  /** Let go of what you keep for one person, or for everyone. It may be their only copy. */
+  /** Let go of what you keep for one person, or for everyone, and end keeping copies with them. It may be their only copy. */
   dropKept(input?: { who?: string }): Promise<KeepersInfo>;
   /** A space whose members hold its content between them: ask them for the 30 days before `before` (default: before the oldest post held). */
   fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }>;
