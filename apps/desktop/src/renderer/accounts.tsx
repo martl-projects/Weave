@@ -4,7 +4,7 @@ import { Icon, isIconName, type IconName } from './icons.tsx';
 import { api, bridge, bump, navigate, onItem, useApi } from './lib.ts';
 import { openKeyvault } from './keyvaults.tsx';
 import { copy, spaceHref } from './posts.tsx';
-import { openServices } from './websites.tsx';
+import { openLaunch, openServices } from './websites.tsx';
 import { attempt, AsyncButton, Modal } from './ui.tsx';
 import { T, useTexts } from './texts.tsx';
 
@@ -307,6 +307,11 @@ export function startAppOpens(): void {
     // A project's services: one it runs, or the Add a service catalog with something picked.
     if (open.what === 'service' && open.space) {
       openServices({ project: open.space.id, ...(open.service ? { service: open.service } : {}), ...(open.askedBy ? { askedBy: open.askedBy } : {}) });
+      return navigate(`${spaceHref(open.space)}/services`);
+    }
+    // A website to launch from a release: the project's services, with the Launch dialog filled in (the click is the person's).
+    if (open.what === 'website' && open.space && open.website) {
+      openLaunch({ project: open.space.id, release: { project: open.website.project.id, id: open.website.id }, ...(open.askedBy ? { askedBy: open.askedBy } : {}) });
       return navigate(`${spaceHref(open.space)}/services`);
     }
     if (open.what === 'person' && open.person) return navigate(`#/space/${open.person.did}`);

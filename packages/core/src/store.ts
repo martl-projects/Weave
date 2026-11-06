@@ -72,6 +72,8 @@ export interface LogStore {
   keepBytes(stream?: string): number;
   /** Let a stream go: its owner no longer wants it kept here (it chose another keeper, or stopped keeping the space). */
   keepDrop(stream: string): void;
+  /** Every stream kept here. */
+  keepStreams(): string[];
 }
 
 /** The v2 part of a store, in memory: for MemoryStore, and for FileStore to keep beside its files. */
@@ -206,7 +208,6 @@ export class MemoryV2 {
     this.#kept.delete(stream);
   }
 
-  /** Every stream kept, for a store that writes them out again. */
   keepStreams(): string[] {
     return [...this.#kept.keys()];
   }

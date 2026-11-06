@@ -369,6 +369,21 @@ export class Website {
     };
   }
 
+  /** Who may visit a website in a project: every participant (nothing to keep), or these people, a show's ticket holders (while it's on), members of tiers. */
+  visitors(input: { project: string; invite?: string[]; show?: string; groups?: string[] }): NonNullable<StoredRoom['access']> {
+    const project = this.h.project(input.project);
+    const invite = input.invite?.length ? input.invite.map((who) => this.h.resolve(who)) : undefined;
+    const show = input.show ? this.h.showRef(input.show) : undefined;
+    if (show && show.host !== this.h.identity.author) throw new Error(`only ${this.h.nameOf(show.host) ?? 'its host'} opens websites for ${show.name}: they let ticket holders in`);
+    const groups = (input.groups ?? []).map((ref) => {
+      const group = this.h.space(ref);
+      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
+      if (!this.h.state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
+      return group.id;
+    });
+    return { ...(invite ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
+  }
+
   /**
    * Open a website: in a project the website service was added to, reaching something already running on this
    * device at `port` (a program of yours; services announce their own with serve). Who may visit: every participant,
@@ -381,18 +396,8 @@ export class Website {
     const name = input.name?.trim().slice(0, 60);
     if (!name) throw new Error('a website has a name');
     const port = this.roomPortOf(input.port);
-    // Who may visit: every participant, or these people, a show's ticket holders (while it's on), members of tiers.
-    const invite = input.invite?.length ? input.invite.map((who) => this.h.resolve(who)) : ('participants' as const);
-    const show = input.show ? this.h.showRef(input.show) : undefined;
-    if (show && show.host !== this.h.identity.author) throw new Error(`only ${this.h.nameOf(show.host) ?? 'its host'} opens websites for ${show.name}: they let ticket holders in`);
-    const groups = (input.groups ?? []).map((ref) => {
-      const group = this.h.space(ref);
-      if (group.kind !== 'group') throw new Error(`${group.name} is a ${group.kind}, not a group or tier`);
-      if (!this.h.state(project).groups.has(group.id)) throw new Error(`${group.name} isn't invited into ${project.name}: invite it first (its members then take part)`);
-      return group.id;
-    });
+    const access = this.visitors(input);
     this.portFree(service.away ? Object.values(service.hosted) : this.hosted().map((h) => h.room), port);
-    const access = { ...(invite !== 'participants' ? { invite } : {}), ...(show ? { show: show.id } : {}), ...(groups.length ? { groups } : {}) };
     const pages = parsePages(input.pages);
     const room: StoredRoom = {
       id: b64u.encode(randomBytes(12)),
@@ -450,7 +455,7 @@ export class Website {
     this.portFree(this.hosted().map((h) => h.room).filter((r) => r.servedBy !== by), port);
     // What it runs, for everyone to see: the release its service was installed from.
     const release = serving.artifact ? { project: serving.artifact.project, id: serving.artifact.id, tag: serving.artifact.tag } : undefined;
-    const room: StoredRoom = before ? { ...before, port, ...(pages ? { pages } : {}), ...(release ? { release } : {}) } : { id: b64u.encode(randomBytes(12)), project: project.id, name, port, token: b64u.encode(randomBytes(24)), servedBy: by, ...(pages ? { pages } : {}), ...(release ? { release } : {}) };
+    const room: StoredRoom = before ? { ...before, port, ...(pages ? { pages } : {}), ...(release ? { release } : {}) } : { id: b64u.encode(randomBytes(12)), project: project.id, name, port, token: b64u.encode(randomBytes(24)), servedBy: by, ...(serving.access ? { access: serving.access } : {}), ...(pages ? { pages } : {}), ...(release ? { release } : {}) };
     this.svc.saveServices(this.svc.storedServices().map((s) => (s.name === site.name ? { ...s, hosted: { ...(s.hosted ?? {}), [room.id]: room } } : s)));
     const announced = this.announceRoom(site.name, room)!;
     this.h.emitLive();

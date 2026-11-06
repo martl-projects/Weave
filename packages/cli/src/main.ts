@@ -90,6 +90,8 @@ A company's own projects and groups are its company spaces.
                              set up a company account: the company holds it and its recovery (no words shown)
   recover-request / recover <answer>   a company account on a new computer: ask, then set up from the company's answer
   restore                    set up this computer as another device of your identity, from your recovery words
+                             [--backup <file>] and bring back everything a backup file holds: the words and the file are enough, no network
+  backup <folder or file>    save your Weave as one encrypted file (only your recovery words open it): nobody else can bring your data back
   whoami                     show your identity and agents
   daemon                     run your node: connect to peers, serve the local API
   daemon stop | restart      stop the running daemon properly (or restart it, e.g. for new code)   [--force: end it hard if it won't]
@@ -99,7 +101,7 @@ A company's own projects and groups are its company spaces.
   node add <request>         on your computer: answer it (the node keeps your spaces and serves your websites; weave revoke node:<name> ends it)
   node join <answer>         on the always-on node: finish with the answer, then run weave daemon
   update                     is there a newer Weave? (release posts in the Weave project, and GitHub)
-  export <dir>               write every log out as JSON lines (a backup, or for going back to an older Weave)
+  export <dir>               write every log out as JSON lines, unencrypted (for going back to an older Weave; to keep your data safe: weave backup)
   post <text...>             publish a short text post (public unless -p/-g/-r)   [--as <agent>]
   feed                       show recent posts         [-p <project> | -g <group>] [-n <count>] [--all]
   watch                      stream new events (needs a running daemon)  [--as <agent> --mentions]
@@ -146,7 +148,9 @@ projects — something being built; participants chat, discuss, vote and work on
   history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
   rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
   keep <post> / fading                   start a post's time again / your posts others will forget soon
-  keepers                                your small spaces and the friends who keep them for you
+  copies                                 copies of your spaces that friends hold from before, and what you hold for them
+  copies let-go [friend]                 tell friends (or one) to let go of the copy they hold of yours
+  copies drop [friend]                   let go of what you hold for a friend, or for everyone
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
   manage <space> vault|azure ...         a company's Vault or Azure Key Vault holds half of every new key (owner)
   unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
@@ -446,6 +450,7 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean', default: false },
     mentions: { type: 'boolean', default: false },
     since: { type: 'string' },
+    backup: { type: 'string' },
     until: { type: 'string' },
     people: { type: 'boolean' },
     bare: { type: 'boolean', default: false },
@@ -1135,8 +1140,9 @@ async function main(): Promise<void> {
 
     case 'restore': {
       const words = await readWords();
-      console.error('looking for your identity on the network (keep another device or a friend online)…');
-      const node = await WeaveNode.restore(words, home.dir, { online: true });
+      // With a backup file: the words and the file are enough (no network, nobody else).
+      if (!values.backup) console.error('looking for your identity on the network (keep another device or a friend online)…');
+      const node = values.backup ? await WeaveNode.restoreBackup(words, resolvePath(process.env.INIT_CWD ?? process.cwd(), values.backup), home.dir) : await WeaveNode.restore(words, home.dir, { online: true });
       const me = await node.whoami();
       await node.close();
       return out(me, () => `this computer is now a device of ${me.name ?? me.did}\n  ${me.did}\n  device key ${me.signer}`);
@@ -1224,6 +1230,14 @@ async function main(): Promise<void> {
       process.on('SIGTERM', shutdown);
       if (stopAsked) void shutdown();
       return new Promise(() => {}); // run until stopped
+    }
+
+    case 'backup': {
+      if (!args[0]) throw new Error('usage: weave backup <folder or file.weavebackup>');
+      const saved = await (await backend()).saveBackup({ to: resolvePath(process.env.INIT_CWD ?? process.cwd(), args[0]) });
+      return out(saved, () => `saved ${saved.file}
+  ${(saved.bytes / 1048576).toFixed(1)} MB: ${saved.events} events, ${saved.spaces} spaces with their keys, ${saved.attachments} attachments
+  only your recovery words open it (weave restore --backup <file>). Keep it where this computer isn't.`);
     }
 
     case 'export': {
@@ -2319,12 +2333,25 @@ ${postLine(p)}`);
       return out(r, () => `asked the members of ${args[0]} for ${r.since.slice(0, 10)} to ${r.until.slice(0, 10)}: what they hold comes in while you're online`);
     }
 
+    case 'copies':
     case 'keepers': {
-      const k = await (await backend()).keepers();
+      // Keepers are taken out: nothing new is kept with friends. What is left are the copies from before: let-go
+      // [friend] tells friends to let go of yours; drop [friend] lets go of what you hold for others.
+      const b = await backend();
+      const [verb, who] = args;
+      if (verb && !['let-go', 'drop'].includes(verb)) throw new Error('usage: weave copies [let-go [friend] | drop [friend]]');
+      const k = verb === 'let-go' ? await b.letCopiesGo(who ? { who } : {}) : verb === 'drop' ? await b.dropKept(who ? { who } : {}) : await b.keepers();
+      const name = (a: { name?: string; did: string }) => a.name ?? a.did.slice(8, 16);
+      const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
+      const theirs = k.friends.filter((f) => f.lettingGo || (f.holds ? f.holds.items > 0 : f.before));
       return out(k, () =>
         [
-          ...k.spaces.map((s) => `${s.space.name.padEnd(24)} kept by ${s.keepers.length ? s.keepers.map((a) => a.name ?? a.did.slice(8, 16)).join(', ') : 'nobody yet (make friends: people you follow who follow you back)'}`),
-          `you keep ${(k.forOthers / 1048576).toFixed(1)} MB for friends (at most ${Math.round(k.quota / 1048576)} MB)`,
+          'friends keep no copies of your spaces any more: save a backup (weave backup <folder>). Nothing new is kept with anyone.',
+          theirs.length ? 'copies of yours from before (weave copies let-go [friend] tells them to let go):' : 'nobody is known to hold a copy of yours from before',
+          ...theirs.map((f) => `  ${name(f.who).padEnd(22)} ${f.lettingGo ? 'lets go when you next meet' : f.holds ? `holds a copy (asked ${f.holds.at.slice(0, 10)})` : 'may hold a copy, not asked yet'}`),
+          k.forOthers ? `you still hold ${mb(k.forOthers)} MB for friends (weave copies drop [friend] lets go); what nobody asks about for ${k.graceDays} days goes by itself` : 'you hold nothing for friends',
+          ...k.friends.filter((f) => f.kept).map((f) => `  ${name(f.who).padEnd(22)} ${mb(f.kept!.bytes)} MB, last asked ${f.kept!.asked.slice(0, 10)}`),
+          ...(k.forUnknown ? [`  ${mb(k.forUnknown)} MB of friends who haven't come by since`] : []),
         ].join('\n'),
       );
     }

@@ -263,10 +263,21 @@ export class Sessions {
       keystore: vaultOf(this.node.home).keystore,
       ...(vaultOf(this.node.home).warning ? { keystoreWarning: vaultOf(this.node.home).warning } : {}),
       ...(this.shippedMissing ? { shippedMissing: true as const } : {}),
+      ...(this.node.config.lastBackup ? { lastBackup: this.node.config.lastBackup } : {}),
+      ...this.#backupDue(),
     };
   }
 
   /** No services Weave ships next to this daemon: a checkout whose packages/shipped/dist isn't built. Everything from Unread to Websites is missing then. */
+/** Whether a backup is due, for the reminder: never saved, or over a month ago; not for company accounts or identities without words. */
+  #backupDue(): { backupDue?: 'never' | 'again' } {
+    const state = this.node.replica.authority.keys(this.node.identity.author);
+    if (state.org || !state.next || this.node.config.archive) return {};
+    const last = this.node.config.lastBackup;
+    if (!last) return { backupDue: 'never' };
+    return this.node.clock() - Date.parse(last) > 30 * 24 * 3600 * 1000 ? { backupDue: 'again' } : {};
+  }
+
   get shippedMissing(): boolean {
     const dir = this.node.wasmSetup.shippedDir ?? SHIPPED_DIR;
     return !dir || !existsSync(joinPath(dir, 'shipped.json'));
@@ -401,10 +412,29 @@ export class Sessions {
     return request;
   }
 
-  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; as?: string }): Promise<AppOpen> {
-    if (!['space', 'inbox', 'post', 'person', 'keyvault', 'service'].includes(input.what)) throw new Error('what is space, inbox, post, person, keyvault or service');
+  async openInApp(input: { what: AppOpen['what']; space?: string; repo?: string; post?: string; who?: string; keyvault?: string; service?: string; website?: string; from?: string; as?: string }): Promise<AppOpen> {
+    if (!['space', 'inbox', 'post', 'person', 'keyvault', 'service', 'website'].includes(input.what)) throw new Error('what is space, inbox, post, person, keyvault, service or website');
     // Which agent asked, for the dialog to say (an agent of theirs: it signs as one).
     const askedBy = input.as && this.core.agents.some((a) => a.name === input.as) ? { askedBy: input.as } : {};
+    if (input.what === 'website') {
+      // Launching a website from a release: the Launch dialog, filled in. Starting other people's code on this computer
+      // is the person's click (and for a program, their consent in its warning): an agent only gets them there.
+      if (!input.space) throw new Error('say which project to launch it in');
+      const project = this.core.project(input.space);
+      const from = input.from ? this.core.project(input.from) : project;
+      const [wanted, tag] = (input.website ?? '').trim().split('@');
+      const name = wanted.toLowerCase();
+      const websites = (await this.node.artifacts(from.id)).filter((a) => a.kind === 'website' && a.mine);
+      // The latest release of each website comes first (artifacts are newest first); a tag picks another.
+      const matches = websites.filter((a) => (!name || a.app.toLowerCase() === name || a.name.toLowerCase() === name) && (!tag || a.tag === tag));
+      const apps = [...new Set(matches.map((a) => a.app))];
+      if (!matches.length) throw new Error(websites.length ? `${from.name} has no website "${input.website ?? ''}" to launch (its websites: ${[...new Set(websites.map((a) => a.name))].join(', ')})` : `${from.name} has released no website to launch`);
+      if (apps.length > 1) throw new Error(`say which website: ${from.name} has ${[...new Set(matches.map((a) => a.name))].join(', ')}`);
+      const a = matches[0];
+      const open: AppOpen = { what: 'website', space: { id: project.id, kind: 'project', name: project.name }, website: { project: { id: from.id, kind: 'project', name: from.name }, id: a.id, name: a.name, tag: a.tag }, ...askedBy };
+      for (const listener of this.#openListeners) listener(open);
+      return open;
+    }
     if (input.what === 'service') {
       // A project's services: one it runs, or its Add a service catalog with something picked (the person adds it).
       if (!input.space) throw new Error('say which project');

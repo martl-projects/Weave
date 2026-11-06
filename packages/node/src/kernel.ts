@@ -581,7 +581,7 @@ export class Kernel {
   #announcing = false;
   #listingSpaces = false;
 
-  /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, keepers. For SwarmNode, and tests that link nodes directly. */
+  /** What a sync session asks this node: its spaces, keys offered, bodies it keeps, the copies friends hold from before. For SwarmNode, and tests that link nodes directly. */
   sessionAccess(): SpaceAccess {
     const node = this;
     return {
