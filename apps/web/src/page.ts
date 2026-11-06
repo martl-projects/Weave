@@ -13,7 +13,19 @@ async function refresh() {
   document.querySelector('#messages')!.textContent = JSON.stringify(await call('messages', 'Climb'), null, 1);
 }
 
-worker.onmessage = ({ data }: MessageEvent<{ id: number; result?: unknown; error?: string; event?: string; state?: string; detail?: string }>) => {
+/** The services' Workers, by the node's key: the page starts them for it. */
+const services = new Map<string, Worker>();
+
+worker.onmessage = ({ data }: MessageEvent<{ id: number; result?: unknown; error?: string; event?: string; state?: string; detail?: string; key?: string; base?: string; port?: MessagePort }>) => {
+  if (data.event === 'service') {
+    const service = new Worker('/service.js', { type: 'module' });
+    services.set(data.key!, service);
+    return service.postMessage({ base: data.base, port: data.port }, [data.port!]);
+  }
+  if (data.event === 'service-stop') {
+    services.get(data.key!)?.terminate();
+    return void services.delete(data.key!);
+  }
   if (data.event === 'waiting') return void show('waiting', 'Weave is open in another tab');
   if (data.event === 'status') return void show('storage node', data.detail ? `${data.state}: ${data.detail}` : data.state);
   if (data.event === 'changed') return void refresh();

@@ -1,7 +1,8 @@
 import './host/globals.ts';
 import type { WeaveNode } from '@weave/node';
-import { existsSync, readFileSync, useFiles, writeFileSync } from './host/fs.ts';
+import { existsSync, mkdirSync, readFileSync, useFiles, writeFileSync } from './host/fs.ts';
 import { accountOf, accountRecord, useStorage } from './host/net.ts';
+import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { WEB_METHODS } from './methods.ts';
 import { openWasmDatabase } from './wasmdb.ts';
@@ -22,8 +23,19 @@ interface Call {
 
 const HOME = '/weave';
 const ACCOUNT = `${HOME}/storage.json`;
+const SHIPPED = '/shipped';
 
 let node: WeaveNode | undefined;
+
+/** The services a page runs, where the node looks for what Weave ships (build.ts). */
+async function shipped(): Promise<void> {
+  const list = await (await fetch('/shipped-web.json')).text();
+  const services = JSON.parse(list) as Record<string, { component: string }>;
+  mkdirSync(SHIPPED);
+  writeFileSync(`${SHIPPED}/shipped.json`, list);
+  for (const [name, { component }] of Object.entries(services)) writeFileSync(`${SHIPPED}/${component}`, `web:${name}`);
+  useServices(Object.keys(services));
+}
 
 const lifecycle: Record<string, (...args: never[]) => unknown> = {
   /** This tab's turn: the home opens for one tab at a time. Answers when it is this tab's. */
@@ -36,10 +48,12 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const db = await openWasmDatabase('weave.db');
     useFiles(db);
     useStore(db);
+    await shipped();
     // Only now: the node reads files as it loads.
     const { resolveHome, WeaveNode } = await import('@weave/node');
     const fresh = !existsSync(resolveHome(HOME).identity);
     node = fresh ? WeaveNode.init(name, HOME) : WeaveNode.open(HOME);
+    node.wasmSetup.shippedDir = SHIPPED;
     node.replica.onAppend(() => self.postMessage({ event: 'changed' }));
     return { fresh, ms: Math.round(performance.now() - started) };
   },

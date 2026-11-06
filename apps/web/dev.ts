@@ -11,14 +11,15 @@ import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
-import { buildWeb } from './build.ts';
+import { buildServices, buildWeb } from './build.ts';
 
 const port = Number(process.env.PORT ?? 8790);
 const dist = join(import.meta.dirname, 'dist');
 const ORIGINS = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
-const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm' };
+const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json' };
 
 await buildWeb(dist);
+console.log('services:', await buildServices(dist));
 
 const scratch = mkdtempSync(join(tmpdir(), 'weave-web-dev-'));
 const person = WeaveNode.init('Lena', join(scratch, 'lena'));
@@ -62,7 +63,7 @@ const server = createServer(async (req, res) => {
     return res.end('<!doctype html><meta charset="utf-8"><title>Weave Web</title><pre id="out"></pre><pre id="messages"></pre><script type="module" src="/page.js"></script>');
   }
   const file = url.pathname.slice(1);
-  if (!['page.js', 'worker.js', 'sqlite3.wasm'].includes(file)) return res.writeHead(404).end();
+  if (!['page.js', 'worker.js', 'service.js', 'sqlite3.wasm', 'shipped-web.json'].includes(file) && !/^services\/[a-z-]+\/[\w-]+(\.[\w-]+)+$/.test(file)) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] });
   createReadStream(join(dist, file)).pipe(res);
 });
