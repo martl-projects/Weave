@@ -89,6 +89,11 @@ export interface HeldSpace {
   pulled?: { windowMs: number };
   /** Not a space: a secret that only proves the peer was given a link (a contact link's meeting point). Never synced. */
   proof?: true;
+  /**
+   * `keys` are auth keys (`authKey`), not the space's keys: this node syncs the space's events as they travel and
+   * can't open them. A storage node holds a person's spaces this way (Weave Web, stage 2).
+   */
+  blind?: true;
   /** Behind the firewall, sharing this lets a peer in. False for what anyone could hold with us (a stranger's direct chat). */
   admits?: boolean;
 }
@@ -167,8 +172,11 @@ export type Role = 'initiator' | 'responder';
 export const WIRE_VERSION = 3;
 
 /** A space's tag on one connection, made by one end: the other end's tag for the same key differs, so a reflected tag never matches. */
-export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array, role: Role): string =>
-  b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8(`weave/tag/v3/${role}`), ...handshakeHash])));
+export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array, role: Role): string => authTag(authKey(key), handshakeHash, role);
+
+/** The same tag from the auth key alone: what a blind holder shows, who can prove a space but not open it. */
+export const authTag = (auth: Uint8Array, handshakeHash: Uint8Array, role: Role): string =>
+  b64u.encode(hmac(sha256, auth, new Uint8Array([...utf8(`weave/tag/v3/${role}`), ...handshakeHash])));
 
 /** A space's tag as protocol 2 made it, the same at both ends: only for the hello that carries the farewell to a peer still on it. */
 export const legacyTag = (key: Uint8Array, handshakeHash: Uint8Array): string => b64u.encode(hmac(sha256, authKey(key), new Uint8Array([...utf8('weave/tag/v2'), ...handshakeHash])));
@@ -285,10 +293,14 @@ export class PeerSession2 {
     return this.#peerVersion !== null && this.#peerVersion >= WIRE_VERSION;
   }
 
+  #tag(held: HeldSpace, key: Uint8Array, role: Role): string {
+    return (held.blind ? authTag : spaceTag)(key, this.#handshakeHash, role);
+  }
+
   /** Tell the peer which spaces this node holds (again, after they changed). A peer on an older protocol was told all it gets. */
   announce(): void {
     if (this.#peerVersion !== null && !this.#speaks()) return;
-    const tags = this.#access.spaces().flatMap(({ keys }) => keys.map((key) => spaceTag(key, this.#handshakeHash, this.#role)));
+    const tags = this.#access.spaces().flatMap((held) => held.keys.map((key) => this.#tag(held, key, this.#role)));
     this.#send({ t: 'hello', v: WIRE_VERSION, tags, ...(this.neg ? { features: ['neg'] } : {}) });
     // Spaces new here may be ones the peer already said it holds.
     if (this.#peerTags) this.#hello(this.#peerTags);
@@ -530,7 +542,7 @@ export class PeerSession2 {
     this.#started.clear();
     if (this.#toldOlder) return;
     this.#toldOlder = true;
-    const held = this.#access.spaces();
+    const held = this.#access.spaces().filter((h) => !h.blind); // the older tags need the key itself
     this.#send({ t: 'hello', v: 2, tags: held.flatMap(({ keys }) => keys.map((key) => legacyTag(key, this.#handshakeHash))) });
     const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
     const shown = new Set(held.filter(({ keys }) => keys.some((key) => theirs.has(legacyTag(key, this.#handshakeHash)))).map((h) => h.space));
@@ -550,9 +562,10 @@ export class PeerSession2 {
     const behind = new Set<string>();
     const startedWith = new Map<string, string>([['public', '']]);
     let admits = false;
-    for (const { space, keys, proof, admits: lets } of this.#access.spaces()) {
+    for (const held of this.#access.spaces()) {
+      const { space, keys, proof, admits: lets } = held;
       // The peer's tags are made as the other end: our own tags, echoed back, match nothing here.
-      const theirTag = (key: Uint8Array) => spaceTag(key, this.#handshakeHash, this.#peerRole);
+      const theirTag = (key: Uint8Array) => this.#tag(held, key, this.#peerRole);
       const [current, ...earlier] = keys;
       const now = !!current && theirs.has(theirTag(current));
       const before = !now && earlier.some((key) => theirs.has(theirTag(key)));
@@ -695,7 +708,7 @@ export class PeerSession2 {
   /** Does the peer's last hello show any key we hold of this space? (Keys come from someone ahead of us, whose current key we don't hold yet.) */
   #peerHasKeyOf(space: string): boolean {
     const theirs = new Set((this.#peerTags ?? []).filter((t): t is string => typeof t === 'string'));
-    return this.#access.spaces().some((held) => held.space === space && held.keys.some((key) => theirs.has(spaceTag(key, this.#handshakeHash, this.#peerRole))));
+    return this.#access.spaces().some((held) => held.space === space && held.keys.some((key) => theirs.has(this.#tag(held, key, this.#peerRole))));
   }
 
   /** Control events of a space the peer lacks, in chain order per signer. */
