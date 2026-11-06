@@ -233,6 +233,9 @@ export class Holding {
     const state = this.#keeping;
     const now = this.node.clock();
     const stale = (did: Did) => now - Date.parse(state.seen[did] ?? new Date(now).toISOString()) > KEEPER_GONE_MS;
+    // Nobody switched on: nobody is chosen, and the lists from before stay as they were written (a Weave from before
+    // the choice, started on this home again, finds its keepers and doesn't choose and fill new ones).
+    if (!state.on.length) return [];
     const friends = this.core.friends().filter((f) => f !== peer && state.on.includes(f));
     let keepers = (state.spaces[scope] ?? []).filter((k) => friends.includes(k) && !stale(k));
     // In an order only we can compute, the same on each of our devices: two of them don't choose against each other.
