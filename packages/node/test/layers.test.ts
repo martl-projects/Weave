@@ -76,6 +76,7 @@ const MAY_USE_NODE = [
   'signin.ts',
   'spacestore.ts',
   'sqlitestore.ts',
+  'storagenode.ts',
   'untar.ts',
   'update.ts',
   'vault.ts',
