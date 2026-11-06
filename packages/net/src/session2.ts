@@ -434,18 +434,21 @@ export class PeerSession2 {
         break;
       case 'items':
         if (v2 && Array.isArray(message.items)) {
-          for (const item of message.items) {
-            if (!isWireItemV2(item)) continue;
-            if (!this.#shared.has(item.e.space)) {
-              // From a peer behind in a space, only a join the node accepts (one that came in before our newer key was
-              // made), and only a few: someone behind may be someone removed.
-              if (!this.#behind.has(item.e.space) || item.e.class !== 'control' || this.#takenFromBehind >= MAX_FROM_BEHIND || !this.#access.fromBehind?.(item)) continue;
-              this.#takenFromBehind++;
+          const items: unknown[] = message.items;
+          this.replica.batch(() => {
+            for (const item of items) {
+              if (!isWireItemV2(item)) continue;
+              if (!this.#shared.has(item.e.space)) {
+                // From a peer behind in a space, only a join the node accepts (one that came in before our newer key was
+                // made), and only a few: someone behind may be someone removed.
+                if (!this.#behind.has(item.e.space) || item.e.class !== 'control' || this.#takenFromBehind >= MAX_FROM_BEHIND || !this.#access.fromBehind?.(item)) continue;
+                this.#takenFromBehind++;
+              }
+              // Marked as held by the peer before taking it, so accepting it doesn't echo it back.
+              this.#notePeerHas(item);
+              this.replica.ingest(item);
             }
-            // Marked as held by the peer before taking it, so accepting it doesn't echo it back.
-            this.#notePeerHas(item);
-            this.replica.ingest(item);
-          }
+          });
         }
         break;
       case 'keeping?':

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { TextSocket } from '@weave/net';
 
 /*
  * The server side of WebSockets (RFC 6455), as far as a website's players need it: text messages both ways, pings
@@ -107,4 +108,23 @@ export function acceptWebSocket(req: IncomingMessage, socket: Duplex, head: Buff
       end();
     },
   };
+}
+
+/** An upgrade request as a TextSocket, what a storage node takes. What arrives before someone listens waits for them. */
+export function textSocket(req: IncomingMessage, socket: Duplex, head: Buffer): TextSocket | undefined {
+  let handle: ((text: string) => void) | undefined;
+  const early: string[] = [];
+  const closed: Array<() => void> = [];
+  const ws = acceptWebSocket(req, socket, head, { message: (text) => (handle ? handle(text) : early.push(text)), close: () => closed.forEach((listen) => listen()) });
+  return (
+    ws && {
+      send: (text) => ws.send(text),
+      close: () => ws.close(),
+      onMessage: (listener) => {
+        handle = listener;
+        early.splice(0).forEach(listener);
+      },
+      onClose: (listener) => void closed.push(listener),
+    }
+  );
 }

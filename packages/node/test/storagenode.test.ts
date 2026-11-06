@@ -3,13 +3,12 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Duplex } from 'node:stream';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { b64u, createIdentity, Replica, spaceTopics } from '@weave/core';
-import { authKey, duplexPair, PeerSession2, StorageClient, type HeldByNode, type SpaceAccess, type TextSocket } from '@weave/net';
+import { authKey, duplexPair, PeerSession2, StorageClient, type HeldByNode, type SpaceAccess } from '@weave/net';
 import type { WeaveNode } from '../src/index.ts';
 import { StorageNode, type StorageNetwork } from '../src/storagenode.ts';
-import { acceptWebSocket } from '../src/websocket.ts';
+import { textSocket } from '../src/websocket.ts';
 import { people, stored } from './helpers/people.ts';
 
 /*
@@ -33,22 +32,6 @@ afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true,
 
 const settle = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function serverSocket(req: Parameters<typeof acceptWebSocket>[0], socket: Duplex, head: Buffer): TextSocket {
-  let handle: ((text: string) => void) | undefined;
-  const early: string[] = [];
-  const closed: Array<() => void> = [];
-  const ws = acceptWebSocket(req, socket, head, { message: (text) => (handle ? handle(text) : early.push(text)), close: () => closed.forEach((listen) => listen()) })!;
-  return {
-    send: (text) => ws.send(text),
-    close: () => ws.close(),
-    onMessage: (h) => {
-      handle = h;
-      early.splice(0).forEach(h);
-    },
-    onClose: (h) => closed.push(h),
-  };
-}
-
 interface Place {
   replica: Replica;
   access: SpaceAccess;
@@ -67,7 +50,7 @@ async function start(dir = mkdtempSync(join(tmpdir(), 'weave-storage-')), quota?
   nodes.push(node);
   const server = createServer((_req, res) => res.end());
   servers.push(server);
-  server.on('upgrade', (req, socket, head) => void node.accept(serverSocket(req, socket, head)).catch(() => {}));
+  server.on('upgrade', (req, socket, head) => void node.accept(textSocket(req, socket, head)!).catch(() => {}));
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/`;
   const connect = async () => {

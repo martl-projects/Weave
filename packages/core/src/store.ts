@@ -21,6 +21,9 @@ export interface StoredV2 {
  *   space, seq), and content bodies by hash, apart from their events.
  */
 export interface LogStore {
+  /** Run `fn` as one write, where a commit costs something (a browser's file system: ten times a batch). */
+  transaction?<T>(fn: () => T): T;
+
   head(signer: Did): WeaveEvent | undefined;
   get(signer: Did, seq: number): WeaveEvent | undefined;
   /** Events with `from <= seq <= to` (to defaults to the head). */

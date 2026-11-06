@@ -89,6 +89,23 @@ export class Replica {
     for (let round = 0; round < 2; round++) for (const event of grants) this.authority.apply(event);
   }
 
+  /**
+   * Take several events as one write. If `fn` throws, what it took before that stays taken, as it would one by one:
+   * listeners have heard of those events already.
+   */
+  batch(fn: () => void): void {
+    if (!this.store.transaction) return fn();
+    let failed: { error: unknown } | undefined;
+    this.store.transaction(() => {
+      try {
+        fn();
+      } catch (error) {
+        failed = { error };
+      }
+    });
+    if (failed) throw failed.error;
+  }
+
   /** Called for every newly accepted event of either version, and again for a content event when its missing body arrives. Returns an unsubscribe function. */
   onAppend(listener: (record: WeaveRecord) => void): () => void {
     this.#listeners.add(listener);
