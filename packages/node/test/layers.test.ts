@@ -33,6 +33,7 @@ const MAY_USE_NODE = [
   'applaunch.ts',
   'artifacts.ts',
   'auditsinks.ts',
+  'backupfile.ts',
   'blobstore.ts',
   'claudecode.ts',
   'client.ts',
