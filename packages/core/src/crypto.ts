@@ -7,6 +7,12 @@ import { publicKeyFromDid, type Did } from './keys.ts';
 
 export { randomBytes };
 
+/** A fresh X25519 key pair for one connection (wspeer.ts). */
+export const ephemeralKeys = (): { secretKey: Uint8Array; publicKey: Uint8Array } => x25519.keygen();
+
+/** What two such keys agree on. */
+export const sharedSecret = (secretKey: Uint8Array, theirPublicKey: Uint8Array): Uint8Array => x25519.getSharedSecret(secretKey, theirPublicKey);
+
 /** Symmetrically encrypted JSON, as stored in an event body. */
 export interface Sealed {
   nonce: string;

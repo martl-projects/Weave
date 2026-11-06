@@ -55,7 +55,7 @@ export { isRecord, recordOfV1, recordOfV2, recordOrder, type EventView, type Wea
 export { Replica, type IngestResult } from './replica.ts';
 export { sha256 } from '@noble/hashes/sha2.js';
 export { canManage, managersOf, mayDo, mayDoAt, rekeyCounts, type Decision, type SpaceAction } from './authz.ts';
-export { boxTo, open, openBox, pairKey, randomBytes, seal, selfKey, type Box, type Sealed } from './crypto.ts';
+export { boxTo, ephemeralKeys, open, openBox, pairKey, randomBytes, seal, selfKey, sharedSecret, type Box, type Sealed } from './crypto.ts';
 export {
   canonicalKind,
   currentEpoch,

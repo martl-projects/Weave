@@ -1,6 +1,5 @@
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import type { Duplex } from 'node:stream';
 import { b64u, canonicalIdV2, compact, expand, isWireItemV2, openRanges, reconcileStep, reconKey, utf8, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
 import type { BlobSource } from './session.ts';
 
@@ -98,6 +97,13 @@ export interface HeldSpace {
   admits?: boolean;
 }
 
+/** What a session needs of its connection: Hyperswarm's secret stream, a Duplex in tests, a WebSocket (wspeer.ts). It also carries handshakeHash and isInitiator, unless they're passed. */
+export interface PeerStream {
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  write(text: string): unknown;
+  destroy(): unknown;
+}
+
 /** What a session needs to know of the node: which spaces it holds, and where rekey events offered by peers go. */
 export interface SpaceAccess {
   spaces(): HeldSpace[];
@@ -186,7 +192,7 @@ export type PeerStanding = 'current' | 'older' | 'newer';
 
 export class PeerSession2 {
   readonly replica: Replica;
-  readonly stream: Duplex;
+  readonly stream: PeerStream;
   readonly blobs?: BlobSource;
   readonly #access: SpaceAccess;
   readonly #handshakeHash: Uint8Array;
@@ -238,7 +244,7 @@ export class PeerSession2 {
   #unsubscribe: () => void;
   #closed = false;
 
-  constructor(replica: Replica, stream: Duplex, options: { access: SpaceAccess; handshakeHash?: Uint8Array; initiator?: boolean; blobs?: BlobSource; neg?: boolean }) {
+  constructor(replica: Replica, stream: PeerStream, options: { access: SpaceAccess; handshakeHash?: Uint8Array; initiator?: boolean; blobs?: BlobSource; neg?: boolean }) {
     this.replica = replica;
     this.neg = options.neg !== false;
     this.stream = stream;
@@ -258,7 +264,7 @@ export class PeerSession2 {
       if (isWireItemV2(record.wire)) this.#offer([record.wire]);
       else this.#offerV1(record.wire);
     });
-    stream.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()));
+    stream.on('data', (chunk: { toString(): string }) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());
     this.announce();
@@ -520,12 +526,12 @@ export class PeerSession2 {
         if (serves && Array.isArray(message.hashes) && this.blobs) {
           for (const hash of message.hashes.slice(0, 256)) {
             const data = typeof hash === 'string' ? this.blobs.get(hash) : undefined;
-            if (data) this.#send({ t: 'blob', hash, data: Buffer.from(data).toString('base64url') });
+            if (data) this.#send({ t: 'blob', hash, data: b64u.encode(data) });
           }
         }
         break;
       case 'blob':
-        if (serves && typeof message.hash === 'string' && typeof message.data === 'string' && this.blobs) this.blobs.receive(message.hash, new Uint8Array(Buffer.from(message.data, 'base64url')));
+        if (serves && typeof message.hash === 'string' && typeof message.data === 'string' && this.blobs) this.blobs.receive(message.hash, b64u.decode(message.data));
         break;
     }
   }
