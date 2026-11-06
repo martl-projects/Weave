@@ -566,102 +566,77 @@ function BackupBox({ last }: { last?: string }) {
 }
 
 /**
- * Keepers, an option beside your own backup (a choice since 6.11.2026): with a friend you both turned it on with, each
- * holds a sealed copy of the other's own space, direct chats and small groups. Nothing is offered or taken otherwise.
- * Copies from before stay where they are until someone decides: you let yours go, or a keeper lets go of what it holds.
+ * The copies from before. Until 6.11.2026 friends kept sealed copies of each other's small spaces (keepers); now you
+ * save your own backup, and nothing new is kept with anyone. This box is there only while such copies exist: friends
+ * who still hold one of yours (you can let them go), and what you still hold for friends (you can let go of it).
  */
-function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boolean }) {
+function CopiesBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boolean }) {
   const { t } = useTexts();
   const nameOf = (f: KeeperFriend) => f.who.name ?? shortDid(f.who.did);
   const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
-  // A computer still on a Weave from before the choice (a phone paired with one) says nothing of friends.
+  // A computer on a Weave with keepers (a phone paired with one) lists nobody.
   const all = keeping.friends ?? [];
-  const friends = all.filter((f) => !f.gone);
   const mayHold = (f: KeeperFriend) => (f.holds ? f.holds.items > 0 : !!f.before);
-  // People you don't keep copies with who hold one all the same: from before it was a choice.
-  const leftovers = all.filter((f) => !f.on && !f.lettingGo && mayHold(f));
+  const theirs = all.filter((f) => f.lettingGo || mayHold(f));
+  const asked = theirs.filter((f) => !f.lettingGo);
   const holding = all.filter((f) => f.kept);
   const forUnknown = keeping.forUnknown ?? 0;
-  const on = friends.filter((f) => f.on).length;
-  // A phone shows where things stand; what's kept is decided at the computer.
+  if (!theirs.length && !keeping.forOthers) return null;
+  // A phone shows where things stand; what goes is decided at the computer.
   const fixed = !!bridge.phone;
-  const noBackup = backedUp ? '' : ` ${t('keepers.no.backup')}`;
-  const standing = (f: KeeperFriend): string => {
-    if (f.lettingGo) return t('keepers.friend.letting.go');
-    if (!f.on) return mayHold(f) ? t('keepers.friend.before') : f.holds?.takes ? t('keepers.friend.offers') : '';
-    if (!f.holds) return t('keepers.friend.not.met');
-    // They say whether they take from you: only someone who turned it on with you does.
-    if (!f.holds.takes) return f.holds.items > 0 ? t('keepers.friend.before') : t('keepers.friend.not.yet');
-    if (f.holds.items > 0) return t('keepers.friend.holds', { time: ago(f.holds.at) });
-    return f.chosen ? t('keepers.friend.soon') : t('keepers.friend.spare');
-  };
-  const set = async (f: KeeperFriend, to: boolean) => {
-    if (!to && !(await ask(t('keepers.end.ask', { name: nameOf(f) }) + (mayHold(f) ? noBackup : ''), t('keepers.end')))) return;
-    await attempt(() => api('setKeeper', { who: f.who.did, on: to }).then(bump));
-  };
-  const letGo = async () => (await ask(t('keepers.let.go.ask', { names: leftovers.map(nameOf) }) + noBackup, t('keepers.let.go'))) && attempt(() => api('letCopiesGo').then(bump), t('keepers.let.go.done'));
-  const letOne = async (f: KeeperFriend) => (await ask(t('keepers.let.go.ask', { names: [nameOf(f)] }) + noBackup, t('keepers.let.go.one'))) && attempt(() => api('setKeeper', { who: f.who.did, on: false }).then(bump), t('keepers.let.go.done'));
+  const noBackup = backedUp ? '' : ` ${t('copies.no.backup')}`;
+  const letGo = async (f?: KeeperFriend) =>
+    (await ask(t('copies.let.go.ask', { names: (f ? [f] : asked).map(nameOf) }) + noBackup, t(f ? 'copies.let.go.one' : 'copies.let.go'))) && attempt(() => api('letCopiesGo', f ? { who: f.who.did } : {}).then(bump), t('copies.let.go.done'));
   const drop = async (f?: KeeperFriend) =>
-    (await ask(f ? t('keepers.drop.ask', { name: nameOf(f) }) : t('keepers.drop.all.ask'), t('keepers.drop'))) && attempt(() => api('dropKept', f ? { who: f.who.did } : {}).then(bump), t('keepers.dropped'));
+    (await ask(f ? t('copies.drop.ask', { name: nameOf(f) }) : t('copies.drop.all.ask'), t('copies.drop'))) && attempt(() => api('dropKept', f ? { who: f.who.did } : {}).then(bump), t('copies.dropped'));
   return (
     <fieldset>
-      <legend>{t('keepers.legend')}</legend>
-      <p className="small">
-        {t('keepers.about')}{' '}
-        <Info>
-          {t('keepers.about.more')}
-          {on > 0 && (
-            <ul>
-              {keeping.spaces.map((s) => (
-                <li key={s.space.id}>
-                  {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Info>
-      </p>
-      {friends.length === 0 ? (
-        <p className="small muted">{t('keepers.no.friends')}</p>
-      ) : (
-        <details className="small" open={on > 0 || friends.length <= 8}>
-          <summary>{t('keepers.choose', { on, of: friends.length })}</summary>
-          <ul className="keepers-friends">
-            {friends.map((f) => (
-              <li key={f.who.did} className="field-row">
-                <input type="checkbox" id={`keeper-${f.who.did}`} checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} />
-                <label htmlFor={`keeper-${f.who.did}`}>{nameOf(f)}</label>
-                <span className="muted">{standing(f)}</span>
-                {!fixed && !f.on && !f.lettingGo && mayHold(f) && (
-                  <AsyncButton className="link" onClick={() => letOne(f)}>
-                    {t('keepers.let.go.one')}
+      <legend>{t('copies.legend')}</legend>
+      <p className="small">{t('copies.about')}</p>
+      {theirs.length > 0 && (
+        <>
+          <p className="small">{t('copies.yours', { count: theirs.length })}</p>
+          <ul className="small copies-list">
+            {theirs.map((f) => (
+              <li key={f.who.did}>
+                {nameOf(f)} <span className="muted">{f.lettingGo ? t('copies.letting.go') : f.holds ? t('copies.holds', { time: ago(f.holds.at) }) : t('copies.may.hold')}</span>{' '}
+                {!fixed && !f.lettingGo && (
+                  <AsyncButton className="link" onClick={() => letGo(f)}>
+                    {t('copies.let.go.one')}
                   </AsyncButton>
                 )}
               </li>
             ))}
           </ul>
-        </details>
+          {!fixed && asked.length > 1 && (
+            <div className="buttons">
+              <AsyncButton onClick={() => letGo()}>{t('copies.let.go')}</AsyncButton>
+            </div>
+          )}
+        </>
       )}
-      {leftovers.length > 0 && (
-        <p className="notice">
-          {t('keepers.before', { names: leftovers.map(nameOf), count: leftovers.length })}{' '}
-          {!fixed && <AsyncButton onClick={letGo}>{t('keepers.let.go')}</AsyncButton>}
-        </p>
-      )}
-      <p className="small muted">{keeping.forOthers ? t('keepers.you.keep', { mb: mb(keeping.forOthers), max: Math.round(keeping.quota / 1048576) }) : t('keepers.you.keep.nothing')}</p>
       {keeping.forOthers > 0 && (
         <>
-          <ul className="small keepers-friends">
+          <p className="small">{t('copies.you.hold', { mb: mb(keeping.forOthers) })}</p>
+          <ul className="small copies-list">
             {holding.map((f) => (
               <li key={f.who.did}>
-                {t('keepers.kept.for', { name: nameOf(f), mb: mb(f.kept!.bytes), time: ago(f.kept!.asked) })} {!fixed && <AsyncButton onClick={() => drop(f)}>{t('keepers.drop')}</AsyncButton>}
+                {t('copies.held.for', { name: nameOf(f), mb: mb(f.kept!.bytes), time: ago(f.kept!.asked) })}{' '}
+                {!fixed && (
+                  <AsyncButton className="link" onClick={() => drop(f)}>
+                    {t('copies.drop')}
+                  </AsyncButton>
+                )}
               </li>
             ))}
-            {forUnknown > 0 && <li>{t('keepers.kept.unknown', { mb: mb(forUnknown) })}</li>}
+            {forUnknown > 0 && <li>{t('copies.held.unknown', { mb: mb(forUnknown) })}</li>}
           </ul>
-          <p className="small muted">
-            {keeping.graceDays ? t('keepers.grace', { months: Math.round(keeping.graceDays / 30.4) }) : ''} {!fixed && (holding.length > 1 || forUnknown > 0) && <AsyncButton onClick={() => drop()}>{t('keepers.drop.all')}</AsyncButton>}
-          </p>
+          <p className="small muted">{keeping.graceDays ? t('copies.grace', { months: Math.round(keeping.graceDays / 30.4) }) : ''}</p>
+          {!fixed && (holding.length > 1 || forUnknown > 0) && (
+            <div className="buttons">
+              <AsyncButton onClick={() => drop()}>{t('copies.drop.all')}</AsyncButton>
+            </div>
+          )}
         </>
       )}
     </fieldset>
@@ -741,7 +716,7 @@ export function KeysView() {
         </fieldset>
       )}
       {!company && info.recoverable && <BackupBox last={status?.lastBackup} />}
-      {keeping && <KeepersBox keeping={keeping} backedUp={!!status?.lastBackup} />}
+      {keeping && <CopiesBox keeping={keeping} backedUp={!!status?.lastBackup} />}
       <WalletBox />
       <fieldset>
         <legend>{t('devices.legend')}</legend>

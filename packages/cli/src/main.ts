@@ -148,10 +148,9 @@ projects — something being built; participants chat, discuss, vote and work on
   history <space> [all|30d|joining]      what newcomers read: everything, the last 30 days, or from their invite on
   rule <space> <board> <days|off> [MB]   how long posts stay after their last activity (maintainers, moderators)
   keep <post> / fading                   start a post's time again / your posts others will forget soon
-  keepers                                friends you keep copies with (off unless both turn it on), and what you keep for them
-  keepers on|off <friend>                keep sealed copies of each other's small spaces with a friend, or end it
-  keepers let-go                         tell friends to let go of the copies they hold of yours from before
-  keepers drop [friend]                  let go of what you keep for a friend, or for everyone
+  copies                                 copies of your spaces that friends hold from before, and what you hold for them
+  copies let-go [friend]                 tell friends (or one) to let go of the copy they hold of yours
+  copies drop [friend]                   let go of what you hold for a friend, or for everyone
   shred <space> <date>                   carry forward what the rules keep, then everyone deletes the keys that ended before date
   manage <space> vault|azure ...         a company's Vault or Azure Key Vault holds half of every new key (owner)
   unlock <space> / sso <space> <id token>   unlock a company space's keys / sign in with your company
@@ -2334,34 +2333,25 @@ ${postLine(p)}`);
       return out(r, () => `asked the members of ${args[0]} for ${r.since.slice(0, 10)} to ${r.until.slice(0, 10)}: what they hold comes in while you're online`);
     }
 
+    case 'copies':
     case 'keepers': {
-      // Keepers are a choice between two friends: on <friend> / off <friend> is your side of it; let-go ends the copies
-      // friends hold from before; drop [friend] lets go of what you hold for others.
+      // Keepers are taken out: nothing new is kept with friends. What is left are the copies from before: let-go
+      // [friend] tells friends to let go of yours; drop [friend] lets go of what you hold for others.
       const b = await backend();
       const [verb, who] = args;
-      if (verb && !['on', 'off', 'let-go', 'drop'].includes(verb)) throw new Error('usage: weave keepers [on <friend> | off <friend> | let-go | drop [friend]]');
-      if ((verb === 'on' || verb === 'off') && !who) throw new Error(`usage: weave keepers ${verb} <friend>`);
-      const k = verb === 'on' || verb === 'off' ? await b.setKeeper({ who, on: verb === 'on' }) : verb === 'let-go' ? await b.letCopiesGo() : verb === 'drop' ? await b.dropKept(who ? { who } : {}) : await b.keepers();
+      if (verb && !['let-go', 'drop'].includes(verb)) throw new Error('usage: weave copies [let-go [friend] | drop [friend]]');
+      const k = verb === 'let-go' ? await b.letCopiesGo(who ? { who } : {}) : verb === 'drop' ? await b.dropKept(who ? { who } : {}) : await b.keepers();
       const name = (a: { name?: string; did: string }) => a.name ?? a.did.slice(8, 16);
       const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
-      const friends = k.friends.filter((f) => !f.gone);
-      const standing = (f: (typeof friends)[number]) => {
-        const holding = f.holds ? f.holds.items > 0 : !!f.before;
-        if (f.lettingGo) return 'off, lets go of their copy when you next meet';
-        if (!f.on) return holding ? `off, holds a copy from before and gets nothing new (weave keepers off ${name(f.who)} lets it go, weave keepers let-go all of them)` : f.holds?.takes ? 'off; they turned it on with you' : 'off';
-        if (!f.holds) return 'on, not met since';
-        if (!f.holds.takes) return holding ? "on, holds a copy from before; nothing new until they turn it on with you" : "on, holds nothing: they haven't turned it on with you";
-        if (holding) return `on, holds a copy of yours (asked ${f.holds.at.slice(0, 10)})`;
-        return f.chosen ? 'on, takes a copy when you next meet' : 'on, stands by: three other friends keep your spaces';
-      };
+      const theirs = k.friends.filter((f) => f.lettingGo || (f.holds ? f.holds.items > 0 : f.before));
       return out(k, () =>
         [
-          friends.length ? 'keeping copies with friends is off unless you both turn it on (weave keepers on <friend>):' : 'no friends yet (people you follow who follow you back): nobody to keep copies with',
-          ...friends.map((f) => `  ${name(f.who).padEnd(22)} ${standing(f)}`),
-          ...k.spaces.filter((s) => s.keepers.length).map((s) => `${s.space.name.padEnd(24)} kept by ${s.keepers.map(name).join(', ')}`),
-          k.forOthers ? `you keep ${mb(k.forOthers)} MB for friends (at most ${Math.round(k.quota / 1048576)} MB); what nobody asks about for ${k.graceDays} days goes by itself` : 'you keep nothing for friends',
-          ...k.friends.filter((f) => f.kept).map((f) => `  ${name(f.who).padEnd(22)} ${mb(f.kept!.bytes)} MB, last asked about ${f.kept!.asked.slice(0, 10)}`),
-          ...(k.forUnknown ? [`  ${mb(k.forUnknown)} MB from before, of friends who haven't come by since`] : []),
+          'friends keep no copies of your spaces any more: save a backup (weave backup <folder>). Nothing new is kept with anyone.',
+          theirs.length ? 'copies of yours from before (weave copies let-go [friend] tells them to let go):' : 'nobody is known to hold a copy of yours from before',
+          ...theirs.map((f) => `  ${name(f.who).padEnd(22)} ${f.lettingGo ? 'lets go when you next meet' : f.holds ? `holds a copy (asked ${f.holds.at.slice(0, 10)})` : 'may hold a copy, not asked yet'}`),
+          k.forOthers ? `you still hold ${mb(k.forOthers)} MB for friends (weave copies drop [friend] lets go); what nobody asks about for ${k.graceDays} days goes by itself` : 'you hold nothing for friends',
+          ...k.friends.filter((f) => f.kept).map((f) => `  ${name(f.who).padEnd(22)} ${mb(f.kept!.bytes)} MB, last asked ${f.kept!.asked.slice(0, 10)}`),
+          ...(k.forUnknown ? [`  ${mb(k.forUnknown)} MB of friends who haven't come by since`] : []),
         ].join('\n'),
       );
     }

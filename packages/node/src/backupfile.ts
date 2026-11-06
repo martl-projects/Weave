@@ -7,7 +7,7 @@ import type { Did } from '@weave/core';
  * A backup of a person's Weave as one file (6.11.2026): everything their node holds (the events as they travel, and
  * the keys of their spaces), compressed and encrypted with a key that comes from their recovery words. The file alone
  * opens nothing: its head says whose it is and when it was made, never a key or the words. On a new computer, the
- * words and the file bring everything back, with no friend, keeper or network involved.
+ * words and the file bring everything back, with no friend and no network involved.
  *
  *   "WEAVE-BACKUP-1\n"
  *   one line of JSON: the head ({v, author, created, …}), in the clear

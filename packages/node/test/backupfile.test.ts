@@ -8,7 +8,7 @@ import { readBackupHead } from '../src/backupfile.ts';
 
 /*
  * The backup file (6.11.2026): a person saves their Weave themself, as one encrypted file. All devices gone, no
- * keeper, no friend online, no network: the recovery words and the file bring back the direct chats, the small
+ * friend online, no network: the recovery words and the file bring back the direct chats, the small
  * groups, the projects with their keys, and what was private. The file alone opens nothing.
  */
 
@@ -64,7 +64,7 @@ describe('a backup file', { timeout: 60_000 }, () => {
     const duo = (await martin.spaces()).find((s) => s.name === 'Duo')!;
     for (const secret of ['only between us', 'Hotels in Hainan', 'Duo', duo.id]) expect(raw.includes(secret)).toBe(false);
 
-    // Everything is lost: his devices, and nobody else is around (Lena's node is closed too, no keepers, no network).
+    // Everything is lost: his devices, and nobody else is around (Lena's node is closed too, no network).
     const author = martin.identity.author;
     await martin.close();
     await lena.close();
