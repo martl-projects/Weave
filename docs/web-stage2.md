@@ -54,6 +54,14 @@ In order, each one usable and tested before the next:
 9. **Rooms:** a room's tunnel goes through the DHT, so a browser needs the storage node to carry it. Later.
 10. **Deploy on martl.io:** Hetzner, Caddy, monitoring, and the law (privacy policy, terms, deletion on request).
 
+## The PRF matrix (https://martl.io/prf.html)
+
+| Browser and provider | PRF at create | PRF at sign-in | Same again, unwraps | Across devices |
+|---|---|---|---|---|
+| Safari on iPhone (iOS 18.7), iCloud Keychain | yes, with a value | yes | not tried yet | not tried yet |
+
+Safari doesn't answer `getClientCapabilities()` for PRF ("not said") and PRF works there all the same: an account has to try it, not ask first.
+
 ## What a new device gets
 
 The passkey opens the sealed secrets at the storage node, the browser syncs from it over one connection, and it reads. No friend has to be online. A browser that evicted its storage gets the same.
