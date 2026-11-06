@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
-import type { IdentityInfo, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
+import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
@@ -63,6 +63,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
   const [words, setWords] = useState<string>();
   const [wrote, setWrote] = useState(false);
   const [restoring, setRestoring] = useState('');
+  // A backup file to restore from, with the words: then nobody else has to be online.
+  const [backupFile, setBackupFile] = useState('');
   const [busy, setBusy] = useState(false);
 
   const window = (title: string, body: React.ReactNode) => (
@@ -85,6 +87,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </p>
         <Words words={words} />
         <p className="small">{t('onboard.words.why')}</p>
+        <p className="small">{t('onboard.words.backup')}</p>
         <div className="field-row">
           <input id="wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
           <label htmlFor="wrote">{t('onboard.words.wrote')}</label>
@@ -160,13 +163,26 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
           setBusy(true);
-          const ok = await attempt(() => bridge.restore(restoring).then(() => true), t('onboard.restore.done'));
+          const ok = await attempt(() => bridge.restore(restoring, backupFile.trim() || undefined).then(() => true), t(backupFile.trim() ? 'onboard.restore.done.backup' : 'onboard.restore.done'));
           setBusy(false);
           if (ok) onDone();
         }}
       >
         <p className="small">{t('onboard.restore.intro')}</p>
         <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
+        <div className="field-row-stacked">
+          <label htmlFor="restore-backup">{t('onboard.restore.backup')}</label>
+          <div className="field-row">
+            <input id="restore-backup" className="grow" spellCheck={false} placeholder={t('onboard.restore.backup.placeholder')} value={backupFile} onChange={(e) => setBackupFile(e.target.value)} />
+            {bridge.pickFile && (
+              <button type="button" onClick={async () => setBackupFile((await bridge.pickFile!(t('onboard.restore.backup.pick'))) ?? backupFile)}>
+                {t('onboard.restore.backup.choose')}
+              </button>
+            )}
+          </div>
+          <p className="small muted">{t('onboard.restore.backup.why')}</p>
+        </div>
         <div className="buttons">
           <button type="button" onClick={() => setMode('create')}>
             {t('button.back')}
@@ -516,6 +532,142 @@ function KeystoreChoice({ current }: { current: Status['keystore'] }) {
   );
 }
 
+/**
+ * Your own backup: one file with everything this computer holds of your Weave, sealed with a key from your recovery
+ * words. Nobody else can bring your data back, so this says when you last saved one, and saves the next.
+ */
+function BackupBox({ last }: { last?: string }) {
+  const { t } = useTexts();
+  const [saved, setSaved] = useState<BackupInfo>();
+  const save = async () => {
+    const folder = await bridge.pickFolder(t('backup.pick.folder'));
+    if (!folder) return;
+    const done = await attempt(() => api<BackupInfo>('saveBackup', { to: folder }));
+    if (done) {
+      setSaved(done);
+      bump();
+    }
+  };
+  return (
+    <fieldset>
+      <legend>{t('backup.legend')}</legend>
+      <p className="small">{t('backup.about')}</p>
+      <p className="small">
+        {saved ? t('backup.saved', { file: saved.file, mb: (saved.bytes / 1048576).toFixed(1) }) : last ? t('backup.last', { time: ago(last) }) : <b>{t('backup.never')}</b>}
+      </p>
+      <div className="buttons">
+        <AsyncButton className="default" onClick={save}>
+          {t('backup.save')}
+        </AsyncButton>
+      </div>
+      <p className="small muted">{t('backup.where')}</p>
+    </fieldset>
+  );
+}
+
+/**
+ * Keepers, an option beside your own backup (a choice since 6.11.2026): with a friend you both turned it on with, each
+ * holds a sealed copy of the other's own space, direct chats and small groups. Nothing is offered or taken otherwise.
+ * Copies from before stay where they are until someone decides: you let yours go, or a keeper lets go of what it holds.
+ */
+function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boolean }) {
+  const { t } = useTexts();
+  const nameOf = (f: KeeperFriend) => f.who.name ?? shortDid(f.who.did);
+  const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
+  // A computer still on a Weave from before the choice (a phone paired with one) says nothing of friends.
+  const all = keeping.friends ?? [];
+  const friends = all.filter((f) => !f.gone);
+  const mayHold = (f: KeeperFriend) => (f.holds ? f.holds.items > 0 : !!f.before);
+  // People you don't keep copies with who hold one all the same: from before it was a choice.
+  const leftovers = all.filter((f) => !f.on && !f.lettingGo && mayHold(f));
+  const holding = all.filter((f) => f.kept);
+  const forUnknown = keeping.forUnknown ?? 0;
+  const on = friends.filter((f) => f.on).length;
+  // A phone shows where things stand; what's kept is decided at the computer.
+  const fixed = !!bridge.phone;
+  const noBackup = backedUp ? '' : ` ${t('keepers.no.backup')}`;
+  const standing = (f: KeeperFriend): string => {
+    if (f.lettingGo) return t('keepers.friend.letting.go');
+    if (!f.on) return mayHold(f) ? t('keepers.friend.before') : f.holds?.takes ? t('keepers.friend.offers') : '';
+    if (!f.holds) return t('keepers.friend.not.met');
+    // They say whether they take from you: only someone who turned it on with you does.
+    if (!f.holds.takes) return f.holds.items > 0 ? t('keepers.friend.before') : t('keepers.friend.not.yet');
+    if (f.holds.items > 0) return t('keepers.friend.holds', { time: ago(f.holds.at) });
+    return f.chosen ? t('keepers.friend.soon') : t('keepers.friend.spare');
+  };
+  const set = async (f: KeeperFriend, to: boolean) => {
+    if (!to && !(await ask(t('keepers.end.ask', { name: nameOf(f) }) + (mayHold(f) ? noBackup : ''), t('keepers.end')))) return;
+    await attempt(() => api('setKeeper', { who: f.who.did, on: to }).then(bump));
+  };
+  const letGo = async () => (await ask(t('keepers.let.go.ask', { names: leftovers.map(nameOf) }) + noBackup, t('keepers.let.go'))) && attempt(() => api('letCopiesGo').then(bump), t('keepers.let.go.done'));
+  const letOne = async (f: KeeperFriend) => (await ask(t('keepers.let.go.ask', { names: [nameOf(f)] }) + noBackup, t('keepers.let.go.one'))) && attempt(() => api('setKeeper', { who: f.who.did, on: false }).then(bump), t('keepers.let.go.done'));
+  const drop = async (f?: KeeperFriend) =>
+    (await ask(f ? t('keepers.drop.ask', { name: nameOf(f) }) : t('keepers.drop.all.ask'), t('keepers.drop'))) && attempt(() => api('dropKept', f ? { who: f.who.did } : {}).then(bump), t('keepers.dropped'));
+  return (
+    <fieldset>
+      <legend>{t('keepers.legend')}</legend>
+      <p className="small">
+        {t('keepers.about')}{' '}
+        <Info>
+          {t('keepers.about.more')}
+          {on > 0 && (
+            <ul>
+              {keeping.spaces.map((s) => (
+                <li key={s.space.id}>
+                  {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Info>
+      </p>
+      {friends.length === 0 ? (
+        <p className="small muted">{t('keepers.no.friends')}</p>
+      ) : (
+        <details className="small" open={on > 0 || friends.length <= 8}>
+          <summary>{t('keepers.choose', { on, of: friends.length })}</summary>
+          <ul className="keepers-friends">
+            {friends.map((f) => (
+              <li key={f.who.did} className="field-row">
+                <input type="checkbox" id={`keeper-${f.who.did}`} checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} />
+                <label htmlFor={`keeper-${f.who.did}`}>{nameOf(f)}</label>
+                <span className="muted">{standing(f)}</span>
+                {!fixed && !f.on && !f.lettingGo && mayHold(f) && (
+                  <AsyncButton className="link" onClick={() => letOne(f)}>
+                    {t('keepers.let.go.one')}
+                  </AsyncButton>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {leftovers.length > 0 && (
+        <p className="notice">
+          {t('keepers.before', { names: leftovers.map(nameOf), count: leftovers.length })}{' '}
+          {!fixed && <AsyncButton onClick={letGo}>{t('keepers.let.go')}</AsyncButton>}
+        </p>
+      )}
+      <p className="small muted">{keeping.forOthers ? t('keepers.you.keep', { mb: mb(keeping.forOthers), max: Math.round(keeping.quota / 1048576) }) : t('keepers.you.keep.nothing')}</p>
+      {keeping.forOthers > 0 && (
+        <>
+          <ul className="small keepers-friends">
+            {holding.map((f) => (
+              <li key={f.who.did}>
+                {t('keepers.kept.for', { name: nameOf(f), mb: mb(f.kept!.bytes), time: ago(f.kept!.asked) })} {!fixed && <AsyncButton onClick={() => drop(f)}>{t('keepers.drop')}</AsyncButton>}
+              </li>
+            ))}
+            {forUnknown > 0 && <li>{t('keepers.kept.unknown', { mb: mb(forUnknown) })}</li>}
+          </ul>
+          <p className="small muted">
+            {keeping.graceDays ? t('keepers.grace', { months: Math.round(keeping.graceDays / 30.4) }) : ''} {!fixed && (holding.length > 1 || forUnknown > 0) && <AsyncButton onClick={() => drop()}>{t('keepers.drop.all')}</AsyncButton>}
+          </p>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 export function KeysView() {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
@@ -529,8 +681,6 @@ export function KeysView() {
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   if (!info || !keys) return <Page title={t('nav.keys')}>{null}</Page>;
   const keystoreWhy = status?.keystoreWarning ? /\((.*)\)$/.exec(status.keystoreWarning)?.[1] : undefined;
-  // Who keeps anything of yours, each once.
-  const keeperNames = keeping ? [...new Map(keeping.spaces.flatMap((s) => s.keepers).map((k) => [k.did, k.name ?? shortDid(k.did)])).values()] : [];
   return (
     <Page
       title={
@@ -590,25 +740,8 @@ export function KeysView() {
           <KeystoreChoice current={status.keystore} />
         </fieldset>
       )}
-      {keeping && (
-        <fieldset>
-          <legend>{t('keepers.legend')}</legend>
-          <p className="small">
-            {keeperNames.length ? t('keepers.names', { names: keeperNames }) : t('keepers.none')}{' '}
-            <Info>
-              {t('keepers.about')}
-              <ul>
-                {keeping.spaces.map((s) => (
-                  <li key={s.space.id}>
-                    {s.space.name}: {s.keepers.length ? t('keepers.kept.by', { names: s.keepers.map((k) => k.name ?? shortDid(k.did)) }) : t('keepers.none.short')}
-                  </li>
-                ))}
-              </ul>
-            </Info>
-          </p>
-          <p className="small muted">{t('keepers.you.keep', { mb: (keeping.forOthers / 1048576).toFixed(1), max: Math.round(keeping.quota / 1048576) })}</p>
-        </fieldset>
-      )}
+      {!company && info.recoverable && <BackupBox last={status?.lastBackup} />}
+      {keeping && <KeepersBox keeping={keeping} backedUp={!!status?.lastBackup} />}
       <WalletBox />
       <fieldset>
         <legend>{t('devices.legend')}</legend>

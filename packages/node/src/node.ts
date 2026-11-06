@@ -47,6 +47,7 @@ import {
   messagesOf,
   newRecoveryWords,
   normalizeWords,
+  blobHash,
   open,
   parseManifest,
   type RoomPages,
@@ -121,6 +122,7 @@ import {
   type ReachInfo,
   type FetcherInfo,
   type ServiceInfo,
+  type BackupInfo,
   type WebsiteInfo,
   type KeyvaultInfo,
   type Preferences,
@@ -132,8 +134,9 @@ import { resolveHome, type Home } from './home.ts';
 import { moveHomeKey, readSecretJson, writeSecretJson } from './vault.ts';
 import { type Fetch } from './github.ts';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join as joinPath } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
+import { backupKey, readBackup, readBackupHead, writeBackup, type BackupHead } from './backupfile.ts';
 import { hostname } from 'node:os';
 import { LiveRooms } from './live.ts';
 import { loadAgents, saveAgent, loadEncryptionKeys, loadIdentity, saveDevice, saveEncryptionKeys, type AgentKey, type EncryptionKey } from './keystore.ts';
@@ -1567,6 +1570,79 @@ export class WeaveNode implements Backend {
     return this.#companies.backup(...args);
   }
 
+  /**
+   * Save this person's Weave as one encrypted file (backupfile.ts): everything this node holds (events as they
+   * travel, the keys of its spaces, its attachments), sealed with a key from their recovery words. `to` is a folder
+   * (the file gets a name with the date) or the file itself. The file alone opens nothing; the words and the file
+   * bring it all back on a new computer (restoreBackup), with nobody else involved.
+   */
+  async saveBackup(input: { to: string }): Promise<BackupInfo> {
+    const me = this.identity.author;
+    const state = this.replica.authority.keys(me);
+    if (state.org) throw new WeaveError('daemon.backup.company', {}, "a company account has no recovery words of its own: its company keeps its data, and backs it up");
+    if (!state.next) throw new WeaveError('daemon.backup.no.words', {}, 'this identity was made before recovery words existed: there is nothing to open a backup with');
+    if (!input.to?.trim()) throw new Error('say where to save it: a folder, or a file ending in .weavebackup');
+    const created = new Date(this.clock()).toISOString();
+    const name = this.nameOf(me);
+    const target = resolvePath(input.to.trim());
+    const isFile = /\.weavebackup$/i.test(target);
+    const dir = isFile ? dirname(target) : target;
+    mkdirSync(dir, { recursive: true });
+    const slug = (name ?? 'weave').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'weave';
+    const file = isFile ? target : joinPath(dir, `weave-backup-${slug}-${created.slice(0, 10)}.weavebackup`);
+    const spaces = loadSpaces(this.home);
+    const records = this.replica.events();
+    const blobs = existsSync(this.home.blobs) ? readdirSync(this.home.blobs).filter((f) => /^[A-Za-z0-9_-]{20,}$/.test(f)) : [];
+    const head: BackupHead = { v: 1, author: me, ...(name ? { name } : {}), created, events: records.length, spaces: spaces.length };
+    const home = this.home;
+    function* lines(): Generator<string> {
+      yield JSON.stringify({ spaces });
+      for (const r of records) yield JSON.stringify({ event: r.wire });
+      for (const hash of blobs) yield JSON.stringify({ blob: hash, data: readFileSync(joinPath(home.blobs, hash)).toString('base64') });
+    }
+    const bytes = writeBackup(file, backupKey(this.#selfSecret()), head, lines());
+    this.config = { ...this.config, lastBackup: created };
+    saveConfig(this.home, this.config);
+    return { file, bytes, events: records.length, spaces: spaces.length, attachments: blobs.length, created };
+  }
+
+  /**
+   * A new computer from the recovery words and a backup file: the identity, its spaces with their keys, and
+   * everything the backup holds, with no peer, keeper or network. The words must be the ones the backup was made
+   * with: they are its key. Nothing is set up here unless the file opens.
+   */
+  static async restoreBackup(words: string, file: string, dir?: string): Promise<WeaveNode> {
+    const clean = normalizeWords(words);
+    const path = resolvePath(file);
+    if (!existsSync(path)) throw new Error(`there is no file ${path}`);
+    const head = readBackupHead(path);
+    if (head.author !== recoveryIdentity(clean)) throw new Error('this backup belongs to another identity than these recovery words');
+    const key = backupKey(recoveryEncryptionKey(clean, 0).secretKey);
+    // Opened whole before anything is set up: a file that doesn't open leaves this computer as it was.
+    const spaces: StoredSpace[] = [];
+    const events: unknown[] = [];
+    for (const line of readBackup(path, key)) {
+      const item = JSON.parse(line) as { spaces?: StoredSpace[]; event?: unknown; blob?: string };
+      if (Array.isArray(item.spaces)) spaces.push(...item.spaces);
+      else if (item.event !== undefined) events.push(item.event);
+    }
+    const node = await WeaveNode.restore(clean, dir, { events });
+    // Once more: what waited for something that came later in the file.
+    for (const event of events) node.replica.ingest(event);
+    for (const space of spaces) if (space && typeof space.id === 'string' && !node.#spaces.has(space.id)) await node.#kernel.addSpace(space);
+    // Attachments, straight from the file to the blob store (they can be large: never all in memory).
+    for (const line of readBackup(path, key)) {
+      if (!line.startsWith('{"blob"')) continue;
+      const item = JSON.parse(line) as { blob: string; data: string };
+      const data = Buffer.from(item.data, 'base64');
+      if (blobHash(data) === item.blob) node.blobs.put(data);
+    }
+    node.#kernel.invalidateDecoded();
+    node.config = { ...node.config, lastBackup: head.created };
+    saveConfig(node.home, node.config);
+    return node;
+  }
+
   keystores(...args: Parameters<Companies['keystores']>): ReturnType<Companies['keystores']> {
     return this.#companies.keystores(...args);
   }
@@ -1811,6 +1887,7 @@ export class WeaveNode implements Backend {
     changed += this.#retention.applyShreds();
     changed += this.#retention.forget();
     changed += this.#holding.release();
+    this.#holding.purgeKept();
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#kernel.state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
@@ -2654,6 +2731,18 @@ export class WeaveNode implements Backend {
     return this.#holding.keepers(...args);
   }
 
+  setKeeper(...args: Parameters<Holding['setKeeper']>): ReturnType<Holding['setKeeper']> {
+    return this.#holding.setKeeper(...args);
+  }
+
+  letCopiesGo(...args: Parameters<Holding['letCopiesGo']>): ReturnType<Holding['letCopiesGo']> {
+    return this.#holding.letCopiesGo(...args);
+  }
+
+  dropKept(...args: Parameters<Holding['dropKept']>): ReturnType<Holding['dropKept']> {
+    return this.#holding.dropKept(...args);
+  }
+
   get pulledAbove() {
     return this.#holding.pulledAbove;
   }
@@ -3165,6 +3254,7 @@ export class WeaveNode implements Backend {
       friends: n.#kernel.friends.bind(n.#kernel),
       // Lazily: retention is built after this module.
       held: (state) => n.#retention.held(state),
+      resolve: (who) => n.resolve(who),
       get isLinkedNode() {
         return n.#isLinkedNode;
       },

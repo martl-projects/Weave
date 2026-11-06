@@ -40,9 +40,10 @@ export function enrollIdentity(home: Home, link: string): Promise<{ name?: strin
 }
 
 /** Set this computer up as another device of an identity; the words go in on stdin, never on the command line. */
-export function restoreIdentity(home: Home, words: string): Promise<void> {
+export function restoreIdentity(home: Home, words: string, backup?: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = execFile(NODE, [CLI, '--home', home.dir, 'restore'], { timeout: 60_000, env: ENV }, (error, _stdout, stderr) => {
+    // With a backup file the words and the file are enough (no network); a large file takes a while to open.
+    const child = execFile(NODE, [CLI, '--home', home.dir, 'restore', ...(backup ? ['--backup', backup] : [])], { timeout: backup ? 15 * 60_000 : 60_000, env: ENV }, (error, _stdout, stderr) => {
       if (error) reject(new Error(stderr.split('\n').find((l) => l.startsWith('weave: '))?.slice(7) ?? error.message));
       else resolve();
     });

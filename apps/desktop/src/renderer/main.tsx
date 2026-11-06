@@ -685,10 +685,17 @@ function Shell() {
         <Icon name="plug" /> {t('status.shipped.missing')}
       </div>
     );
+    // Nobody else can bring a person's data back: said until a backup was saved, and again when the last one is a month old.
+    const backupDue = status?.backupDue && routeKey !== 'keys' && (
+      <a className="notice" href="#/keys">
+        <Icon name="lock" /> {t(status.backupDue === 'again' ? 'backup.due.again' : 'backup.due.never')}
+      </a>
+    );
     body = (
       <div className="center">
         {unprotected}
         {shippedMissing}
+        {backupDue}
         {center}
       </div>
     );
