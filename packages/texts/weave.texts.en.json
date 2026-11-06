@@ -2604,7 +2604,7 @@
     "keepers.let.go.ask": "Tell {names, list} to let go of what they hold of yours? It happens when you next meet, and can't be taken back.",
     "keepers.let.go.done": "They let go when you next meet.",
     "keepers.you.keep.nothing": "You keep nothing for friends.",
-    "keepers.kept.for": "{name}: {mb} MB, last asked about {time}",
+    "keepers.kept.for": "{name}: {mb} MB, last asked: {time}",
     "keepers.kept.unknown": "{mb} MB from before, of friends who haven't come by since",
     "keepers.grace": "{months, plural, one {What nobody asks about for # month goes by itself.} other {What nobody asks about for # months goes by itself.}}",
     "keepers.drop": "Let go of it",

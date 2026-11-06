@@ -2604,7 +2604,7 @@
     "keepers.let.go.ask": "{names, list} sagen, dass freigegeben wird, was dort von dir liegt? Das geschieht, wenn ihr euch das nächste Mal trefft, und lässt sich nicht zurücknehmen.",
     "keepers.let.go.done": "Sie geben frei, wenn ihr euch das nächste Mal trefft.",
     "keepers.you.keep.nothing": "Du verwahrst nichts für Freunde.",
-    "keepers.kept.for": "{name}: {mb} MB, zuletzt danach gefragt {time}",
+    "keepers.kept.for": "{name}: {mb} MB, zuletzt gefragt: {time}",
     "keepers.kept.unknown": "{mb} MB von früher, von Freunden, die seitdem nicht vorbeigekommen sind",
     "keepers.grace": "{months, plural, one {Wonach # Monat lang niemand fragt, wird von selbst freigegeben.} other {Wonach # Monate lang niemand fragt, wird von selbst freigegeben.}}",
     "keepers.drop": "Freigeben",

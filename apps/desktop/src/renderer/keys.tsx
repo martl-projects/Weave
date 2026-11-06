@@ -628,11 +628,15 @@ function KeepersBox({ keeping, backedUp }: { keeping: KeepersInfo; backedUp: boo
           <summary>{t('keepers.choose', { on, of: friends.length })}</summary>
           <ul className="keepers-friends">
             {friends.map((f) => (
-              <li key={f.who.did}>
-                <label>
-                  <input type="checkbox" checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} /> {nameOf(f)}
-                </label>{' '}
-                <span className="muted">{standing(f)}</span> {!fixed && !f.on && !f.lettingGo && mayHold(f) && <AsyncButton onClick={() => letOne(f)}>{t('keepers.let.go.one')}</AsyncButton>}
+              <li key={f.who.did} className="field-row">
+                <input type="checkbox" id={`keeper-${f.who.did}`} checked={f.on} disabled={fixed} onChange={(e) => void set(f, e.target.checked)} />
+                <label htmlFor={`keeper-${f.who.did}`}>{nameOf(f)}</label>
+                <span className="muted">{standing(f)}</span>
+                {!fixed && !f.on && !f.lettingGo && mayHold(f) && (
+                  <AsyncButton className="link" onClick={() => letOne(f)}>
+                    {t('keepers.let.go.one')}
+                  </AsyncButton>
+                )}
               </li>
             ))}
           </ul>
