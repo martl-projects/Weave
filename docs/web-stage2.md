@@ -58,7 +58,7 @@ In order, each one usable and tested before the next:
 
 | Browser and provider | PRF at create | PRF at sign-in | Same again, unwraps | Across devices |
 |---|---|---|---|---|
-| Safari on iPhone (iOS 18.7), iCloud Keychain | yes, with a value | yes | not tried yet | not tried yet |
+| Safari on iPhone (iOS 18.7), iCloud Keychain | yes, with a value | yes | same secret across a reload of the page | not tried yet |
 
 Safari doesn't answer `getClientCapabilities()` for PRF ("not said") and PRF works there all the same: an account has to try it, not ask first.
 
