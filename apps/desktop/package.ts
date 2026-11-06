@@ -176,7 +176,10 @@ const config: Configuration = {
   // nsis: per person, with the weave command on PATH. msi: per machine, for IT to push silently (msiexec /i … /qn).
   win: { target: store ? [{ target: 'appx', arch: ['x64'] }] : [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }], sign: store ? null : azure },
   // The Microsoft Store's package. Tiles from build/appx. The Store updates it (src/updatestate.ts); no weave command on the PATH.
-  appx: { applicationId: 'Weave', displayName: 'Weave', identityName: env.WEAVE_STORE_IDENTITY, publisher: env.WEAVE_STORE_PUBLISHER, publisherDisplayName: env.WEAVE_STORE_PUBLISHER_NAME, languages: ['en-US', 'de-DE'], backgroundColor: 'transparent' },
+  appx: { applicationId: 'Weave', displayName: 'Weave', identityName: env.WEAVE_STORE_IDENTITY, publisher: env.WEAVE_STORE_PUBLISHER, publisherDisplayName: env.WEAVE_STORE_PUBLISHER_NAME, languages: ['en-US', 'de-DE'], backgroundColor: 'transparent',
+    // From Windows 10 1809, up to the Windows it was built for.
+    minVersion: '10.0.17763.0',
+    maxVersionTested: '10.0.26200.0' },
   msi: { perMachine: true, oneClick: true, runAfterFinish: false },
   // installer.nsh puts resources/bin (the weave command) on the user's PATH.
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, include: 'installer.nsh' },
