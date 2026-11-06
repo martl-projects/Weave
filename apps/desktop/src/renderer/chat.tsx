@@ -149,24 +149,27 @@ function Message({
           )}
         </div>
       </div>
-      <div className="msg-tools">
-        {QUICK_REACTIONS.map((emoji) => (
-          <button key={emoji} title={t('msg.react', { emoji })} onClick={() => react(emoji)}>
-            {emoji}
+      {/* Nothing to react to, answer or delete until the node has it under its own id. */}
+      {!sending && (
+        <div className="msg-tools">
+          {QUICK_REACTIONS.map((emoji) => (
+            <button key={emoji} title={t('msg.react', { emoji })} onClick={() => react(emoji)}>
+              {emoji}
+            </button>
+          ))}
+          <button title={t('msg.react.more')} onClick={() => setPicking(true)}>
+            ☺
           </button>
-        ))}
-        <button title={t('msg.react.more')} onClick={() => setPicking(true)}>
-          ☺
-        </button>
-        <button title={t('msg.reply')} onClick={() => onReply(m)}>
-          ↩
-        </button>
-        {mayDelete && (
-          <button title={t('button.delete')} onClick={() => void remove()}>
-            🗑
+          <button title={t('msg.reply')} onClick={() => onReply(m)}>
+            ↩
           </button>
-        )}
-      </div>
+          {mayDelete && (
+            <button title={t('button.delete')} onClick={() => void remove()}>
+              🗑
+            </button>
+          )}
+        </div>
+      )}
       {picking && (
         <EmojiPicker
           onPick={(emoji) => {
@@ -285,9 +288,9 @@ function Composer({
     const sent = await attempt(() => api<MessageInfo>('say', { ...where, text: message, replyTo: replyTo?.id, ...(attachment ? { file: attachment } : {}) }));
     onSent(pending.id, sent);
     if (sent === undefined) {
-      // Keep it all if sending failed.
-      setText(message);
-      setFile(file);
+      // Keep it all if sending failed, ahead of whatever was typed meanwhile.
+      setText((typed) => (typed.trim() ? `${message}\n${typed}` : message));
+      setFile((picked) => picked ?? file);
     }
   };
 
@@ -375,22 +378,26 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
     () => api<MessageInfo[]>('messages', post ? null : space.id, post ? { post, limit: 1000 } : { channel, limit: 1000 }),
     [space.id, channel, post],
   );
+  const seenKey = post ? `post/${post}` : `${space.id}/${channel}`;
   // Messages you sent that the list hasn't caught up with: shown at once (dimmed until the node answers), in time order
-  // with the rest, and dropped once the list has them, or when the node refused them.
-  const [sent, setSent] = useState<MessageInfo[]>([]);
+  // with the rest, and dropped once the list has them, or when the node refused them. Each remembers the chat it went
+  // to: this view stays mounted across channels, and one sent in another channel is not shown here.
+  const [sent, setSent] = useState<{ chat: string; m: MessageInfo }[]>([]);
   const shown = useMemo(() => {
-    if (!sent.length) return messages ?? [];
+    const here = sent.filter((s) => s.chat === seenKey).map((s) => s.m);
+    if (!here.length) return messages ?? [];
     const known = new Set(messages?.map((m) => m.id));
-    return [...(messages ?? []), ...sent.filter((m) => !known.has(m.id))].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
-  }, [messages, sent]);
+    return [...(messages ?? []), ...here.filter((m) => !known.has(m.id))].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+  }, [messages, sent, seenKey]);
   useEffect(() => {
     if (!messages || !sent.length) return;
     const known = new Set(messages.map((m) => m.id));
-    if (sent.some((m) => known.has(m.id))) setSent((s) => s.filter((m) => !known.has(m.id)));
-  }, [messages, sent]);
-  const sending = (message: MessageInfo) => setSent((s) => [...s, message]);
-  const settled = (pending: string, message?: MessageInfo) => setSent((s) => (message ? s.map((m) => (m.id === pending ? message : m)) : s.filter((m) => m.id !== pending)));
-  const seenKey = post ? `post/${post}` : `${space.id}/${channel}`;
+    const caughtUp = (s: { chat: string; m: MessageInfo }) => s.chat === seenKey && known.has(s.m.id);
+    if (sent.some(caughtUp)) setSent((all) => all.filter((s) => !caughtUp(s)));
+  }, [messages, sent, seenKey]);
+  const sending = (message: MessageInfo) => setSent((all) => [...all, { chat: seenKey, m: message }]);
+  const settled = (pending: string, message?: MessageInfo) =>
+    setSent((all) => (message ? all.map((s) => (s.m.id === pending ? { ...s, m: message } : s)) : all.filter((s) => s.m.id !== pending)));
   const { t } = useTexts();
   const [replyTo, setReplyTo] = useState<MessageInfo>();
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
