@@ -835,7 +835,7 @@ export class WeaveNode implements Backend {
   #managed: ManagedKeys = new ManagedKeys(this, WeaveNode.managedCore(this));
   /** Money: tiers, badges, treasuries, Safes, wallets and tickets (payments.ts). */
   #payments: Payments = new Payments(this, WeaveNode.paymentsCore(this));
-  /** Who holds what: pulled spaces, keepers, older history on request, budgets (holding.ts). */
+  /** Who holds what: pulled spaces, the copies friends hold from before, older history on request, budgets (holding.ts). */
   #holding: Holding = new Holding(this, WeaveNode.holdingCore(this));
   /** Retention: legal holds, forgetting by rule, keeping posts, shredding old keys (retention.ts). */
   #retention: Forgetting = new Forgetting(this, WeaveNode.retentionCore(this));
@@ -1608,7 +1608,7 @@ export class WeaveNode implements Backend {
 
   /**
    * A new computer from the recovery words and a backup file: the identity, its spaces with their keys, and
-   * everything the backup holds, with no peer, keeper or network. The words must be the ones the backup was made
+   * everything the backup holds, with no peer and no network. The words must be the ones the backup was made
    * with: they are its key. Nothing is set up here unless the file opens.
    */
   static async restoreBackup(words: string, file: string, dir?: string): Promise<WeaveNode> {
@@ -1902,7 +1902,7 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#companies.streamAudit();
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
-    // Bookkeeping for keepers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
+    // Bookkeeping for our own computers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
     if (!this.#isLinkedNode) {
       this.#holding.writeKeepIndex();
       this.#writeNodeIndex();
@@ -2729,10 +2729,6 @@ export class WeaveNode implements Backend {
 
   keepers(...args: Parameters<Holding['keepers']>): ReturnType<Holding['keepers']> {
     return this.#holding.keepers(...args);
-  }
-
-  setKeeper(...args: Parameters<Holding['setKeeper']>): ReturnType<Holding['setKeeper']> {
-    return this.#holding.setKeeper(...args);
   }
 
   letCopiesGo(...args: Parameters<Holding['letCopiesGo']>): ReturnType<Holding['letCopiesGo']> {
