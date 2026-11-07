@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { join as joinPath } from 'node:path';
-import { type Did, type EventV2, type Json, type WeaveRecord, isWireItemV2, keepStreamId, keepTag, keepWrapKey, parseScope, rank, rekey, spaceScope, unwrapFromKeeper, wrapForKeeper } from '@weave/core';
+import { type Did, type EventV2, type Json, type WeaveRecord, isWireItemV2, keepStreamId, keepTag, keepWrapKey, parseScope, rank, rekey, spaceScope, unwrapFromKeeper } from '@weave/core';
 import { type KeepAccess } from '@weave/net';
-import { type KeepersInfo, type PostInfo } from './backend.ts';
+import { type KeeperFriend, type KeepersInfo, type PostInfo } from './backend.ts';
 import { CARRIED_STATE, DAY_MS, KIND_NODE_INDEX, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
 import { type StoredSpace } from './spacestore.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
@@ -15,9 +15,9 @@ import type { Decoded, WeaveNode } from './node.ts';
 
 /*
  * Who holds what (stages 4, 5 and 8): which spaces this node keeps whole and
- * which it pulls only part of, keepers that hold a space for its members,
- * fetching older history on request, and the budgets that hold back what
- * peers write too fast. It sees the node's internals only through
+ * which it pulls only part of, the copies friends hold of small spaces from
+ * before (keepers, taken out on 6.11.2026 and wound down here), fetching older
+ * history on request, and the budgets that hold back what peers write too fast. It sees the node's internals only through
  * HoldingCore; the node delegates the Backend methods to it.
  */
 
@@ -31,28 +31,42 @@ const KEEP_READ_MS = 30 * 24 * 3600 * 1000;
 
 const SHARE_HOLDERS = 3;
 
-/** Stage 5: how many keep each small space, up to which size a space is kept, when a keeper counts as gone, and what we keep for others. */
-const KEEPERS = 3;
-
+/** Up to which size a group or project counted as small: friends kept copies of those (stage 5, until 6.11.2026). */
 const KEPT_UP_TO = 3;
 
-const KEEPER_GONE_MS = 14 * 24 * 3600 * 1000;
+/** How often at most what a meeting tells us is written to disk (every connection would be too often). */
+const SAVE_AT_MOST_MS = 3600 * 1000;
 
-/** How often at most a keeper's "last seen" is written to disk (every connection would be too often). */
-const SEEN_SAVE_MS = 3600 * 1000;
+/** A stream kept here that nobody asked about for this long is let go: its owner's node asks at every contact, so only what was abandoned ages out. */
+const KEEP_GRACE_DAYS = 365;
 
-const KEEP_QUOTA = 500 * 1024 * 1024;
+/** A stream whose year is over goes at a later look, this many days on: never at the first look after a long time away. */
+const KEEP_PURGE_WAIT_DAYS = 7;
 
-const KEEP_STREAM_QUOTA = 50 * 1024 * 1024;
-
-/** Our kept spaces and their keys, in our own space, for recovery. */
+/** Our small spaces and their keys, in our own space. */
 const KIND_KEEP_INDEX = 'weave.keep.index';
 
+/** Where the copies from before stand: what friends hold of ours, and what we hold of theirs. */
 interface KeepState {
+  /** Written by a Weave with keepers: the spaces it had kept, and by whom. Read for who may hold a copy, never written to. */
   spaces: Record<string, Did[]>;
-  seen: Record<string, string>;
   /** Hash of the last keep index written. */
   index: string;
+  /**
+   * People told to let go of what they hold of ours (when). Not a standing order: done once they answer that they
+   * hold nothing.
+   */
+  off: Record<string, string>;
+  /** When this person last said that every copy friends hold goes. */
+  letGo?: string;
+  /** Friends a Weave with keepers chose, not asked since: they may still hold a copy. */
+  before: Did[];
+  /** What each one said it holds of our streams (items in all), and when. */
+  holds: Record<string, { items: number; at: string }>;
+  /** Streams kept here for others: whose it is (once they asked about it), when it was last asked about, and since when its year is over. */
+  streams: Record<string, { from?: Did; asked: string; due?: string }>;
+  /** When this node last looked for streams to let go: time it didn't run doesn't count towards a stream's year. */
+  looked?: string;
 }
 
 /** Stage 8: live content per author per space and hour, by how far this node trusts them there. */
@@ -79,6 +93,8 @@ export interface HoldingCore {
   keysOnly(space: StoredSpace): SpaceKeys;
   readonly managed: ManagedKeys;
   managers(state: SpaceState): Set<Did>;
+  /** A person by name, id or url. */
+  resolve(who: string): Did;
   sealForSelf(inner: Inner): EventFields;
   selfBodies(kind: string): Array<Record<string, unknown>>;
   selfSecret(): Uint8Array;
@@ -152,15 +168,33 @@ export class Holding {
     return 'over budget';
   };
 
-  // ---------------------------------------------------------------- keepers (stage 5)
+  // ---------------------------------------------------------------- copies from before (keepers, stage 5; taken out 6.11.2026)
+
+  /*
+   * Until 6.11.2026 friends kept wrapped copies of each other's small spaces (keepers). That is over: a person saves
+   * their own Weave as a backup file (backupfile.ts), and nothing new is ever kept for or sent to a friend. What is
+   * left here winds the old copies down without costing anyone their only copy: a node still gives back what it
+   * holds, an owner can take theirs back and tell friends to let go, a keeper can let go, and what nobody asks about
+   * for a year goes by itself.
+   */
 
   #keepState?: KeepState;
 
-  /** Who keeps which of our spaces, and when we last saw each keeper (sealed at rest). */
+  /** Where the copies from before stand (sealed at rest). */
   get #keeping(): KeepState {
     if (!this.#keepState) {
-      const stored = readSecretJson<KeepState>(this.node.home, joinPath(this.node.home.dir, 'keepers.json'));
-      this.#keepState = { spaces: stored?.spaces ?? {}, seen: stored?.seen ?? {}, index: stored?.index ?? '' };
+      const stored = readSecretJson<Partial<KeepState>>(this.node.home, joinPath(this.node.home.dir, 'keepers.json'));
+      this.#keepState = {
+        spaces: stored?.spaces ?? {},
+        index: stored?.index ?? '',
+        off: stored?.off ?? {},
+        ...(stored?.letGo ? { letGo: stored.letGo } : {}),
+        // A file a Weave with keepers wrote: those it chose then may still hold copies.
+        before: stored?.before ?? [...new Set(Object.values(stored?.spaces ?? {}).flat())],
+        holds: stored?.holds ?? {},
+        streams: stored?.streams ?? {},
+        ...(stored?.looked ? { looked: stored.looked } : {}),
+      };
     }
     return this.#keepState;
   }
@@ -170,137 +204,141 @@ export class Holding {
   }
 
   /**
-   * The spaces keepers keep for us: our own space, direct chats, and groups and projects of 3 people or fewer. A direct
-   * chat is derived for everyone whose log we hold (kernel.ts ensureDirects): one with nothing in it (`empty`) gets no
-   * keepers and isn't listed, but its stream is still asked for, since a chat we lost looks the same (recovery).
+   * The spaces friends kept copies of: our own space, direct chats, and groups and projects of 3 people or fewer. A
+   * direct chat is derived for everyone whose log we hold (kernel.ts ensureDirects), also one with nothing in it: a
+   * chat we lost looks the same, and its stream is how it comes back.
    */
-  #keptSpaces(): Array<{ scope: string; space?: StoredSpace; peer?: Did; empty?: true }> {
+  #keptSpaces(): Array<{ scope: string; space?: StoredSpace }> {
     this.core.ensureDirects();
     return [
       { scope: SELF_SCOPE },
-      ...[...this.core.directs.values()].map(({ space, peer }) => ({ scope: spaceScope(space), space, peer, ...(this.node.replica.events((r) => r.scope === spaceScope(space)).length ? {} : { empty: true as const }) })),
-      // A company's spaces are kept by its own archive, never by friends (stage 13).
+      ...[...this.core.directs.values()].map(({ space }) => ({ scope: spaceScope(space), space })),
+      // A company's spaces were kept by its own archive, never by friends (stage 13).
       ...[...this.core.spaces.values()].filter((s) => (s.kind === 'group' || s.kind === 'project') && this.core.state(s).members.size <= KEPT_UP_TO && !this.core.managed.managedRaw(s).setting).map((space) => ({ scope: spaceScope(space), space })),
     ];
   }
 
-  /** Which friend is at the other end of a connection: the one whose direct chat it shares. */
-  #friendOn(shared: ReadonlySet<string>): Did | undefined {
+  /** Who is at the other end of a connection: the one whose direct chat it shares, a friend or not. */
+  #peerOn(shared: ReadonlySet<string>): Did | undefined {
+    // One of our own computers shares all our direct chats, and our own space: nobody who keeps anything of ours.
+    if (shared.has(SELF_SCOPE)) return undefined;
+    let other: Did | undefined;
     for (const scope of shared) {
       if (!scope.startsWith('direct:')) continue;
       const peer = this.core.directs.get(scope.slice('direct:'.length))?.peer;
       if (peer && this.core.friends().includes(peer)) return peer;
+      other ??= peer;
     }
-    return undefined;
+    return other;
   }
 
-  /** The keepers of a kept space: chosen at random among friends (never the other one of a direct chat), replaced when not seen for 14 days. */
-  #keepersOf(scope: string, peer?: Did): Did[] {
-    const state = this.#keeping;
-    const now = this.node.clock();
-    const stale = (did: Did) => now - Date.parse(state.seen[did] ?? new Date(now).toISOString()) > KEEPER_GONE_MS;
-    const friends = this.core.friends().filter((f) => f !== peer);
-    let keepers = (state.spaces[scope] ?? []).filter((k) => friends.includes(k) && !stale(k));
-    const candidates = friends.filter((f) => !keepers.includes(f) && !stale(f));
-    while (keepers.length < KEEPERS && candidates.length) keepers.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
-    if (JSON.stringify(keepers) !== JSON.stringify(state.spaces[scope] ?? [])) {
-      for (const k of keepers) state.seen[k] ??= new Date(now).toISOString();
-      state.spaces[scope] = keepers;
-      this.#saveKeeping();
-    }
-    return keepers;
+  /** Does this person hold, or may they hold, something of ours? What they said when last asked; before that, whether a Weave with keepers chose them. */
+  #mayHold(did: Did): boolean {
+    const holds = this.#keeping.holds[did];
+    return holds ? holds.items > 0 : this.#keeping.before.includes(did);
   }
 
-  /** A space's events as keepers get them, by tag. */
+  /** A space's events as keepers got them, by tag. */
   #keepItems(scope: string): Map<string, WeaveRecord> {
     const key = keepWrapKey(this.core.selfSecret(), scope);
     return new Map(this.node.replica.events((r) => r.scope === scope).map((r) => [keepTag(key, r.id), r]));
   }
 
-  /** A friend is here: written down, and to disk at most once an hour, so a restart doesn't make keepers look long gone. */
-  #sawFriend(friend: Did): void {
-    const state = this.#keeping;
-    const now = this.node.clock();
-    const before = Date.parse(state.seen[friend] ?? '');
-    state.seen[friend] = new Date(now).toISOString();
-    if (Number.isNaN(before) || now - before >= SEEN_SAVE_MS) this.#saveKeeping();
-  }
-
   /**
-   * Streams a keeper once held for us of spaces no longer kept (a group that grew, a space we left) or that another
-   * keeper took over: offered with `keeper: false`, so the session tells it to let them go once we hold everything.
-   * A space gone from this node altogether is forgotten here: nothing of it to compare, so nothing to say.
+   * Every space a friend may hold a copy of: those above, and those a Weave with keepers wrote down that aren't kept
+   * spaces any more (a group that grew). A space gone from this node altogether is forgotten here: nothing of it to
+   * compare, so nothing to ask.
    */
-  #retiredStreams(friend: Did, kept: Array<{ scope: string }>): Array<{ id: string; tags: string[]; keeper: boolean }> {
+  #keptScopes(): string[] {
     const state = this.#keeping;
-    const current = new Set(kept.map((k) => k.scope));
-    const retired: Array<{ id: string; tags: string[]; keeper: boolean }> = [];
+    const scopes = new Set(this.#keptSpaces().map((k) => k.scope));
     for (const scope of Object.keys(state.spaces)) {
-      if (current.has(scope)) continue;
       const id = parseScope(scope)?.id;
-      if (!(scope === SELF_SCOPE || (id && (this.core.spaces.has(id) || this.core.directs.has(id))))) {
+      if (scope === SELF_SCOPE || (id && (this.core.spaces.has(id) || this.core.directs.has(id)))) scopes.add(scope);
+      else {
         delete state.spaces[scope];
         this.#saveKeeping();
-        continue;
       }
-      retired.push({ id: keepStreamId(this.core.selfSecret(), scope, friend), tags: [...this.#keepItems(scope).keys()], keeper: false });
     }
-    return retired;
+    return [...scopes];
   }
 
   keepAccess: KeepAccess = {
     streams: (shared) => {
-      const friend = this.#friendOn(shared);
-      if (!friend) return [];
-      this.#sawFriend(friend);
-      const kept = this.#keptSpaces();
-      return [
-        ...kept.map(({ scope, peer, empty }) => ({
-          id: keepStreamId(this.core.selfSecret(), scope, friend),
-          tags: [...this.#keepItems(scope).keys()],
-          // An empty direct chat has no keepers; asked for all the same, in case a keeper holds what we lost.
-          keeper: !empty && this.#keepersOf(scope, peer).includes(friend),
-        })),
-        ...this.#retiredStreams(friend, kept),
-      ];
-    },
-    wrapped: (id, tags) => {
-      const found = this.#streamScope(id);
-      if (!found) return [];
-      const key = keepWrapKey(this.core.selfSecret(), found);
-      const items = this.#keepItems(found);
-      return tags.flatMap((tag) => {
-        const record = items.get(tag);
-        return record ? [{ tag, data: wrapForKeeper(key, record.wire as unknown as Json) }] : [];
-      });
+      const peer = this.#peerOn(shared);
+      if (!peer) return [];
+      const state = this.#keeping;
+      const told = !!state.off[peer];
+      // A friend is asked until they said they hold nothing of ours (someone who just restored doesn't know who
+      // does); someone no longer a friend only while they may hold something. Whoever was told to let go, until they did.
+      const ask = told || (this.core.friends().includes(peer) ? !state.holds[peer] || state.holds[peer].items > 0 : this.#mayHold(peer));
+      if (!ask) return [];
+      // `drop`: our person decided that what this one holds goes. Otherwise they're only asked, and what they hold
+      // stays where it is: nothing is let go without a decision.
+      return this.#keptScopes().map((scope) => ({ id: keepStreamId(this.core.selfSecret(), scope, peer), tags: [...this.#keepItems(scope).keys()], drop: told }));
     },
     take: (id, items) => {
       const found = this.#streamScope(id);
-      if (!found) return;
+      if (!found) return 0;
       const key = keepWrapKey(this.core.selfSecret(), found);
+      let taken = 0;
       for (const { data } of items) {
         const wire = unwrapFromKeeper(key, data);
-        if (wire !== undefined) this.node.replica.ingest(wire);
+        if (wire !== undefined && this.node.replica.ingest(wire).status === 'accepted') taken++;
       }
+      // Nothing new (or nothing that unwraps): nothing to decode again.
+      if (!taken) return 0;
       // What came back may be our keep index: take the spaces it lists.
       this.core.invalidateDecoded();
       this.recoverSpaces();
+      return taken;
     },
-    accepts: (shared, id, bytes) => !!this.#friendOn(shared) && this.node.replica.store.keepBytes() + bytes <= KEEP_QUOTA && this.node.replica.store.keepBytes(id) + bytes <= KEEP_STREAM_QUOTA,
+    mayDrop: (shared, id) => {
+      const from = this.#keeping.streams[id]?.from;
+      return !from || from === this.#peerOn(shared);
+    },
+    asked: (shared, ids) => {
+      const state = this.#keeping;
+      const peer = this.#peerOn(shared);
+      const now = this.node.clock();
+      let save = false;
+      for (const id of ids) {
+        const known = state.streams[id];
+        const from = peer ?? known?.from;
+        const before = Date.parse(known?.asked ?? '');
+        if (Number.isNaN(before) || now - before >= SAVE_AT_MOST_MS || known?.from !== from) save = true;
+        state.streams[id] = { ...(from ? { from } : {}), asked: new Date(now).toISOString() };
+      }
+      if (save) this.#saveKeeping();
+    },
+    holds: (shared, items) => {
+      const peer = this.#peerOn(shared);
+      if (!peer) return;
+      const state = this.#keeping;
+      const now = this.node.clock();
+      const known = state.holds[peer];
+      const was = state.before.includes(peer);
+      state.holds[peer] = { items, at: new Date(now).toISOString() };
+      if (was) state.before = state.before.filter((d) => d !== peer);
+      // Told to let go, and it holds nothing of ours: done.
+      const done = !!state.off[peer] && items === 0;
+      if (done) delete state.off[peer];
+      if (was || done || !known || known.items !== items || now - Date.parse(known.at) >= SAVE_AT_MOST_MS) this.#saveKeeping();
+    },
   };
 
-  /** The kept space a stream of ours is, whichever friend keeps it (a retired one too: its items are still ours). */
+  /** The space a stream of ours is of, whoever holds it. */
   #streamScope(id: string): string | undefined {
-    const friends = this.core.friends();
-    const scopes = new Set([...this.#keptSpaces().map((k) => k.scope), ...Object.keys(this.#keeping.spaces)]);
-    for (const scope of scopes) for (const friend of friends) if (keepStreamId(this.core.selfSecret(), scope, friend) === id) return scope;
+    const state = this.#keeping;
+    const people = new Set<Did>([...this.core.friends(), ...(Object.keys({ ...state.holds, ...state.off }) as Did[]), ...state.before]);
+    for (const scope of this.#keptScopes()) for (const person of people) if (keepStreamId(this.core.selfSecret(), scope, person) === id) return scope;
     return undefined;
   }
 
   /**
-   * Our keep index, in our own space: the kept spaces and their keys, so that
-   * after losing everything, our self stream brings them back. Written when it
-   * changes.
+   * Our small spaces and their keys, in our own space, written when they change. It was made so that a self stream
+   * coming back from a keeper brings the spaces' keys with it; that is still how a copy from before is taken back, and
+   * our other computers take spaces from it too.
    */
   writeKeepIndex(): number {
     const spaces = this.#keptSpaces().flatMap(({ space }) => (space && !this.core.directs.has(space.id) ? [space] : []));
@@ -327,14 +365,126 @@ export class Holding {
   }
 
   async keepers(): Promise<KeepersInfo> {
+    const state = this.#keeping;
+    const store = this.node.replica.store;
+    // What is kept here, by whose it is (known once its owner asked about it).
+    const kept = new Map<Did, { bytes: number; asked: string }>();
+    let unknown = 0;
+    for (const id of store.keepStreams()) {
+      const bytes = store.keepBytes(id);
+      const stream = state.streams[id];
+      if (!stream?.from) unknown += bytes;
+      else {
+        const sum = kept.get(stream.from);
+        kept.set(stream.from, { bytes: (sum?.bytes ?? 0) + bytes, asked: sum && sum.asked > stream.asked ? sum.asked : stream.asked });
+      }
+    }
+    const friends = this.core.friends();
+    // Everyone who still plays a part: who holds (or may hold) a copy of ours, who was told to let go, whose copies are here.
+    const people = [...new Set<Did>([...(Object.keys({ ...state.holds, ...state.off }) as Did[]), ...state.before, ...kept.keys()])].filter((did) => kept.has(did) || state.off[did] || this.#mayHold(did));
     return {
-      spaces: this.#keptSpaces().filter((k) => !k.empty).map(({ scope, space, peer }) => ({
-        space: space ? { id: space.id, kind: space.kind, name: this.core.spaceName(space) } : { id: SELF_SCOPE, kind: 'group' as const, name: 'your own space' },
-        keepers: this.#keepersOf(scope, peer).map((k) => this.core.actor(k, k)),
-      })),
-      forOthers: this.node.replica.store.keepBytes(),
-      quota: KEEP_QUOTA,
+      spaces: [],
+      friends: people.map((did): KeeperFriend => {
+        const holds = state.holds[did];
+        return {
+          who: this.core.actor(did, did),
+          ...(friends.includes(did) ? {} : { gone: true as const }),
+          ...(holds ? { holds } : {}),
+          ...(state.before.includes(did) ? { before: true as const } : {}),
+          ...(state.off[did] ? { lettingGo: true as const } : {}),
+          ...(kept.has(did) ? { kept: kept.get(did)! } : {}),
+        };
+      }),
+      ...(state.letGo ? { letGo: state.letGo } : {}),
+      forOthers: store.keepBytes(),
+      forUnknown: unknown,
+      quota: 0,
+      graceDays: KEEP_GRACE_DAYS,
     };
+  }
+
+  /**
+   * The copies of ours that friends hold from before go: every one of them, or one person's. Each is told when next
+   * met, once we hold all it has. Told once, not for good: whoever answers that they hold nothing is done with.
+   */
+  async letCopiesGo(input: { who?: string } = {}): Promise<KeepersInfo> {
+    const state = this.#keeping;
+    const now = new Date(this.node.clock()).toISOString();
+    const one = input.who ? this.core.resolve(input.who) : undefined;
+    // Everyone who holds a copy as far as this node knows (those it lists); someone it hasn't asked yet shows up when
+    // they meet, and is this person's to decide about then.
+    for (const did of one ? [one] : new Set<Did>([...(Object.keys(state.holds) as Did[]), ...state.before])) {
+      // Asked before and holding nothing: nothing to tell them.
+      if (one ? state.holds[did] && !this.#mayHold(did) : !this.#mayHold(did)) continue;
+      state.off[did] = now;
+    }
+    if (!one) state.letGo = now;
+    this.#saveKeeping();
+    return this.keepers();
+  }
+
+  /** As a keeper: let go of what is kept here, of one person or of everyone. It may be their only copy: theirs to save first. */
+  async dropKept(input: { who?: string } = {}): Promise<KeepersInfo> {
+    const did = input.who ? this.core.resolve(input.who) : undefined;
+    const state = this.#keeping;
+    for (const id of this.node.replica.store.keepStreams()) {
+      if (did && state.streams[id]?.from !== did) continue;
+      this.node.replica.store.keepDrop(id);
+      delete state.streams[id];
+    }
+    this.#saveKeeping();
+    return this.keepers();
+  }
+
+  /**
+   * As a keeper: let go of streams nobody asked about for a year. An owner's node asks whenever it meets us, so these
+   * are of accounts that are gone. A stream first seen here (kept before this was counted) starts its year now. Only
+   * time this node ran counts: after more than a day away (switched off, or a clock that jumped) every stream's year
+   * is moved on by that time, since nobody could have asked. And a stream whose year is over goes a week later, at
+   * another look, so its owner still finds it when both are back.
+   */
+  purgeKept(): number {
+    const state = this.#keeping;
+    const store = this.node.replica.store;
+    const now = this.node.clock();
+    const held = new Set(store.keepStreams());
+    // Nothing kept here and nothing written down: nothing to look after (most computers, from now on).
+    if (!held.size && !Object.keys(state.streams).length) return 0;
+    const looked = Date.parse(state.looked ?? '');
+    const away = !Number.isNaN(looked) && now - looked > DAY_MS ? now - looked : 0;
+    let purged = 0;
+    let save = away > 0 || Number.isNaN(looked) || now - looked >= SAVE_AT_MOST_MS || now < looked;
+    if (save) state.looked = new Date(now).toISOString();
+    const later = (time: string) => new Date(Date.parse(time) + away).toISOString();
+    for (const id of held) {
+      const stream = state.streams[id];
+      if (!stream || Number.isNaN(Date.parse(stream.asked))) {
+        state.streams[id] = { ...stream, asked: new Date(now).toISOString() };
+        save = true;
+        continue;
+      }
+      if (away) {
+        stream.asked = later(stream.asked);
+        if (stream.due) stream.due = later(stream.due);
+      }
+      if (now - Date.parse(stream.asked) <= KEEP_GRACE_DAYS * DAY_MS) continue;
+      if (!stream.due) {
+        stream.due = new Date(now).toISOString();
+        save = true;
+      } else if (now - Date.parse(stream.due) >= KEEP_PURGE_WAIT_DAYS * DAY_MS) {
+        store.keepDrop(id);
+        delete state.streams[id];
+        purged++;
+      }
+    }
+    // Streams their owner took back (`drop`) leave no trace here.
+    for (const id of Object.keys(state.streams)) {
+      if (held.has(id)) continue;
+      delete state.streams[id];
+      save = true;
+    }
+    if (purged || save) this.#saveKeeping();
+    return purged;
   }
 
   // ---------------------------------------------------------------- who holds what (stage 4)

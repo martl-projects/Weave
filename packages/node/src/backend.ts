@@ -158,6 +158,10 @@ export interface Status {
   keystoreWarning?: string;
   /** No folder of the services Weave ships next to this daemon (a checkout whose packages/shipped isn't built): no Unread counts, no Websites, no GitHub releases. */
   shippedMissing?: true;
+  /** When a backup file was last saved here (or this computer restored from one); absent: never. Nobody else can bring a person's data back. */
+  lastBackup?: string;
+  /** A backup is due: none was ever saved here ('never'), or the last one is over a month old ('again'). Only for people with recovery words of their own. */
+  backupDue?: 'never' | 'again';
 }
 
 /** Where a home's key is kept (stage 2, 14, 17). */
@@ -699,12 +703,51 @@ export interface AuditLine {
   detail: Json;
 }
 
-/** Keepers (stage 5): friends who keep a wrapped copy of your small spaces, and what you keep for friends. */
+/**
+ * A backup file saved (6.11.2026): one file with everything this node holds, sealed with a key from the person's
+ * recovery words. The file alone opens nothing; the words and the file restore it on a new computer.
+ */
+export interface BackupInfo {
+  file: string;
+  bytes: number;
+  events: number;
+  spaces: number;
+  attachments: number;
+  created: string;
+}
+
+/** Someone who holds (or may hold) a copy of yours from before keepers were taken out, or whose copy you hold. */
+export interface KeeperFriend {
+  who: Actor;
+  /** No longer a friend. */
+  gone?: true;
+  /** What they said when last asked: how many items of yours they hold, and when. Absent: not asked yet. */
+  holds?: { items: number; at: string };
+  /** A Weave with keepers chose them for yours, and they weren't asked since: they may still hold a copy. */
+  before?: true;
+  /** You decided their copy goes: they're told when you next meet. */
+  lettingGo?: true;
+  /** What you hold for them, and when they last asked about it. */
+  kept?: { bytes: number; asked: string };
+}
+
+/**
+ * The copies from before (keepers, stage 5). Until 6.11.2026 friends kept a wrapped copy of each other's small
+ * spaces; now a person saves their own backup file, and nothing new is kept. What is left: who still holds a copy of
+ * yours, and what you still hold for others, until it is let go.
+ */
 export interface KeepersInfo {
+  /** Always empty, and `quota` 0: for an app from before, which reads them. */
   spaces: Array<{ space: SpaceRef; keepers: Actor[] }>;
-  /** Bytes you keep for others, and the most you would. */
-  forOthers: number;
   quota: number;
+  friends: KeeperFriend[];
+  /** When you last said that every copy friends hold goes. */
+  letGo?: string;
+  /** Bytes you hold for others, and of those what nobody asked about since this computer knows whose it is. */
+  forOthers: number;
+  forUnknown: number;
+  /** A copy held here that nobody asked about for this many days is let go. */
+  graceDays: number;
 }
 
 export interface BoardInfo {
@@ -2047,6 +2090,8 @@ export interface Backend {
   signInStatus(): Promise<SignInStatus>;
   /** A backup of this home into an empty folder: its files and a consistent copy of its database (stage 14). */
   backup(input: { to: string }): Promise<{ to: string; files: number; bytes: number; keystore: KeystoreKind; note?: string }>;
+  /** Save your Weave as one encrypted file, into a folder (or as a file ending in .weavebackup): only your recovery words open it. */
+  saveBackup(input: { to: string }): Promise<BackupInfo>;
   /**
    * Answer an always-on node's request (stage 18): its key may host your rooms, and it gets your encryption keys and
    * spaces (but direct chats), boxed to it. The answer goes back to the node (weave node join).
@@ -2081,8 +2126,12 @@ export interface Backend {
   keepPost(target: string): Promise<PostInfo>;
   /** Your posts that others will forget within the next 14 days. */
   fading(): Promise<PostInfo[]>;
-  /** Your small spaces and who keeps them (stage 5), and what you keep for others. */
+  /** The copies from before: who still holds one of yours, and what you hold for others. */
   keepers(): Promise<KeepersInfo>;
+  /** The copies friends hold of yours go, all of them or one person's: each is told when you next meet. Save a backup first. */
+  letCopiesGo(input?: { who?: string }): Promise<KeepersInfo>;
+  /** Let go of what you hold for one person, or for everyone. It may be their only copy. */
+  dropKept(input?: { who?: string }): Promise<KeepersInfo>;
   /** A space whose members hold its content between them: ask them for the 30 days before `before` (default: before the oldest post held). */
   fetchOlder(input: { space: string; before?: string }): Promise<{ since: string; until: string }>;
   /** Owner (groups) or maintainers: what newcomers get to read (all, 30d, joining). */
@@ -2646,7 +2695,7 @@ export { LENS_CSP } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
