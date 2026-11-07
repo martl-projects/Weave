@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { closeOpenStores, StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
-import { arriveAccount, createAccount, findBox, lockState, storageLink, unlockAccount, WORDS, type WayIn } from '../src/account.ts';
-import { useStorage } from '../src/host/net.ts';
+import { addWay, arriveAccount, createAccount, findBox, lockState, removeWay, storageLink, unlockAccount, WORDS, type WayIn } from '../src/account.ts';
+import { handOnAgain, useStorage } from '../src/host/net.ts';
 import { openingFrom, openingFromWords } from '../src/lock.ts';
 
 /*
@@ -212,6 +212,35 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
 
       // A file that lies at the node is sealed: its bytes say nothing.
       expect(allText(storageDir)).not.toContain(Buffer.alloc(100, 2).toString('latin1'));
+    } finally {
+      await stop();
+    }
+  });
+
+  it('takes a second passkey, and lets one go', async () => {
+    const { storage, url, stop } = await world();
+    try {
+      const dir = temp('ways');
+      const { node } = createAccount(dir, 'Web', passkey(1));
+      useStorage(storageLink(dir, node, url, { invite: storage.invite() }));
+      await node.goOnline();
+      await until(async () => (await node.status()).peers === 1);
+
+      addWay(dir, node, passkey(2));
+      handOnAgain();
+      await until(async () => !!(await findBox(url, passkey(2).opening)));
+      expect(lockState(dir).ways.sort()).toEqual(['passkey-1', 'passkey-2', WORDS].sort());
+
+      expect(() => removeWay(dir, node, WORDS)).toThrow('always open');
+      removeWay(dir, node, 'passkey-1');
+      handOnAgain();
+      await until(async () => !(await findBox(url, passkey(1).opening)));
+      expect(await findBox(url, passkey(2).opening)).toBeDefined();
+      await node.close();
+
+      expect(() => unlockAccount(dir, passkey(1))).toThrow("that isn't a way into this account");
+      const again = unlockAccount(dir, passkey(2));
+      await again.close();
     } finally {
       await stop();
     }

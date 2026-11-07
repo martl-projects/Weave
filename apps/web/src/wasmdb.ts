@@ -15,6 +15,12 @@ export async function openWasmDatabase(name: string): Promise<SqlDatabase> {
   return wasmDatabase(new pool.OpfsSAHPoolDb(`/${name}`));
 }
 
+/** Everything in the pool goes. The database has to be closed. */
+export async function wipeDatabases(): Promise<void> {
+  const pool = await (opening ??= openPool());
+  await pool.wipeFiles();
+}
+
 /** The part of sqlite-wasm's database the store uses, wherever its files are. */
 type WasmDb = Pick<Database, 'exec' | 'close' | 'prepare'>;
 

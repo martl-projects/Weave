@@ -2,12 +2,12 @@ import './host/globals.ts';
 import { errorToWire } from '@weave/core';
 import type { WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
-import { useStorage } from './host/net.ts';
+import { handOnAgain, useStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { webMethods } from './methods.ts';
-import { openWasmDatabase } from './wasmdb.ts';
+import { openWasmDatabase, wipeDatabases } from './wasmdb.ts';
 
 /*
  * The node in a Worker (docs/web-stage2.md, steps 5 and 7): the real WeaveNode over the host in ./host. It speaks
@@ -87,6 +87,27 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const data = await account.findBox(url, way.opening);
     if (!data) throw new Error("the storage node doesn't know this: no account comes with it");
     ready(await account.arriveAccount(HOME, way, data));
+  },
+
+  ways() {
+    return account.lockState(HOME).ways;
+  },
+
+  addWay(passkey: { id: string; secret: Uint8Array }) {
+    account.addWay(HOME, node!, wayIn(passkey));
+    handOnAgain();
+  },
+
+  removeWay(id: string) {
+    account.removeWay(HOME, node!, id);
+    handOnAgain();
+  },
+
+  /** Leave this browser: the page reloads after this. */
+  async forget() {
+    await node?.close();
+    node = undefined;
+    await wipeDatabases();
   },
 
   async connect(url: string, invite?: string) {

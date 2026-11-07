@@ -115,7 +115,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={t('nav.services')} on={view === 'services' && !arg} />}
           {space.kind === 'project' && (services ?? []).map((s) => <TreeLink key={s.did} depth={2} href={`${base}/services/${s.did}`} icon={serviceIcon(s)} label={s.name} on={view === 'services' && arg === s.did} />)}
           <TreeLink depth={1} href={`${base}/catalog`} icon="bookmark" label={t('nav.catalog')} on={view === 'catalog'} />
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label={t('nav.routines')} on={view === 'routines'} />}
+          {space.kind === 'project' && !bridge.web && <TreeLink depth={1} href={`${base}/routines`} icon="clock" label={t('nav.routines')} on={view === 'routines'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label={t('nav.settings')} on={view === 'settings'} badge={waiting} />}
           {space.kind === 'community' && <TreeLink depth={1} href={`${base}/about`} icon="gear" label={t('nav.about')} on={view === 'about'} />}
           {space.kind === 'group' && <TreeLink depth={1} href={`${base}/settings`} icon="gear" label={t('nav.settings')} on={view === 'settings'} />}
@@ -273,7 +273,7 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
       {link(`${base}/services`, 'zap', t('nav.services'), view === 'services')}
       {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
       {link(`${base}/catalog`, 'bookmark', t('nav.catalog'), view === 'catalog')}
-      {link(`${base}/routines`, 'clock', t('nav.routines'), view === 'routines')}
+      {!bridge.web && link(`${base}/routines`, 'clock', t('nav.routines'), view === 'routines')}
       {link(`${base}/settings`, 'gear', t('nav.settings'), view === 'settings')}
     </nav>
   );

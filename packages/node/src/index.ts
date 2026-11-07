@@ -137,4 +137,4 @@ export { moveHomeKeyToKeyService, serverCredentials, unlockHomeKey } from './hom
 export { browserSignIn, openInBrowser, refreshSignIn, signInNonce, type SignInConfig, type SignInTokens } from './signin.ts';
 export type { AuditSinkInput } from './auditsinks.ts';
 export { HARDWARE_KEYSTORES, KEYSTORE_NAMES, type HardwareKeystore, type Keystore } from './vault.ts';
-export { readSecretJson, useHomeKey, writeSecretJson } from './vault.ts';
+export { readSecretJson, useHomeKey, vaultOf, writeSecretJson } from './vault.ts';

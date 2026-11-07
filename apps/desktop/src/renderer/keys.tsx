@@ -86,6 +86,11 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           <T name="onboard.words.write" />
         </p>
         <Words words={words} />
+        {bridge.web && !bridge.web.passkey() && (
+          <p className="notice alarm">
+            <Icon name="lock" /> {t('web.no.passkey')}
+          </p>
+        )}
         <p className="small">{t(bridge.web ? 'onboard.words.why.web' : 'onboard.words.why')}</p>
         <p className="small">{t(bridge.web ? 'onboard.words.backup.web' : 'onboard.words.backup')}</p>
         <div className="field-row">
@@ -229,6 +234,13 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
+      {bridge.web?.needsInvite() && (
+        <div className="field-row-stacked">
+          <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
+          <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+          <p className="small muted">{t('web.invite.why')}</p>
+        </div>
+      )}
       <div className="buttons">
         {!bridge.web && (
           <button type="button" onClick={() => setMode('company')}>
@@ -243,6 +255,43 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </button>
       </div>
     </form>,
+  );
+}
+
+/** Weave Web: what opens this account, and leaving this browser. */
+function WebAccountBox() {
+  const { t } = useTexts();
+  const { data: ways, reload } = useApi(() => bridge.web!.ways(), []);
+  return (
+    <fieldset>
+      <legend>{t('web.ways.legend')}</legend>
+      <p className="small">{t('web.ways.why')}</p>
+      <table className="keys-table">
+        <tbody>
+          {(ways ?? []).map((way) => (
+            <tr key={way}>
+              <td>
+                <Icon name="lock" />
+              </td>
+              <td>
+                <b>{way === 'words' ? t('web.ways.words') : t('web.ways.passkey', { id: way.slice(0, 8) })}</b>
+              </td>
+              <td>
+                {way !== 'words' && (
+                  <AsyncButton onClick={async () => (await ask(t('web.ways.remove.ask'), t('web.ways.remove'))) && attempt(() => bridge.web!.removeWay(way).then(reload))}>
+                    {t('web.ways.remove')}
+                  </AsyncButton>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="buttons">
+        <AsyncButton onClick={() => attempt(() => bridge.web!.addPasskey().then(reload), t('web.ways.added'))}>{t('web.ways.add')}</AsyncButton>
+        <AsyncButton onClick={async () => void ((await ask(t('web.forget.ask'), t('web.forget.button'))) && (await attempt(() => bridge.web!.forget())))}>{t('web.forget.button')}</AsyncButton>
+      </div>
+    </fieldset>
   );
 }
 
@@ -784,6 +833,7 @@ export function KeysView() {
       {!web && !company && info.recoverable && <BackupBox last={status?.lastBackup} />}
       {!web && keeping && <CopiesBox keeping={keeping} backedUp={!!status?.lastBackup} />}
       {!web && <WalletBox />}
+      {web && <WebAccountBox />}
       <fieldset>
         <legend>{t('devices.legend')}</legend>
         <table className="keys-table">

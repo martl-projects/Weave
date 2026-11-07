@@ -26,6 +26,10 @@ export interface StorageLink {
 }
 
 let link: StorageLink | undefined;
+let current: SwarmNode | undefined;
+
+/** What goes with the list changed (a way in): hand it on, though the list is the same. */
+export const handOnAgain = (): void => current?.again();
 
 /** The storage node this node goes online through. */
 export const useStorage = (storage: StorageLink): void => void (link = storage);
@@ -75,6 +79,7 @@ export class SwarmNode {
     this.replica = replica;
     this.#access = access;
     this.#blobs = blobs;
+    current = this;
     if (blobs) {
       // Nobody can ask a closed tab for a picture: what's made here goes to the storage node at once. What came from it doesn't go back.
       const put = blobs.put.bind(blobs);
@@ -163,6 +168,11 @@ export class SwarmNode {
     const [session] = this.sessions;
     if (session) session.pushBlob(hash, data);
     else this.#toSend.set(hash, data);
+  }
+
+  again(): void {
+    this.#sent = '';
+    this.#changed();
   }
 
   /** The list changed: hand it on, once it has settled. */

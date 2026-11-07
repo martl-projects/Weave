@@ -74,6 +74,11 @@ if (arrived) {
 
 const lock = await own<{ exists: boolean; ways: string[] }>('open');
 let open = false;
+let passkey = lock.ways.some((way) => way !== 'words');
+let given: string | undefined;
+
+// The page keeps working without a network. It needs a secure page; everything else stands without it.
+void navigator.serviceWorker?.register('/sw.js').catch((error: Error) => console.warn('no offline start:', error.message));
 
 const goOnline = async (invite?: string) => {
   open = true;
@@ -81,7 +86,22 @@ const goOnline = async (invite?: string) => {
 };
 
 const web: Bridge['web'] = {
-  passkey: () => lock.ways.some((way) => way !== 'words'),
+  passkey: () => passkey,
+  needsInvite: () => !invitation(),
+  invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
+  ways: () => own<string[]>('ways'),
+  addPasskey: async () => {
+    await own('addWay', await makePasskey('Weave'));
+    passkey = true;
+  },
+  removeWay: async (id) => {
+    await own('removeWay', id);
+    passkey = (await own<string[]>('ways')).some((way) => way !== 'words');
+  },
+  forget: async () => {
+    await own('forget');
+    location.reload();
+  },
   unlock: async (words) => {
     await own('unlock', words ? { words } : await askPasskey());
     await goOnline();
@@ -97,10 +117,11 @@ window.weave = {
   state: async (): Promise<AppState> => ({ home: 'Weave', hasIdentity: lock.exists || open, connected: open, locked: lock.exists && !open }),
   /** A new person, with a passkey where the browser has one; where it hasn't, the words alone open the account. */
   init: async (name) => {
-    const invite = invitation();
+    const invite = given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
-    const passkey = await makePasskey(name).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
-    const { words } = await own<{ words: string }>('create', name, passkey);
+    const made = await makePasskey(name).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+    passkey = !!made;
+    const { words } = await own<{ words: string }>('create', name, made);
     await goOnline(invite);
     return words;
   },

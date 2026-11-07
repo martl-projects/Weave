@@ -88,6 +88,16 @@ export interface Bridge {
     unlock(words?: string): Promise<void>;
     /** Bring an account to this browser from the storage node, the same way. */
     arrive(words?: string): Promise<void>;
+    /** Whether a new account here still needs an invitation to the storage node. */
+    needsInvite(): boolean;
+    /** The invitation, as a link or as its code. */
+    invite(given: string): void;
+    /** The ways into this account: the passkeys' ids, and `words`. */
+    ways(): Promise<string[]>;
+    addPasskey(): Promise<void>;
+    removeWay(id: string): Promise<void>;
+    /** Leave this browser: everything of the account here goes, the account stays at the storage node. */
+    forget(): Promise<void>;
   };
   /** In the phone app, which uses a computer's node: pairing with it takes the place of creating an identity. */
   phone?: {

@@ -53,6 +53,8 @@ const webHost: Plugin = {
 export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean } = {}): Promise<void> {
   mkdirSync(dist, { recursive: true });
   // A service's Worker has no host of ours: only what preview2-shim brings for a browser.
+  // The page's offline side, with a number of its own: a new one replaces the old caches.
+  await build({ entryPoints: { sw: join(import.meta.dirname, 'src/sw.ts') }, outdir: dist, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { BUILD: JSON.stringify(Date.now().toString(36)) } });
   await build({ entryPoints: { service: join(import.meta.dirname, 'src/service.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
   await build({
     entryPoints: { worker: join(import.meta.dirname, 'src/worker.ts') },

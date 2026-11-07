@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, KEY_KINDS, newRecoveryWords, randomBytes, type Json, type Sealed } from '@weave/core';
-import { readSecretJson, resolveHome, saveSpace, useHomeKey, WeaveNode, writeSecretJson, loadSpaces, type StoredSpace } from '@weave/node';
+import { readSecretJson, resolveHome, saveSpace, useHomeKey, vaultOf, WeaveNode, writeSecretJson, loadSpaces, type StoredSpace } from '@weave/node';
 import { accountOf, accountRecord, socketTo, StorageClient, type StorageLink } from './host/net.ts';
 import { openBox, openHomeKey, openingFromWords, sealBox, sealHomeKey, type Opening } from './lock.ts';
 
@@ -33,7 +33,9 @@ interface LockEntry {
 interface Keeping {
   words: string;
   account: ReturnType<typeof accountRecord>;
-  ways: Array<{ key: string; token: string }>;
+  ways: Array<{ id: string; key: string; token: string }>;
+  /** Tokens of boxes to take away from the storage node. */
+  gone?: string[];
 }
 
 interface Box {
@@ -61,7 +63,7 @@ export const lockState = (dir: string): { exists: boolean; ways: string[] } => {
   return { exists: ways.length > 0, ways };
 };
 
-const wayOf = (way: WayIn) => ({ key: b64u.encode(way.opening.key), token: b64u.encode(way.opening.token) });
+const wayOf = (way: WayIn) => ({ id: way.id, key: b64u.encode(way.opening.key), token: b64u.encode(way.opening.token) });
 const openingOf = (way: { key: string; token: string }): Opening => ({ key: b64u.decode(way.key), token: b64u.decode(way.token) });
 
 function lockHome(dir: string, homeKey: Uint8Array, ways: WayIn[]): void {
@@ -130,6 +132,24 @@ export async function arriveAccount(dir: string, way: WayIn, data: string): Prom
 
 const keeping = (dir: string, node: WeaveNode) => readSecretJson<Keeping>(node.home, keepingFile(dir))!;
 
+/** Another way in, for an account that's open. Its box goes to the storage node with the next list. */
+export function addWay(dir: string, node: WeaveNode, way: WayIn): void {
+  const entries = readLock(dir);
+  if (entries.some((e) => e.id === way.id)) return;
+  writeLock(dir, [...entries, { id: way.id, home: sealHomeKey(way.opening, vaultOf(node.home).key) }]);
+  const kept = keeping(dir, node);
+  writeSecretJson(node.home, keepingFile(dir), { ...kept, ways: [...kept.ways, wayOf(way)] });
+}
+
+/** A way in no more: here, and on a new browser, once its box is gone from the storage node. The words stay: nothing else is sure to be there. */
+export function removeWay(dir: string, node: WeaveNode, id: string): void {
+  if (id === WORDS) throw new Error('your recovery words always open your account');
+  writeLock(dir, readLock(dir).filter((e) => e.id !== id));
+  const kept = keeping(dir, node);
+  const leaving = kept.ways.filter((w) => w.id === id).map((w) => w.token);
+  writeSecretJson(node.home, keepingFile(dir), { ...kept, ways: kept.ways.filter((w) => w.id !== id), gone: [...(kept.gone ?? []), ...leaving] });
+}
+
 /** What a new device needs, as it stands now. */
 function boxOf(dir: string, node: WeaveNode): Box {
   const me = node.identity.author;
@@ -151,6 +171,8 @@ export function storageLink(dir: string, node: WeaveNode, url: string, options: 
     afterHold: async (client) => {
       const box = boxOf(dir, node);
       for (const way of box.keeping.ways.map(openingOf)) await client.putBox(way.token, sealBox(way, box as unknown as Json));
+      for (const token of box.keeping.gone ?? []) await client.removeBox(b64u.decode(token));
+      if (box.keeping.gone?.length) writeSecretJson(node.home, keepingFile(dir), { ...keeping(dir, node), gone: [] });
     },
   };
 }
