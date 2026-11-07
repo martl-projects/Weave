@@ -62,4 +62,44 @@ describe('a storage node on the DHT', () => {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
+
+  it('keeps the other accounts on the DHT they share when one goes', { timeout: 60_000 }, async () => {
+    const testnet = await createTestnet(3);
+    const dir = mkdtempSync(join(tmpdir(), 'weave-storage-dht-'));
+    const node = await StorageNode.open({ dir, network: swarmNetwork({ bootstrap: testnet.bootstrap }) });
+    const [keyA, keyB] = [new Uint8Array(32).fill(4), new Uint8Array(32).fill(5)];
+    const replica = new Replica();
+    const peer = new SwarmNode(replica, { bootstrap: testnet.bootstrap }, undefined, {
+      spaces: () => [
+        { space: 'group:a', keys: [keyA] },
+        { space: 'group:b', keys: [keyB] },
+      ],
+    });
+    const account = async (space: string, key: Uint8Array, topic: string) => {
+      const [ours, theirs] = socketPair();
+      void node.accept(theirs);
+      const client = await StorageClient.connect(ours);
+      await client.register(createIdentity(), node.invite());
+      await client.hold([{ space, auths: [authKey(key)], topics: [topic] }]);
+      return client;
+    };
+    try {
+      await peer.join('topic-a');
+      await peer.join('topic-b');
+      const a = await account('group:a', keyA, 'topic-a');
+      const b = await account('group:b', keyB, 'topic-b');
+      await a.deleteAccount();
+
+      // Said after the other account went: still collected for this one.
+      replica.append2(createIdentity(), { kind: 'weave.msg', space: 'group:b', body: { text: 'still here' } });
+      const browser = new Replica();
+      await b.sync(browser, { spaces: () => [{ space: 'group:b', keys: [keyB] }] });
+      await until(() => browser.events((r) => r.scope === 'group:b').length === 1);
+    } finally {
+      await peer.destroy();
+      await node.close();
+      await testnet.destroy();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
 });

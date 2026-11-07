@@ -126,7 +126,7 @@ export { resolveHome, type Home } from './home.ts';
 export { WeaveNode, type Bundle } from './node.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './shared.ts';
 export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';
-export { StorageNode, swarmNetwork, type StorageNetwork, type StorageOptions } from './storagenode.ts';
+export { StorageNode, swarmNetwork, type StorageNetwork, type StorageNetworks, type StorageOptions } from './storagenode.ts';
 export { storageServer, storageUpgrades, type StorageServerOptions } from './storageserver.ts';
 export { acceptWebSocket, textSocket } from './websocket.ts';
 export { decodePhoneLink, PHONE_METHODS, RemoteLink, serveRemote, serveRemoteOverWebSocket, type PairedPhone, type RemoteOptions, type PairingOffer, type PhoneLink, type RemoteConnection } from './remote.ts';

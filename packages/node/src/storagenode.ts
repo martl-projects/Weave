@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, blobHash, MAX_BLOB, publicKeyFromDid, Replica, verify, type Did } from '@weave/core';
-import { LineChannel, PeerSession2, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
+import { LineChannel, PeerSession2, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
 import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
 
@@ -46,9 +46,12 @@ export interface StorageNetwork {
   destroy(): Promise<void>;
 }
 
+/** Where each account goes on the network; `close` ends what they share, after them. */
+export type StorageNetworks = ((replica: Replica, access: SpaceAccess, blobs: BlobSource) => StorageNetwork) & { close?(): Promise<void> };
+
 export interface StorageOptions {
   dir: string;
-  network(replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork;
+  network: StorageNetworks;
   quota?: number;
 }
 
@@ -122,11 +125,18 @@ function validHold(spaces: unknown): HeldRecord[] | undefined {
   return held;
 }
 
-/** An account's place on the real network: a Hyperswarm of its own (`options.bootstrap` for a test network). */
-export const swarmNetwork =
-  (options: ConstructorParameters<typeof SwarmNode>[1] = {}) =>
-  (replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork =>
-    new SwarmNode(replica, options, blobs, access);
+/**
+ * An account's place on the real network: a Hyperswarm of its own, with a key of its own, on the one DHT node all the
+ * accounts share (`options.bootstrap` for a test network). The DHT node comes up with the first account.
+ */
+export function swarmNetwork(options: { bootstrap?: Array<{ host: string; port: number }> } = {}): StorageNetworks {
+  let shared: ReturnType<typeof sharedDht> | undefined;
+  const networks = (replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork => {
+    shared ??= sharedDht(options);
+    return new SwarmNode(replica, { dht: shared.dht }, blobs, access);
+  };
+  return Object.assign(networks, { close: async () => void (await shared?.destroy()) });
+}
 
 /** Join each topic, looking only where that's all it should do. */
 const joinAll = (network: StorageNetwork, topics: Map<string, boolean>) => Promise.all([...topics].map(([topic, announce]) => network.join(topic, announce ? undefined : { announce: false })));
@@ -437,5 +447,6 @@ export class StorageNode {
       account.store.close();
     }
     this.#accounts.clear();
+    await this.#options.network.close?.();
   }
 }

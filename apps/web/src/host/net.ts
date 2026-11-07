@@ -242,3 +242,8 @@ const noRooms = (): never => {
 export const readLine = noRooms;
 export const roomKeyPair = noRooms;
 export const splice = noRooms;
+
+/** A storage node's: a browser is on no DHT. */
+export const sharedDht = (): never => {
+  throw new Error("a browser is on no DHT: it goes through its storage node");
+};

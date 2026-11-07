@@ -3,5 +3,5 @@ export { authKey, authTag, legacyTag, PeerSession2, RECENT_MS, spaceTag, WIRE_VE
 export { duplexPair } from './memory.ts';
 export { MAX_FRAME_TEXT, wsPeerStream, type TextSocket } from './wspeer.ts';
 export { LineChannel, signinMessage, StorageClient, type HeldByNode, type StorageUsage } from './storageclient.ts';
-export { SwarmNode, topicFor } from './swarm.ts';
+export { sharedDht, SwarmNode, topicFor } from './swarm.ts';
 export { readLine, roomKeyPair, splice, type DhtServer, type DhtSocket } from './tunnel.ts';

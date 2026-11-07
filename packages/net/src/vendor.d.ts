@@ -16,6 +16,8 @@ declare module 'hyperswarm' {
   export interface HyperswarmOptions {
     bootstrap?: Array<{ host: string; port: number }>;
     keyPair?: { publicKey: Buffer; secretKey: Buffer };
+    /** A DHT node to use instead of one of its own. Hyperswarm destroys it when it's destroyed. */
+    dht?: unknown;
   }
 
   /** An encrypted, hole-punched connection over the DHT. */
@@ -63,6 +65,8 @@ declare module 'hyperdht' {
     constructor(options?: { bootstrap?: Array<{ host: string; port: number }> });
     static keyPair(seed?: Buffer): { publicKey: Buffer; secretKey: Buffer };
     connect(publicKey: Buffer): DhtSocket;
-    destroy(): Promise<void>;
+    destroy(options?: { force?: boolean }): Promise<void>;
+    /** Ready: bootstrapped, and its address known. */
+    ready(): Promise<void>;
   }
 }
