@@ -7,7 +7,8 @@
 //   npm run package -- --store      only the .appx for the Microsoft Store: unsigned (the Store
 //                                   signs it), with the identity from Partner Center in
 //                                   WEAVE_STORE_IDENTITY, WEAVE_STORE_PUBLISHER (CN=…) and
-//                                   WEAVE_STORE_PUBLISHER_NAME
+//                                   WEAVE_STORE_PUBLISHER_NAME, and the name reserved there in
+//                                   WEAVE_STORE_NAME (Weave if empty)
 //
 // Signed when the credentials are in the environment (the Installers workflow
 // passes them from the repository's secrets), unsigned or ad-hoc otherwise:
@@ -176,7 +177,7 @@ const config: Configuration = {
   // nsis: per person, with the weave command on PATH. msi: per machine, for IT to push silently (msiexec /i … /qn).
   win: { target: store ? [{ target: 'appx', arch: ['x64'] }] : [{ target: 'nsis', arch: ['x64'] }, { target: 'msi', arch: ['x64'] }], sign: store ? null : azure },
   // The Microsoft Store's package. Tiles from build/appx. The Store updates it (src/updatestate.ts); no weave command on the PATH.
-  appx: { applicationId: 'Weave', displayName: 'Weave', identityName: env.WEAVE_STORE_IDENTITY, publisher: env.WEAVE_STORE_PUBLISHER, publisherDisplayName: env.WEAVE_STORE_PUBLISHER_NAME, languages: ['en-US', 'de-DE'], backgroundColor: 'transparent',
+  appx: { applicationId: 'Weave', displayName: env.WEAVE_STORE_NAME || 'Weave', identityName: env.WEAVE_STORE_IDENTITY, publisher: env.WEAVE_STORE_PUBLISHER, publisherDisplayName: env.WEAVE_STORE_PUBLISHER_NAME, languages: ['en-US', 'de-DE'], backgroundColor: 'transparent',
     // From Windows 10 1809, up to the Windows it was built for.
     minVersion: '10.0.17763.0',
     maxVersionTested: '10.0.26200.0' },
