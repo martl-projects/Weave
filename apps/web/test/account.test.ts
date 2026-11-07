@@ -65,6 +65,7 @@ async function world() {
       leave: async () => {},
       announce: () => sessions.forEach((session) => session.announce()),
       want: (hashes) => sessions.forEach((session) => session.want(hashes)),
+      refreshPublic: () => sessions.forEach((session) => session.refreshPublic()),
       destroy: async () => {},
     };
   };

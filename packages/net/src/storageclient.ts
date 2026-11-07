@@ -25,6 +25,10 @@ export interface HeldByNode {
   /** Auth keys (`authKey`), newest first. */
   auths: Uint8Array[];
   topics: string[];
+  /** Meeting points only looked up, never announced on: someone else's, from a contact link. */
+  looks?: string[];
+  /** Not a space: a contact link's meeting point, which only lets the peer in. Nothing of it is synced. */
+  proof?: true;
 }
 
 export interface StorageUsage {
@@ -161,7 +165,7 @@ export class StorageClient {
   }
 
   async hold(spaces: HeldByNode[]): Promise<void> {
-    await this.#ask({ t: 'hold', spaces: spaces.map((s) => ({ space: s.space, auths: s.auths.map((a) => b64u.encode(a)), topics: s.topics })) });
+    await this.#ask({ t: 'hold', spaces: spaces.map((s) => ({ space: s.space, auths: s.auths.map((a) => b64u.encode(a)), topics: s.topics, ...(s.looks?.length ? { looks: s.looks } : {}), ...(s.proof ? { proof: true } : {}) })) });
   }
 
   async putBox(token: Uint8Array, data: string): Promise<void> {

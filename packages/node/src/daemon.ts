@@ -5,6 +5,7 @@ import { connectDaemon, type DaemonInfo } from './client.ts';
 import { resolveHome, writeJson } from './home.ts';
 import { WeaveNode } from './node.ts';
 import { unlockHomeKey } from './homekey.ts';
+import { keepReconciling } from './reconciling.ts';
 
 export interface Daemon {
   node: WeaveNode;
@@ -60,17 +61,8 @@ export async function startDaemon(
   // The person's own services, each with its own token for the API.
   node.runServices({ port: api.port });
 
-  // Carry out standing admission rules shortly after new events arrive.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const reconcile = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => node.reconcile().catch((error: Error) => console.error(`weave: ${error.message}`)), 500);
-  };
-  const unsubscribe = node.replica.onAppend(reconcile);
-  reconcile();
-  // And every few minutes regardless: sign-ins renew, keys time out, the company's duties come due.
-  const heartbeat = setInterval(reconcile, 5 * 60_000);
-  heartbeat.unref();
+  // Standing rules, keys and duties: shortly after new events arrive, and every few minutes regardless.
+  const stopReconciling = keepReconciling(node);
 
   // Routines: create what's due, shortly after starting (the computer may have been off) and every minute.
   const tick = () => void node.tickRoutines().catch((error: Error) => console.error(`weave: routines: ${error.message}`));
@@ -84,11 +76,9 @@ export async function startDaemon(
     async stop() {
       if (stopped) return;
       stopped = true;
-      unsubscribe();
-      clearTimeout(timer);
+      stopReconciling();
       clearTimeout(firstTick);
       clearInterval(routines);
-      clearInterval(heartbeat);
       rmSync(home.daemon, { force: true });
       await api.close();
       await links?.close();

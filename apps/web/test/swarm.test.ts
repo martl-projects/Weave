@@ -24,10 +24,11 @@ async function until(ready: () => boolean, timeoutMs = 10_000): Promise<void> {
 async function start() {
   const dir = mkdtempSync(join(tmpdir(), 'weave-web-swarm-'));
   const topics = new Set<string>();
+  const looks = new Set<string>();
   const announced: unknown[] = [];
   const node = await StorageNode.open({
     dir,
-    network: (_replica, access) => ({ join: async (t) => void topics.add(t), leave: async (t) => void topics.delete(t), announce: () => void announced.push(access.spaces()), destroy: async () => {} }),
+    network: (_replica, access) => ({ join: async (t, options) => void (options?.announce === false ? looks : topics).add(t), leave: async (t) => void topics.delete(t), announce: () => void announced.push(access.spaces()), destroy: async () => {} }),
   });
   const sockets = new Set<Duplex>();
   const server = createServer((_req, res) => res.end());
@@ -44,7 +45,7 @@ async function start() {
     await node.close();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   };
-  return { node, url, topics, announced, sockets, stop };
+  return { node, url, topics, looks, announced, sockets, stop };
 }
 
 const space = (name: string, fill: number): HeldSpace => ({ space: `group:${name}`, keys: [new Uint8Array(32).fill(fill)] });
@@ -69,15 +70,15 @@ describe('a browser on its storage node', { timeout: 30_000 }, () => {
     }
   });
 
-  it("doesn't hand on someone else's meeting point, where a node only looks", async () => {
-    const { node, url, topics, stop } = await start();
+  it("has someone else's meeting point looked up, and not announced on", async () => {
+    const { node, url, topics, looks, stop } = await start();
     let account: SigningIdentity | undefined;
     useStorage({ url, invite: node.invite(), account: () => account, keepAccount: (a) => (account = a) });
     const swarm = new SwarmNode(new Replica(), {}, undefined, { spaces: () => [space('a', 1)] });
     try {
       await swarm.join('mine');
       await swarm.join('theirs', { announce: false });
-      await until(() => topics.has('mine'));
+      await until(() => topics.has('mine') && looks.has('theirs'));
       expect(topics.has('theirs')).toBe(false);
       expect(swarm.joined.sort()).toEqual(['mine', 'theirs']);
     } finally {

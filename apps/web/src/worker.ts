@@ -30,6 +30,7 @@ const HOME = '/weave';
 const SHIPPED = '/shipped';
 
 let node: WeaveNode | undefined;
+let stopReconciling: (() => void) | undefined;
 /** What a page may call. */
 let allowed: ReadonlySet<string> = new Set();
 /** Loaded once the database is open: the node reads files as it loads. */
@@ -47,8 +48,10 @@ async function shipped(): Promise<void> {
 
 const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, opening: openingFromWords(given.words) } : { id: given.id, opening: openingFrom(given.secret) });
 
-function ready(opened: WeaveNode): void {
+/** A node that's open does what the daemon has it do on a computer. */
+async function ready(opened: WeaveNode): Promise<void> {
   node = opened;
+  stopReconciling = (await import('@weave/node')).keepReconciling(opened);
   node.wasmSetup.shippedDir = SHIPPED;
   // As the daemon's /events: everything new, with what it means for this person.
   void node.watch((item) => self.postMessage({ event: item }), new AbortController().signal);
@@ -71,14 +74,14 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 
   /** A new person: their words, to be shown once. */
-  create(name: string, passkey?: { id: string; secret: Uint8Array }) {
+  async create(name: string, passkey?: { id: string; secret: Uint8Array }) {
     const made = account.createAccount(HOME, name, passkey && wayIn(passkey));
-    ready(made.node);
+    await ready(made.node);
     return { words: made.words };
   },
 
-  unlock(given: GivenWay) {
-    ready(account.unlockAccount(HOME, wayIn(given)));
+  async unlock(given: GivenWay) {
+    await ready(account.unlockAccount(HOME, wayIn(given)));
   },
 
   /** This browser has nothing: bring the account here from the storage node. */
@@ -86,7 +89,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const way = wayIn(given);
     const data = await account.findBox(url, way.opening);
     if (!data) throw new Error("the storage node doesn't know this: no account comes with it");
-    ready(await account.arriveAccount(HOME, way, data));
+    await ready(await account.arriveAccount(HOME, way, data));
   },
 
   ways() {
@@ -105,6 +108,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
 
   /** Leave this browser: the page reloads after this. */
   async forget() {
+    stopReconciling?.();
     await node?.close();
     node = undefined;
     await wipeDatabases();

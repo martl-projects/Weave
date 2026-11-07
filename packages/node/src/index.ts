@@ -138,3 +138,4 @@ export { browserSignIn, openInBrowser, refreshSignIn, signInNonce, type SignInCo
 export type { AuditSinkInput } from './auditsinks.ts';
 export { HARDWARE_KEYSTORES, KEYSTORE_NAMES, type HardwareKeystore, type Keystore } from './vault.ts';
 export { readSecretJson, useHomeKey, vaultOf, writeSecretJson } from './vault.ts';
+export { keepReconciling } from './reconciling.ts';

@@ -80,6 +80,11 @@ export class SwarmNode {
     for (const session of this.sessions) session.announce();
   }
 
+  /** Whose public events peers get changed: each session asks again. */
+  refreshPublic(): void {
+    for (const session of this.sessions) session.refreshPublic();
+  }
+
   /** Ask every peer that shares the space for its content between two times, bodies included. */
   fetchRange(space: string, since: string, until: string): void {
     for (const session of this.sessions) session.fetchRange(space, since, until);

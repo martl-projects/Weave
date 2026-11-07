@@ -28,16 +28,21 @@ const MAX_KEYS = 64;
 /** Wrong tokens, proofs or invitations on one connection before it's closed. */
 const MAX_TRIES = 5;
 const CONTROL_MS = 60_000;
+/** A person's own space: its events are all theirs (packages/node/src/shared.ts). */
+const SELF_SCOPE = 'self';
 /** Blobs looked for at once, per account. */
 const MAX_ASKED = 512;
 
 /** A place on the network for one account: Hyperswarm in production. */
 export interface StorageNetwork {
-  join(topic: string): Promise<void>;
+  /** `announce: false` only looks: someone else's meeting point. */
+  join(topic: string, options?: { announce?: boolean }): Promise<void>;
   leave(topic: string): Promise<void>;
   announce(): void;
   /** Ask whoever is there for blobs. */
   want?(hashes: string[]): void;
+  /** Whose public events peers get changed. */
+  refreshPublic?(): void;
   destroy(): Promise<void>;
 }
 
@@ -51,6 +56,16 @@ interface HeldRecord {
   space: string;
   auths: string[];
   topics: string[];
+  looks?: string[];
+  proof?: true;
+}
+
+/** Every topic of a list, and whether to be found there: where it's announced on anywhere, it is. */
+function topicsOf(spaces: HeldRecord[]): Map<string, boolean> {
+  const topics = new Map<string, boolean>();
+  for (const s of spaces) for (const topic of s.looks ?? []) topics.set(topic, false);
+  for (const s of spaces) for (const topic of s.topics) topics.set(topic, true);
+  return topics;
 }
 
 interface AccountFile {
@@ -72,6 +87,8 @@ interface Account {
   over: boolean;
   blobs: BlobStore;
   blobBytes: number;
+  /** Who wrote in each space it holds, as the envelopes say: for whose public events a peer gets. */
+  authors: Map<string, Set<Did>>;
   /** Blobs the browser asked for, that the peers are being asked for. */
   asked: Set<string>;
 }
@@ -96,9 +113,11 @@ function validHold(spaces: unknown): HeldRecord[] | undefined {
   const held: HeldRecord[] = [];
   for (const s of spaces as Array<Record<string, unknown>>) {
     if (!s || !isText(s.space, 200) || !Array.isArray(s.auths) || !Array.isArray(s.topics)) return undefined;
-    if (s.space === 'public' || !s.auths.length || s.auths.length > MAX_KEYS || s.topics.length > MAX_KEYS) return undefined;
-    if (!s.auths.every((a) => isText(a, 64)) || !s.topics.every((t) => isText(t, 200))) return undefined;
-    held.push({ space: s.space, auths: s.auths as string[], topics: s.topics as string[] });
+    const looks = s.looks === undefined ? [] : s.looks;
+    if (!Array.isArray(looks) || (s.proof !== undefined && s.proof !== true)) return undefined;
+    if (s.space === 'public' || !s.auths.length || s.auths.length > MAX_KEYS || s.topics.length > MAX_KEYS || looks.length > MAX_KEYS) return undefined;
+    if (!s.auths.every((a) => isText(a, 64)) || !s.topics.every((t) => isText(t, 200)) || !looks.every((t) => isText(t, 200))) return undefined;
+    held.push({ space: s.space, auths: s.auths as string[], topics: s.topics as string[], ...(looks.length ? { looks: looks as string[] } : {}), ...(s.proof ? { proof: true as const } : {}) });
   }
   return held;
 }
@@ -108,6 +127,9 @@ export const swarmNetwork =
   (options: ConstructorParameters<typeof SwarmNode>[1] = {}) =>
   (replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork =>
     new SwarmNode(replica, options, blobs, access);
+
+/** Join each topic, looking only where that's all it should do. */
+const joinAll = (network: StorageNetwork, topics: Map<string, boolean>) => Promise.all([...topics].map(([topic, announce]) => network.join(topic, announce ? undefined : { announce: false })));
 
 export class StorageNode {
   readonly #dir: string;
@@ -139,14 +161,39 @@ export class StorageNode {
     const replica = new Replica(store);
     const blobDir = join(dir, 'blobs');
     const blobBytes = existsSync(blobDir) ? readdirSync(blobDir).reduce((n, name) => n + statSync(join(blobDir, name)).size, 0) : 0;
-    const account: Account = { file, dir, store, replica, network: undefined as unknown as StorageNetwork, sessions: new Set(), over: false, blobs: new BlobStore(blobDir), blobBytes, asked: new Set() };
+    const account: Account = { file, dir, store, replica, network: undefined as unknown as StorageNetwork, sessions: new Set(), over: false, blobs: new BlobStore(blobDir), blobBytes, asked: new Set(), authors: new Map() };
+    const wrote = (scope: string, author: Did): boolean => {
+      const set = account.authors.get(scope) ?? new Set<Did>();
+      account.authors.set(scope, set);
+      return !set.has(author) && !!set.add(author);
+    };
+    for (const r of replica.events()) wrote(r.scope, r.author);
+    // Someone new in a space: peers sharing it may now get their public side (their keys, without which nothing of theirs is taken).
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    replica.onAppend((r) => {
+      if (!wrote(r.scope, r.author) || r.scope === 'public') return;
+      clearTimeout(refresh);
+      refresh = setTimeout(() => account.network.refreshPublic?.(), 100);
+    });
     // Strangers are turned away: only who shows one of these spaces gets anything.
-    account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)) }, this.#fromPeers(account));
+    account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)), publicFor: (shared) => this.#publicFor(account, shared) }, this.#fromPeers(account));
     this.#accounts.set(file.id, account);
     for (const hash of Object.keys(file.boxes)) this.#boxes.set(hash, file.id);
     this.measure(file.id);
-    if (!account.over) await Promise.all(file.spaces.flatMap((s) => s.topics).map((t) => account.network.join(t)));
+    if (!account.over) await joinAll(account.network, topicsOf(file.spaces));
     return account;
+  }
+
+  /**
+   * Whose public events a peer on the network gets: the account's person, and whoever wrote in what the peer shares
+   * with it, as a person's own node decides (SpaceAccess.publicFor). Who the person is shows in their own space, the
+   * only one whose events they all sign. Someone let in by a contact link learns the person they reached, not whom
+   * that person knows.
+   */
+  #publicFor(account: Account, shared: ReadonlySet<string>): (author: Did) => boolean {
+    // Public is shared with everyone: who wrote there says nothing of whom the peer may see.
+    const seen = [...shared, SELF_SCOPE].filter((scope) => scope !== 'public');
+    return (author) => seen.some((scope) => account.authors.get(scope)?.has(author));
   }
 
   /** Keep a blob, if it is what it says and there's room. */
@@ -189,7 +236,7 @@ export class StorageNode {
   }
 
   #held(account: Account): HeldSpace[] {
-    return account.file.spaces.map((s) => ({ space: s.space, keys: s.auths.map((a) => b64u.decode(a)), blind: true as const }));
+    return account.file.spaces.map((s) => ({ space: s.space, keys: s.auths.map((a) => b64u.decode(a)), blind: true as const, ...(s.proof ? { proof: true as const } : {}) }));
   }
 
   #save(account: Account): void {
@@ -233,20 +280,20 @@ export class StorageNode {
     const over = used > quota;
     if (over !== account.over) {
       account.over = over;
-      for (const topic of account.file.spaces.flatMap((s) => s.topics)) void (over ? account.network.leave(topic) : account.network.join(topic)).catch(() => {});
+      for (const [topic, announce] of topicsOf(account.file.spaces)) void (over ? account.network.leave(topic) : account.network.join(topic, announce ? undefined : { announce: false })).catch(() => {});
       account.network.announce();
     }
     return { used, quota, over };
   }
 
   async #hold(account: Account, spaces: HeldRecord[]): Promise<void> {
-    const before = new Set(account.file.spaces.flatMap((s) => s.topics));
-    const after = new Set(spaces.flatMap((s) => s.topics));
+    const before = topicsOf(account.file.spaces);
+    const after = topicsOf(spaces);
     account.file.spaces = spaces;
     this.#save(account);
     if (!account.over) {
-      for (const topic of before) if (!after.has(topic)) await account.network.leave(topic).catch(() => {});
-      for (const topic of after) if (!before.has(topic)) await account.network.join(topic).catch(() => {});
+      for (const topic of before.keys()) if (!after.has(topic)) await account.network.leave(topic).catch(() => {});
+      for (const [topic, announce] of after) if (before.get(topic) !== announce) await account.network.join(topic, announce ? undefined : { announce: false }).catch(() => {});
     }
     account.network.announce();
     for (const session of account.sessions) session.announce();

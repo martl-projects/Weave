@@ -99,12 +99,14 @@ export class SwarmNode {
 
   /**
    * What the storage node should hold: the auth keys of every space, and the topics to be at. It joins all of them as
-   * one list, so they travel on the first entry. Someone else's meeting point isn't handed on: there a node only looks,
-   * and a storage node announces.
+   * one list, so they travel on the first entry. Someone else's meeting point it only looks up, as this node would.
    */
   #held(): HeldByNode[] {
-    const held: HeldByNode[] = this.#access.spaces().map((s) => ({ space: s.space, auths: s.keys.map((key) => (s.blind ? key : authKey(key))), topics: [] }));
-    if (held.length) held[0].topics = [...this.#topics].filter(([, announce]) => announce).map(([topic]) => topic);
+    const held: HeldByNode[] = this.#access.spaces().map((s) => ({ space: s.space, auths: s.keys.map((key) => (s.blind ? key : authKey(key))), topics: [], ...(s.proof ? { proof: true as const } : {}) }));
+    if (held.length) {
+      held[0].topics = [...this.#topics].filter(([, announce]) => announce).map(([topic]) => topic);
+      held[0].looks = [...this.#topics].filter(([, announce]) => !announce).map(([topic]) => topic);
+    }
     return held;
   }
 

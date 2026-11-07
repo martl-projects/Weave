@@ -2,19 +2,24 @@
 //
 // Starts a storage node and one person (a real WeaveNode) in temporary folders, nothing of any real home, and bundles the
 // page and its Worker. The stand-in for the DHT connects the person to whatever the storage node looks for.
-// POST /dev/say?text=… has the person say something in their group; GET /dev/messages is what the person reads there.
+// /dev/link is an invitation to the person's group, /dev/say?text=… has them say something there, /dev/messages is what
+// they read.
 // The folders are new each time, so after a restart the browser's account is unknown: clear the site's data.
 // A passkey needs a browser with one (localhost counts as secure); the words work everywhere.
+//
+// DHT=1 puts the storage node and the person on the real DHT instead: then a contact link of anyone's (your own Weave's)
+// reaches them, as it would from a hosted page.
 
 import { createReadStream, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
-import { StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
+import { keepReconciling, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
 import { buildServices, buildWeb } from './build.ts';
 
 const port = Number(process.env.PORT ?? 8790);
+const onDht = process.env.DHT === '1';
 const dist = join(import.meta.dirname, 'dist');
 const ORIGINS = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.glb': 'model/gltf-binary' };
@@ -27,7 +32,7 @@ const person = WeaveNode.init('Lena', join(scratch, 'lena'));
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 
-const network: StorageOptions['network'] = (replica, access, blobs) => {
+const standIn: StorageOptions['network'] = (replica, access, blobs) => {
   const sessions: PeerSession2[] = [];
   return {
     // A new topic is a new connection, as on the DHT: a storage node turns away one that shares no space with it yet.
@@ -38,10 +43,14 @@ const network: StorageOptions['network'] = (replica, access, blobs) => {
     leave: async () => {},
     announce: () => sessions.forEach((session) => session.announce()),
     want: (hashes) => sessions.forEach((session) => session.want(hashes)),
+    refreshPublic: () => sessions.forEach((session) => session.refreshPublic()),
     destroy: async () => {},
   };
 };
-const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network });
+const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network: onDht ? swarmNetwork() : standIn });
+keepReconciling(person);
+if (onDht) await person.goOnline();
+console.log(onDht ? 'on the real DHT' : 'with a stand-in for the DHT (DHT=1 for the real one)');
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -51,9 +60,12 @@ const server = createServer(async (req, res) => {
   };
   if (url.pathname === '/dev/invite') return json({ invite: storage.invite(), link: await person.invite('Climb') });
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
-  if (url.pathname === '/dev/say' && req.method === 'POST') {
-    await person.say({ space: 'Climb', text: url.searchParams.get('text') ?? '…' });
-    return res.writeHead(204).end();
+  // A link to the group, to paste into "Open link"; what's said there, from the address bar too.
+  if (url.pathname === '/dev/link') return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(await person.invite('Climb'));
+  if (url.pathname === '/dev/say') {
+    const text = url.searchParams.get('text') ?? '…';
+    await person.say({ space: 'Climb', text });
+    return req.method === 'POST' ? res.writeHead(204).end() : res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(`Lena said: ${text}\n`);
   }
   if (url.pathname === '/') {
     // A new person gets in on an invitation, which a real link would bring.

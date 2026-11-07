@@ -316,6 +316,18 @@ export class PeerSession2 {
     if (hashes.length && this.#admitted) this.#send({ t: 'want', hashes: hashes.slice(0, 256) });
   }
 
+  /**
+   * Whose public events the peer gets may change without what it shares changing (someone new wrote in a shared space):
+   * ask publicFor again, and go through the public events once more.
+   */
+  refreshPublic(): void {
+    if (this.#closed || !this.#admitted || !this.#access.publicFor) return;
+    this.#publicOk = this.#access.publicFor(this.#shared) ?? (() => true);
+    this.#started.set('public', '');
+    this.#startSpace('public');
+    if (this.#peerHeads.size) this.#sendMissingV1();
+  }
+
   /** A blob for a peer that keeps ours (a person's storage node), or one it asked for that came late. */
   pushBlob(hash: string, data: Uint8Array): void {
     if (this.#admitted) this.#send({ t: 'blob', hash, data: b64u.encode(data) });
