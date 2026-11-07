@@ -1,5 +1,5 @@
-import { b64u, createIdentity, type Did, type Replica, type SigningIdentity } from '@weave/core';
-import { authKey, StorageClient, type HeldByNode, type PeerSession2, type SpaceAccess, type TextSocket } from '@weave/net/browser';
+import { b64u, blobHash, createIdentity, type Did, type Replica, type SigningIdentity } from '@weave/core';
+import { authKey, StorageClient, type BlobSource, type HeldByNode, type PeerSession2, type SpaceAccess, type TextSocket } from '@weave/net/browser';
 
 export * from '@weave/net/browser';
 
@@ -48,6 +48,9 @@ export function socketTo(url: string): Promise<TextSocket> {
   });
 }
 
+/** The node's blob store, as far as this uses it. */
+type Blobs = BlobSource & { put(data: Uint8Array): string };
+
 const RETRY_MS = 3000;
 /** Several changes in a row are one new list. */
 const SETTLE_MS = 150;
@@ -64,9 +67,25 @@ export class SwarmNode {
   #retry?: ReturnType<typeof setTimeout>;
   #sent = '';
 
-  constructor(replica: Replica, _options: unknown, _blobs: unknown, access: SpaceAccess = { spaces: () => [] }) {
+  /** Blobs made here while not connected: they go when it connects. */
+  readonly #toSend = new Map<string, Uint8Array>();
+  readonly #blobs?: Blobs;
+
+  constructor(replica: Replica, _options: unknown, blobs?: Blobs, access: SpaceAccess = { spaces: () => [] }) {
     this.replica = replica;
     this.#access = access;
+    this.#blobs = blobs;
+    if (blobs) {
+      // Nobody can ask a closed tab for a picture: what's made here goes to the storage node at once. What came from it doesn't go back.
+      const put = blobs.put.bind(blobs);
+      blobs.put = (data) => {
+        const hash = blobHash(data);
+        const made = !blobs.wanted().includes(hash);
+        put(data);
+        if (made) this.#send(hash, data);
+        return hash;
+      };
+    }
     this.#retry = setTimeout(() => {
       this.#retry = undefined;
       void this.#connect();
@@ -118,7 +137,10 @@ export class SwarmNode {
       await client.hold(held);
       await link.afterHold?.(client);
       this.#sent = JSON.stringify(held);
-      this.sessions.add(await client.sync(this.replica, this.#access));
+      const session = await client.sync(this.replica, this.#access, this.#blobs);
+      this.sessions.add(session);
+      for (const [hash, data] of this.#toSend) session.pushBlob(hash, data);
+      this.#toSend.clear();
       link.status?.('connected');
       this.#changed();
     } catch (error) {
@@ -135,6 +157,12 @@ export class SwarmNode {
       this.#retry = undefined;
       void this.#connect();
     }, RETRY_MS);
+  }
+
+  #send(hash: string, data: Uint8Array): void {
+    const [session] = this.sessions;
+    if (session) session.pushBlob(hash, data);
+    else this.#toSend.set(hash, data);
   }
 
   /** The list changed: hand it on, once it has settled. */

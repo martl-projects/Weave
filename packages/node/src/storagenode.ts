@@ -1,8 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { b64u, publicKeyFromDid, Replica, verify, type Did } from '@weave/core';
-import { LineChannel, PeerSession2, signinMessage, SwarmNode, wsPeerStream, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
+import { b64u, blobHash, MAX_BLOB, publicKeyFromDid, Replica, verify, type Did } from '@weave/core';
+import { LineChannel, PeerSession2, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
+import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
 
 /*
@@ -11,6 +12,9 @@ import { SqliteStore } from './sqlitestore.ts';
  * auth keys and topics, never a key: its protocol is in @weave/net (storageclient.ts).
  *
  * Accounts come by invitation. An account's id is a key of its own, not the person's identity.
+ *
+ * Blobs go by hash alone. What a blob is for lies in sealed events, so a node can't look for them itself: it keeps what
+ * its person's browser hands it, and when the browser asks for one it hasn't got, it asks the peers and keeps that too.
  */
 
 const QUOTA = 512 * 1024 * 1024;
@@ -24,18 +28,22 @@ const MAX_KEYS = 64;
 /** Wrong tokens, proofs or invitations on one connection before it's closed. */
 const MAX_TRIES = 5;
 const CONTROL_MS = 60_000;
+/** Blobs looked for at once, per account. */
+const MAX_ASKED = 512;
 
 /** A place on the network for one account: Hyperswarm in production. */
 export interface StorageNetwork {
   join(topic: string): Promise<void>;
   leave(topic: string): Promise<void>;
   announce(): void;
+  /** Ask whoever is there for blobs. */
+  want?(hashes: string[]): void;
   destroy(): Promise<void>;
 }
 
 export interface StorageOptions {
   dir: string;
-  network(replica: Replica, access: SpaceAccess): StorageNetwork;
+  network(replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork;
   quota?: number;
 }
 
@@ -62,6 +70,10 @@ interface Account {
   network: StorageNetwork;
   sessions: Set<PeerSession2>;
   over: boolean;
+  blobs: BlobStore;
+  blobBytes: number;
+  /** Blobs the browser asked for, that the peers are being asked for. */
+  asked: Set<string>;
 }
 
 const tokenHash = (token: string): string => createHash('sha256').update('weave/storage/token/v1').update(token).digest('base64url');
@@ -73,6 +85,11 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(temp, JSON.stringify(value));
   renameSync(temp, path);
 }
+
+const readInvites = (dir: string): string[] => {
+  const path = join(dir, 'invites.json');
+  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as string[]) : [];
+};
 
 function validHold(spaces: unknown): HeldRecord[] | undefined {
   if (!Array.isArray(spaces) || spaces.length > MAX_SPACES) return undefined;
@@ -89,23 +106,20 @@ function validHold(spaces: unknown): HeldRecord[] | undefined {
 /** An account's place on the real network: a Hyperswarm of its own (`options.bootstrap` for a test network). */
 export const swarmNetwork =
   (options: ConstructorParameters<typeof SwarmNode>[1] = {}) =>
-  (replica: Replica, access: SpaceAccess): StorageNetwork =>
-    new SwarmNode(replica, options, undefined, access);
+  (replica: Replica, access: SpaceAccess, blobs: BlobSource): StorageNetwork =>
+    new SwarmNode(replica, options, blobs, access);
 
 export class StorageNode {
   readonly #dir: string;
   readonly #accounts = new Map<Did, Account>();
   readonly #boxes = new Map<string, Did>();
   readonly #options: StorageOptions;
-  #invites: string[];
   #closing = false;
 
   private constructor(options: StorageOptions) {
     this.#options = options;
     this.#dir = options.dir;
     mkdirSync(join(this.#dir, 'accounts'), { recursive: true });
-    const invites = join(this.#dir, 'invites.json');
-    this.#invites = existsSync(invites) ? (JSON.parse(readFileSync(invites, 'utf8')) as string[]) : [];
   }
 
   /** Open a storage node: every account comes back and takes its place on the network. */
@@ -123,14 +137,55 @@ export class StorageNode {
     mkdirSync(dir, { recursive: true });
     const store = new SqliteStore(join(dir, 'log.sqlite'));
     const replica = new Replica(store);
-    const account: Account = { file, dir, store, replica, network: undefined as unknown as StorageNetwork, sessions: new Set(), over: false };
+    const blobDir = join(dir, 'blobs');
+    const blobBytes = existsSync(blobDir) ? readdirSync(blobDir).reduce((n, name) => n + statSync(join(blobDir, name)).size, 0) : 0;
+    const account: Account = { file, dir, store, replica, network: undefined as unknown as StorageNetwork, sessions: new Set(), over: false, blobs: new BlobStore(blobDir), blobBytes, asked: new Set() };
     // Strangers are turned away: only who shows one of these spaces gets anything.
-    account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)) });
+    account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)) }, this.#fromPeers(account));
     this.#accounts.set(file.id, account);
     for (const hash of Object.keys(file.boxes)) this.#boxes.set(hash, file.id);
     this.measure(file.id);
     if (!account.over) await Promise.all(file.spaces.flatMap((s) => s.topics).map((t) => account.network.join(t)));
     return account;
+  }
+
+  /** Keep a blob, if it is what it says and there's room. */
+  #keep(account: Account, hash: string, data: Uint8Array): boolean {
+    if (account.over || data.length > MAX_BLOB || blobHash(data) !== hash) return false;
+    if (!account.blobs.has(hash)) {
+      account.blobs.put(data);
+      account.blobBytes += data.length;
+      this.measure(account.file.id);
+    }
+    return true;
+  }
+
+  /** Blobs as peers on the network see them: they get what's here, and bring only what was asked for. */
+  #fromPeers(account: Account): BlobSource {
+    return {
+      get: (hash) => account.blobs.get(hash),
+      wanted: () => [...account.asked],
+      receive: (hash, data) => {
+        if (!account.asked.delete(hash) || !this.#keep(account, hash, data)) return;
+        for (const session of account.sessions) session.pushBlob(hash, data);
+      },
+    };
+  }
+
+  /** Blobs as the person's browser sees them: what it hands over is kept, and what isn't here is looked for. */
+  #fromOwner(account: Account): BlobSource {
+    return {
+      get: (hash) => {
+        const data = account.blobs.get(hash);
+        if (!data && !account.over && account.asked.size < MAX_ASKED && !account.asked.has(hash)) {
+          account.asked.add(hash);
+          account.network.want?.([hash]);
+        }
+        return data;
+      },
+      wanted: () => [],
+      receive: (hash, data) => void this.#keep(account, hash, data),
+    };
   }
 
   #held(account: Account): HeldSpace[] {
@@ -143,25 +198,31 @@ export class StorageNode {
 
   /** A new invitation: one account, once. Only its hash is kept. */
   invite(): string {
+    return StorageNode.inviteIn(this.#dir);
+  }
+
+  /** An invitation written straight into a node's folder, from another process while it runs: it reads the file when one is used. */
+  static inviteIn(dir: string): string {
+    mkdirSync(dir, { recursive: true });
     const code = randomBytes(18).toString('base64url');
-    this.#invites.push(tokenHash(code));
-    writeJson(join(this.#dir, 'invites.json'), this.#invites);
+    writeJson(join(dir, 'invites.json'), [...readInvites(dir), tokenHash(code)]);
     return code;
   }
 
   #takeInvite(code: string): boolean {
     const hash = Buffer.from(tokenHash(code));
-    const at = this.#invites.findIndex((i) => i.length === hash.length && timingSafeEqual(Buffer.from(i), hash));
+    const invites = readInvites(this.#dir);
+    const at = invites.findIndex((i) => i.length === hash.length && timingSafeEqual(Buffer.from(i), hash));
     if (at < 0) return false;
-    this.#invites.splice(at, 1);
-    writeJson(join(this.#dir, 'invites.json'), this.#invites);
+    invites.splice(at, 1);
+    writeJson(join(this.#dir, 'invites.json'), invites);
     return true;
   }
 
   #usedBy(account: Account): number {
     let used = 0;
     for (const name of readdirSync(account.dir)) if (name.startsWith('log.sqlite')) used += statSync(join(account.dir, name)).size;
-    return used;
+    return used + account.blobBytes;
   }
 
   /** Look at what an account uses: over its quota it stops collecting, under it again it goes on. */
@@ -292,7 +353,7 @@ export class StorageNode {
           if (used > quota * HARD_LIMIT) return no('this account is over its quota');
           clearTimeout(timer);
           channel.send({ t: 'ok' });
-          const session = new PeerSession2(mine.replica, channel.release(), { access: { spaces: () => this.#held(mine) } });
+          const session = new PeerSession2(mine.replica, channel.release(), { access: { spaces: () => this.#held(mine) }, blobs: this.#fromOwner(mine) });
           mine.sessions.add(session);
           stream.on('close', () => mine.sessions.delete(session));
           return;

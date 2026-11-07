@@ -19,8 +19,9 @@ rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
 
 await build({
-  entryPoints: [join(here, 'src', 'server.ts')],
-  outfile: join(dist, 'weave-server.mjs'),
+  entryPoints: { 'weave-server': join(here, 'src', 'server.ts'), 'weave-storage': join(here, 'src', 'storage.ts') },
+  outdir: dist,
+  outExtension: { '.js': '.mjs' },
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -38,7 +39,7 @@ cpSync(join(root, 'apps', 'console', 'dist'), join(dist, 'console'), { recursive
 const dependencies = Object.fromEntries(NATIVE.map((name) => [name, pkg(join(root, 'node_modules', name)).version]));
 writeFileSync(
   join(dist, 'package.json'),
-  JSON.stringify({ name: 'weave-server', version, private: true, type: 'module', bin: { 'weave-server': 'weave-server.mjs' }, engines: { node: '>=24' }, dependencies }, null, 2),
+  JSON.stringify({ name: 'weave-server', version, private: true, type: 'module', bin: { 'weave-server': 'weave-server.mjs', 'weave-storage': 'weave-storage.mjs' }, engines: { node: '>=24' }, dependencies }, null, 2),
 );
 cpSync(join(here, 'weave-server.service'), join(dist, 'weave-server.service'));
 console.log(`weave-server ${version} built in apps/server/dist (npm install --omit=dev there, then node weave-server.mjs)`);

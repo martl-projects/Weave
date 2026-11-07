@@ -7,7 +7,8 @@
   "description": "Weave Server: a company's own Weave node, with the admin console and SCIM, for a server or a container.",
   "scripts": {
     "build": "node build.ts",
-    "start": "node src/server.ts run"
+    "start": "node src/server.ts run",
+    "storage": "node src/storage.ts"
   },
   "dependencies": {
     "@weave/node": "*"

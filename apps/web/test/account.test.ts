@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -51,16 +51,20 @@ async function world() {
   const lena = WeaveNode.init('Lena', temp('lena'));
   await lena.createGroup('Climb');
   await lena.say({ space: 'Climb', text: 'the rope is in the van' });
-  const network: StorageOptions['network'] = (replica, access) => {
+  const lenaSessions: PeerSession2[] = [];
+  const network: StorageOptions['network'] = (replica, access, blobs) => {
     const sessions: PeerSession2[] = [];
     return {
       // A new topic is a new connection, as on the DHT: a storage node turns away one that shares no space with it yet.
       join: async () => {
         const [a, b] = duplexPair();
-        sessions.push(new PeerSession2(replica, a, { access }), new PeerSession2(lena.replica, b, { access: lena.sessionAccess() }));
+        const hers = new PeerSession2(lena.replica, b, { access: lena.sessionAccess(), blobs: lena.blobs });
+        lenaSessions.push(hers);
+        sessions.push(new PeerSession2(replica, a, { access, blobs }), hers);
       },
       leave: async () => {},
       announce: () => sessions.forEach((session) => session.announce()),
+      want: (hashes) => sessions.forEach((session) => session.want(hashes)),
       destroy: async () => {},
     };
   };
@@ -76,7 +80,7 @@ async function world() {
     await storage.close();
     await lena.close();
   };
-  return { lena, storage, dir, url, stop };
+  return { lena, lenaSessions, storage, dir, url, stop };
 }
 
 const texts = async (node: WeaveNode) => (await node.messages('Climb')).map((m) => m.text);
@@ -178,6 +182,36 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
       await node.say({ space: 'Climb', text: 'joined late' });
       await until(async () => (await texts(lena)).includes('joined late'));
       await node.close();
+    } finally {
+      await stop();
+    }
+  });
+
+  it('keeps pictures: the ones made here while the tab is closed, and brings others to it', async () => {
+    const { lena, lenaSessions, storage, dir: storageDir, url, stop } = await world();
+    const picture = (fill: number) => Buffer.alloc(40_000, fill).toString('base64');
+    try {
+      const dir = temp('pictures');
+      const { node } = createAccount(dir, 'Web', passkey(1));
+      useStorage(storageLink(dir, node, url, { invite: storage.invite() }));
+      await node.goOnline();
+      await node.joinSpace(await lena.invite('Climb'));
+      await until(async () => (await texts(node)).length > 0);
+
+      // From the other side: the node has it from nowhere, asks, and the browser gets it through it.
+      const theirs = await lena.putBlob({ data: picture(1), type: 'image/png' });
+      expect((await node.blob(theirs)).data).toBe(picture(1));
+
+      // From here: it goes to the node as it's made, and stays there when the tab closes.
+      const mine = await node.putBlob({ data: picture(2), type: 'image/png' });
+      const hash = /^wblob:([^.]+)\./.exec(mine)![1];
+      await until(() => allText(storageDir).length > 0 && readdirSync(join(storageDir, 'accounts')).some((f) => existsSync(join(storageDir, 'accounts', f, 'blobs', hash))));
+      await node.close();
+      await lena.blobs.fetch(hash, (hashes) => lenaSessions.forEach((session) => session.want(hashes)), 5_000);
+      expect((await lena.blob(mine)).data).toBe(picture(2));
+
+      // A file that lies at the node is sealed: its bytes say nothing.
+      expect(allText(storageDir)).not.toContain(Buffer.alloc(100, 2).toString('latin1'));
     } finally {
       await stop();
     }

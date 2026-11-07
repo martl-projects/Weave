@@ -316,6 +316,11 @@ export class PeerSession2 {
     if (hashes.length && this.#admitted) this.#send({ t: 'want', hashes: hashes.slice(0, 256) });
   }
 
+  /** A blob for a peer that keeps ours (a person's storage node), or one it asked for that came late. */
+  pushBlob(hash: string, data: Uint8Array): void {
+    if (this.#admitted) this.#send({ t: 'blob', hash, data: b64u.encode(data) });
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;

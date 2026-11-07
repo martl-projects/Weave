@@ -27,16 +27,17 @@ const person = WeaveNode.init('Lena', join(scratch, 'lena'));
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 
-const network: StorageOptions['network'] = (replica, access) => {
+const network: StorageOptions['network'] = (replica, access, blobs) => {
   const sessions: PeerSession2[] = [];
   return {
     // A new topic is a new connection, as on the DHT: a storage node turns away one that shares no space with it yet.
     join: async () => {
       const [a, b] = duplexPair();
-      sessions.push(new PeerSession2(replica, a, { access }), new PeerSession2(person.replica, b, { access: person.sessionAccess() }));
+      sessions.push(new PeerSession2(replica, a, { access, blobs }), new PeerSession2(person.replica, b, { access: person.sessionAccess(), blobs: person.blobs }));
     },
     leave: async () => {},
     announce: () => sessions.forEach((session) => session.announce()),
+    want: (hashes) => sessions.forEach((session) => session.want(hashes)),
     destroy: async () => {},
   };
 };

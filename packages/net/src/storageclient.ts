@@ -1,4 +1,5 @@
 import { b64u, sign, utf8, type Did, type Replica, type SigningIdentity } from '@weave/core';
+import type { BlobSource } from './session.ts';
 import { PeerSession2, type PeerStream, type SpaceAccess } from './session2.ts';
 import { wsPeerStream, type TextSocket } from './wspeer.ts';
 
@@ -181,13 +182,13 @@ export class StorageClient {
   }
 
   /** The connection becomes a sync session with the storage node. */
-  async sync(replica: Replica, access: SpaceAccess): Promise<PeerSession2> {
+  async sync(replica: Replica, access: SpaceAccess, blobs?: BlobSource): Promise<PeerSession2> {
     this.#channel.lastLine();
     await this.#ask({ t: 'sync' }).catch((error: Error) => {
       this.#channel.goOn();
       throw error;
     });
-    return new PeerSession2(replica, this.#channel.release(), { access });
+    return new PeerSession2(replica, this.#channel.release(), { access, blobs });
   }
 
   close(): void {
