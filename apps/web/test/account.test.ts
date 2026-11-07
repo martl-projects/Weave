@@ -52,20 +52,15 @@ async function world() {
   await lena.createGroup('Climb');
   await lena.say({ space: 'Climb', text: 'the rope is in the van' });
   const network: StorageOptions['network'] = (replica, access) => {
-    let session: PeerSession2 | undefined;
-    let theirs: PeerSession2 | undefined;
+    const sessions: PeerSession2[] = [];
     return {
+      // A new topic is a new connection, as on the DHT: a storage node turns away one that shares no space with it yet.
       join: async () => {
-        if (session) return;
         const [a, b] = duplexPair();
-        session = new PeerSession2(replica, a, { access });
-        theirs = new PeerSession2(lena.replica, b, { access: lena.sessionAccess() });
+        sessions.push(new PeerSession2(replica, a, { access }), new PeerSession2(lena.replica, b, { access: lena.sessionAccess() }));
       },
       leave: async () => {},
-      announce: () => {
-        session?.announce();
-        theirs?.announce();
-      },
+      announce: () => sessions.forEach((session) => session.announce()),
       destroy: async () => {},
     };
   };
@@ -164,6 +159,25 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
       expect(again.identity.author).toBe(person);
       await again.close();
       expect(lockState(second).ways.sort()).toEqual(['passkey-1', WORDS].sort());
+    } finally {
+      await stop();
+    }
+  });
+
+  it('joins a space long after it connected, with its session open all the while', async () => {
+    const { lena, storage, url, stop } = await world();
+    try {
+      const dir = temp('later');
+      const { node } = createAccount(dir, 'Web', passkey(1));
+      useStorage(storageLink(dir, node, url, { invite: storage.invite() }));
+      await node.goOnline();
+      await until(async () => (await node.status()).peers === 1);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await node.joinSpace(await lena.invite('Climb'));
+      await until(async () => (await texts(node)).includes('the rope is in the van'));
+      await node.say({ space: 'Climb', text: 'joined late' });
+      await until(async () => (await texts(lena)).includes('joined late'));
+      await node.close();
     } finally {
       await stop();
     }

@@ -86,8 +86,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           <T name="onboard.words.write" />
         </p>
         <Words words={words} />
-        <p className="small">{t('onboard.words.why')}</p>
-        <p className="small">{t('onboard.words.backup')}</p>
+        <p className="small">{t(bridge.web ? 'onboard.words.why.web' : 'onboard.words.why')}</p>
+        <p className="small">{t(bridge.web ? 'onboard.words.backup.web' : 'onboard.words.backup')}</p>
         <div className="field-row">
           <input id="wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
           <label htmlFor="wrote">{t('onboard.words.wrote')}</label>
@@ -171,7 +171,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <p className="small">{t('onboard.restore.intro')}</p>
         <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
         {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
-        <div className="field-row-stacked">
+        {!bridge.web && <div className="field-row-stacked">
           <label htmlFor="restore-backup">{t('onboard.restore.backup')}</label>
           <div className="field-row">
             <input id="restore-backup" className="grow" spellCheck={false} placeholder={t('onboard.restore.backup.placeholder')} value={backupFile} onChange={(e) => setBackupFile(e.target.value)} />
@@ -182,11 +182,25 @@ export function Onboarding({ onDone }: { onDone(): void }) {
             )}
           </div>
           <p className="small muted">{t('onboard.restore.backup.why')}</p>
-        </div>
+        </div>}
         <div className="buttons">
           <button type="button" onClick={() => setMode('create')}>
             {t('button.back')}
           </button>
+          {bridge.web && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                const ok = await attempt(() => bridge.web!.arrive().then(() => true));
+                setBusy(false);
+                if (ok) onDone();
+              }}
+            >
+              {t('onboard.restore.passkey')}
+            </button>
+          )}
           <button className="default" disabled={busy}>
             {t(busy ? 'onboard.restore.looking' : 'onboard.restore')}
           </button>
@@ -209,16 +223,18 @@ export function Onboarding({ onDone }: { onDone(): void }) {
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        <p>{t('onboard.intro')}</p>
+        <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
       </div>
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div className="buttons">
-        <button type="button" onClick={() => setMode('company')}>
-          {t('onboard.company.button')}
-        </button>
+        {!bridge.web && (
+          <button type="button" onClick={() => setMode('company')}>
+            {t('onboard.company.button')}
+          </button>
+        )}
         <button type="button" onClick={() => setMode('restore')}>
           {t('onboard.restore.button')}
         </button>
@@ -227,6 +243,55 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         </button>
       </div>
     </form>,
+  );
+}
+
+/** Weave Web: this browser's account, not opened yet. A passkey is asked right away by a click; the words always work. */
+export function Unlock({ onDone }: { onDone: () => void }) {
+  const { t } = useTexts();
+  const [words, setWords] = useState('');
+  const [busy, setBusy] = useState(false);
+  const open = async (given?: string) => {
+    setBusy(true);
+    const ok = await attempt(() => bridge.web!.unlock(given).then(() => true));
+    setBusy(false);
+    if (ok) onDone();
+  };
+  return (
+    <div className="desktop">
+      <div className="window welcome">
+        <div className="title-bar">
+          <div className="title-bar-text">{t('web.unlock.title')}</div>
+        </div>
+        <div className="window-body">
+          <div className="welcome-head">
+            <WeaveMark size={48} />
+            <p>{t('web.unlock.intro')}</p>
+          </div>
+          {bridge.web!.passkey() && (
+            <div className="buttons">
+              <button className="default" disabled={busy} onClick={() => void open()}>
+                {t('web.unlock.passkey')}
+              </button>
+            </div>
+          )}
+          <form
+            onSubmit={(e: FormEvent) => {
+              e.preventDefault();
+              void open(words);
+            }}
+          >
+            <div className="field-row-stacked">
+              <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
+              <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
+            </div>
+            <div className="buttons">
+              <button disabled={busy || !words.trim()}>{t('web.unlock.open')}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -648,7 +713,8 @@ export function KeysView() {
   const { data: info } = useApi(() => api<IdentityInfo>('identityInfo'), []);
   const { data: keys } = useApi(() => api<KeyInfo[]>('keys'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
-  const { data: keeping } = useApi(() => api<KeepersInfo>('keepers'), []);
+  const web = !!bridge.web;
+  const { data: keeping } = useApi(() => (web ? Promise.resolve(undefined) : api<KeepersInfo>('keepers')), []);
   // A company account has no recovery words: its company holds them.
   const { data: signIn } = useApi(() => api<SignInStatus>('signInStatus'), []);
   const company = signIn?.company ? (signIn.name ?? t('company.yours')) : undefined;
@@ -697,7 +763,7 @@ export function KeysView() {
           </div>
         )}
       </fieldset>
-      {status && (
+      {status && !web && (
         <fieldset>
           <legend>{t('keys.computer')}</legend>
           {status.keystoreWarning ? (
@@ -715,9 +781,9 @@ export function KeysView() {
           <KeystoreChoice current={status.keystore} />
         </fieldset>
       )}
-      {!company && info.recoverable && <BackupBox last={status?.lastBackup} />}
-      {keeping && <CopiesBox keeping={keeping} backedUp={!!status?.lastBackup} />}
-      <WalletBox />
+      {!web && !company && info.recoverable && <BackupBox last={status?.lastBackup} />}
+      {!web && keeping && <CopiesBox keeping={keeping} backedUp={!!status?.lastBackup} />}
+      {!web && <WalletBox />}
       <fieldset>
         <legend>{t('devices.legend')}</legend>
         <table className="keys-table">
@@ -760,13 +826,18 @@ export function KeysView() {
         </p>
       </fieldset>
       {/* Pairing more phones is for the computer itself; a phone may not. */}
-      {!bridge.phone && <PhonesBox />}
+      {!bridge.phone && !web && <PhonesBox />}
       <WhoReaches />
-      <AlwaysOnNodes keys={keys} />
-      <ServicesBox keys={keys} />
-      <KeyvaultsBox />
-      <FetchersBox />
-      <AgentAppsBox />
+      {/* What needs a computer that stays on, or its programs: not in a browser. */}
+      {!web && (
+        <>
+          <AlwaysOnNodes keys={keys} />
+          <ServicesBox keys={keys} />
+          <KeyvaultsBox />
+          <FetchersBox />
+          <AgentAppsBox />
+        </>
+      )}
       <LinkedAccountsBox />
       {dialog?.kind === 'revoke' && (
         <WordsDialog

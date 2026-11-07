@@ -81,7 +81,12 @@ In order, each one usable and tested before the next:
    - A box may hold 256 KB, which is some hundreds of spaces. A larger account would fail to re-seal, and that isn't handled yet.
    - Tried in a real page with the words: locked after a reload, wrong words refused, nothing readable of them in OPFS, and after wiping the site's data the same person came back with a new device key, what was said meanwhile, and a reply the other person read. The passkey's ceremony is tried with a stand-in only: the page's calls are tested, a real authenticator isn't.
    - **Still to do:** adding a second passkey to an account, losing one, and a way to leave a device.
-8. **Web mode of the UI:** what isn't there is hidden, the onboarding screens, a PWA.
+8. **Web mode of the UI:** the everyday app runs (`apps/web/src/app.ts`). It's the desktop's renderer as it is: the renderer takes whatever stands in `window.weave`, so the page sets a bridge to the Worker there and loads the renderer after, and every change to the renderer reaches the web. `bridge.web` is what's different: the lock screen (`Unlock` in `keys.tsx`), a passkey on the onboarding screens, and what isn't shown: company accounts, backup files, phones, the keystore, the wallet, keepers, services and agents on Keys & devices, the Desk. On a phone's width it has the mobile layout.
+   - Tried in a real page against a real person: a new account, the words, joining, chat both ways, a mention, members, lock and unlock. The passkey there was a stand-in, since the app's browser shows no passkey dialog. A tour of Home, Saved, Inbox, People, Memberships, Keys and a group's chat found only what Keys & devices now hides.
+   - `webMethods` (`apps/web/src/methods.ts`) is the phone's list, plus what the screens ask for, minus rooms. A refused method shows in the console.
+   - A person with no passkey gets the words alone, without being told why. That wants saying on the screen.
+   - The invitation comes in the address (`?invite=`); there's no field for it yet.
+   - **Still to do:** an offline shell (`manifest.json` is there, a service worker isn't: without one the page needs the network to start, and the services are downloaded by the browser's cache alone), loading the services after the first screen, images, board views with a client service (`lensBase` points nowhere yet), two tabs side by side, and going through the rest of the screens (projects, boards, proposals, memberships with payments).
 9. **Rooms:** a room's tunnel goes through the DHT, so a browser needs the storage node to carry it. Later.
 10. **Deploy on martl.io:** Hetzner, Caddy, monitoring, and the law (privacy policy, terms, deletion on request).
 

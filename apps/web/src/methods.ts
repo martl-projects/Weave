@@ -1,8 +1,13 @@
 /*
- * What a page may ask of the node in its Worker. Listed one by one, so a new method stays off the web until it's added on
- * purpose. It grows with the screens (docs/web-stage2.md, step 8).
+ * What a page may ask of the node in its Worker. It starts from what a phone may (`PHONE_METHODS`: everyday use, listed
+ * one by one, so a new method stays off the web until it's added on purpose), adds what the everyday screens ask for
+ * beyond that, and takes away what needs a computer. It grows with the screens (docs/web-stage2.md, step 8).
  */
 
-export const WEB_METHODS = ['whoami', 'status', 'spaces', 'joinSpace', 'createGroup', 'invite', 'members', 'chats', 'channels', 'messages', 'say', 'react', 'deleteMessage', 'feed', 'boards', 'posts', 'post', 'hints', 'hintServices', 'seen'] as const;
+/** Asked by the everyday screens, and fine in a browser. */
+const MORE = ['hints', 'hintServices', 'seen', 'marks', 'markServices', 'services', 'servicesIn', 'fetchers', 'preferences', 'setPreferences', 'reach', 'imprint', 'avatars', 'badges', 'myAccounts', 'platforms'];
 
-export type WebMethod = (typeof WEB_METHODS)[number];
+/** On a phone through its computer, and without one here: a room's tunnel goes through the DHT (step 9). */
+const NOT_HERE = ['visitWebsite', 'leaveWebsite', 'closeWebsite', 'sayOnWebsite', 'websiteChat', 'updateCheck'];
+
+export const webMethods = (phone: readonly string[]): ReadonlySet<string> => new Set([...phone, ...MORE].filter((method) => !NOT_HERE.includes(method)));

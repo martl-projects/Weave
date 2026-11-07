@@ -1,0 +1,10 @@
+{
+  "name": "Weave",
+  "short_name": "Weave",
+  "description": "Weave in your browser",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#008080",
+  "theme_color": "#008080",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

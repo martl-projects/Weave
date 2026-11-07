@@ -14,6 +14,8 @@ export interface AppState {
   enrollLink?: string;
   /** Managed by a company: only company accounts here. */
   companyOnly?: boolean;
+  /** Weave Web: there's an account here, and nothing has opened it yet. */
+  locked?: boolean;
 }
 
 export interface Bridge {
@@ -78,6 +80,15 @@ export interface Bridge {
   onEvent(listener: (item: FeedItem) => void): void;
   /** A weave: link the app was opened with (clicked somewhere outside it). */
   onLink(listener: (link: string) => void): void;
+  /** Weave Web, the node in a Worker of the page: its ways in. Missing everywhere else. */
+  web?: {
+    /** Whether a passkey opens this browser's account. */
+    passkey(): boolean;
+    /** Open this browser's account: with the words, or without them by asking the passkey. */
+    unlock(words?: string): Promise<void>;
+    /** Bring an account to this browser from the storage node, the same way. */
+    arrive(words?: string): Promise<void>;
+  };
   /** In the phone app, which uses a computer's node: pairing with it takes the place of creating an identity. */
   phone?: {
     /** Pair with the computer whose pairing link (from its QR code) this is. */

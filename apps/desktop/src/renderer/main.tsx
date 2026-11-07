@@ -10,7 +10,7 @@ import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
-import { KeysView, Onboarding } from './keys.tsx';
+import { KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
@@ -686,7 +686,7 @@ function Shell() {
       </div>
     );
     // Nobody else can bring a person's data back: said until a backup was saved, and again when the last one is a month old.
-    const backupDue = status?.backupDue && routeKey !== 'keys' && (
+    const backupDue = status?.backupDue && !bridge.web && routeKey !== 'keys' && (
       <a className="notice" href="#/keys">
         <Icon name="lock" /> {t(status.backupDue === 'again' ? 'backup.due.again' : 'backup.due.never')}
       </a>
@@ -715,7 +715,7 @@ function Shell() {
           items={[
             { label: t('menu.file.new'), onClick: () => setDialog({ kind: 'new' }) },
             { label: t('menu.file.join'), onClick: () => setDialog({ kind: 'new' }) },
-            { label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' }) },
+            ...(bridge.web ? [] : [{ label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' as const }) }]),
             'sep',
             { label: t('menu.file.close'), onClick: () => window.close() },
           ]}
@@ -860,6 +860,8 @@ function App() {
         <PhoneNotConnected name={state.home} onRetry={refresh} />
       ) : !state.hasIdentity ? (
         <Onboarding onDone={refresh} />
+      ) : state.locked ? (
+        <Unlock onDone={refresh} />
       ) : !state.connected ? (
         <NotConnected home={state.home} error={state.error} onRetry={refresh} />
       ) : location.hash.startsWith('#/overlay') ? (

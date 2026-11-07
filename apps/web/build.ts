@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { build, type Plugin } from 'esbuild';
+import { pinnedRelease, pins } from '../../packages/shipped/pinned.ts';
 
 /*
  * The real node, in a Worker. WeaveNode runs as it is: what it asks of its host is answered by src/host/, here, at the
@@ -12,6 +13,8 @@ import { build, type Plugin } from 'esbuild';
  */
 
 const require = createRequire(import.meta.url);
+const DESKTOP = join(import.meta.dirname, '..', 'desktop');
+const version = (JSON.parse(readFileSync(join(DESKTOP, 'package.json'), 'utf8')) as { version: string }).version;
 const host = (file: string) => join(import.meta.dirname, 'src', 'host', file);
 
 const HOST: Record<string, string> = { fs: 'fs.ts', path: 'path.ts', os: 'os.ts', crypto: 'crypto.ts', url: 'url.ts' };
@@ -47,12 +50,12 @@ const webHost: Plugin = {
   },
 };
 
-export async function buildWeb(dist: string, options: { minify?: boolean } = {}): Promise<void> {
+export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean } = {}): Promise<void> {
   mkdirSync(dist, { recursive: true });
   // A service's Worker has no host of ours: only what preview2-shim brings for a browser.
   await build({ entryPoints: { service: join(import.meta.dirname, 'src/service.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
   await build({
-    entryPoints: { page: join(import.meta.dirname, 'src/page.ts'), worker: join(import.meta.dirname, 'src/worker.ts') },
+    entryPoints: { worker: join(import.meta.dirname, 'src/worker.ts') },
     outdir: dist,
     bundle: true,
     format: 'esm',
@@ -64,6 +67,26 @@ export async function buildWeb(dist: string, options: { minify?: boolean } = {})
     plugins: [webHost],
     loader: { '.wasm': 'empty', '.node': 'empty', '.html': 'text', '.md': 'text' },
   });
+  // The page: the desktop's renderer as the desktop bundles it, behind the bridge to the Worker.
+  await build({
+    entryPoints: { app: join(import.meta.dirname, 'src/app.ts') },
+    outdir: dist,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    jsx: 'automatic',
+    sourcemap: options.minify ? false : 'inline',
+    minify: options.minify,
+    logLevel: 'warning',
+    define: { 'process.env.NODE_ENV': options.minify ? '"production"' : '"development"', WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
+    loader: { '.svg': 'text', '.png': 'dataurl' },
+  });
+  await build({ entryPoints: [join(DESKTOP, 'src/renderer/styles.css')], outfile: join(dist, 'styles.css'), bundle: true, minify: true, logLevel: 'warning', loader: { '.woff': 'dataurl', '.woff2': 'dataurl' } });
+  for (const file of ['index.html', 'manifest.json']) copyFileSync(join(import.meta.dirname, 'src', file), join(dist, file));
+  copyFileSync(join(DESKTOP, 'assets/icon.png'), join(dist, 'icon.png'));
+  // Weave avatar's renderer, pinned as on the desktop.
+  if (options.avatars) cpSync(await pinnedRelease('avatar'), join(dist, 'avatar3d'), { recursive: true });
   copyFileSync(join(require.resolve('@sqlite.org/sqlite-wasm/package.json'), '..', 'dist', 'sqlite3.wasm'), join(dist, 'sqlite3.wasm'));
 }
 
@@ -97,6 +120,6 @@ export async function buildServices(dist: string): Promise<string[]> {
 
 if (process.argv[1] === import.meta.filename) {
   const dist = join(import.meta.dirname, 'dist');
-  await buildWeb(dist);
+  await buildWeb(dist, { avatars: true });
   console.log('services:', await buildServices(dist));
 }

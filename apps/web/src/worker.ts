@@ -1,11 +1,12 @@
 import './host/globals.ts';
+import { errorToWire } from '@weave/core';
 import type { WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
 import { useStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
-import { WEB_METHODS } from './methods.ts';
+import { webMethods } from './methods.ts';
 import { openWasmDatabase } from './wasmdb.ts';
 
 /*
@@ -29,6 +30,8 @@ const HOME = '/weave';
 const SHIPPED = '/shipped';
 
 let node: WeaveNode | undefined;
+/** What a page may call. */
+let allowed: ReadonlySet<string> = new Set();
 /** Loaded once the database is open: the node reads files as it loads. */
 let account: typeof import('./account.ts');
 
@@ -47,7 +50,8 @@ const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, open
 function ready(opened: WeaveNode): void {
   node = opened;
   node.wasmSetup.shippedDir = SHIPPED;
-  node.replica.onAppend(() => self.postMessage({ event: 'changed' }));
+  // As the daemon's /events: everything new, with what it means for this person.
+  void node.watch((item) => self.postMessage({ event: item }), new AbortController().signal);
 }
 
 const lifecycle: Record<string, (...args: never[]) => unknown> = {
@@ -62,6 +66,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     useStore(db);
     await shipped();
     account = await import('./account.ts');
+    allowed = webMethods((await import('@weave/node')).PHONE_METHODS);
     return account.lockState(HOME);
   },
 
@@ -93,12 +98,15 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
 self.onmessage = async ({ data: { id, method, args } }) => {
   try {
     const own = lifecycle[method] as ((...a: unknown[]) => unknown) | undefined;
-    if (own) return self.postMessage({ id, result: await own(...args) });
-    if (!(WEB_METHODS as readonly string[]).includes(method)) throw new Error(`${method} isn't on the web`);
+    if (own) return self.postMessage({ id, answer: { result: await own(...args) } });
+    if (!allowed.has(method)) {
+      console.warn(`${method} isn't on the web`);
+      throw new Error(`${method} isn't on the web`);
+    }
     if (!node) throw new Error('this account is locked');
     const call = (node as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    self.postMessage({ id, result: await call.apply(node, args) });
+    self.postMessage({ id, answer: { result: await call.apply(node, args) } });
   } catch (error) {
-    self.postMessage({ id, error: error instanceof Error ? error.message : String(error) });
+    self.postMessage({ id, answer: errorToWire(error) });
   }
 };
