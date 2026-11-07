@@ -1,0 +1,18 @@
+# HTTPS for a storage node and its page. Caddy gets the certificate for WEAVE_DOMAIN by itself.
+{$WEAVE_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# The page's own policy is in its <meta>; being framed can only be refused here.
+		Content-Security-Policy "frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		# An invitation is in the address when someone arrives.
+		Referrer-Policy "no-referrer"
+		# By invitation for now: not for search engines.
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:8790
+}

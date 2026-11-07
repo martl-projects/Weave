@@ -62,9 +62,14 @@ async function own<T>(method: string, ...args: unknown[]): Promise<T> {
 
 /** An invitation to the storage node comes with the address the person was given, or from the page itself (dev.ts). */
 function invitation(): string | undefined {
-  const given = new URLSearchParams(location.search).get('invite');
-  if (given) sessionStorage.setItem(INVITE_KEY, given);
-  return given ?? sessionStorage.getItem(INVITE_KEY) ?? document.querySelector<HTMLMetaElement>('meta[name="weave-invite"]')?.content;
+  return sessionStorage.getItem(INVITE_KEY) ?? document.querySelector<HTMLMetaElement>('meta[name="weave-invite"]')?.content;
+}
+
+// An invitation stays out of the address bar, the history and whatever is shared from it.
+const arrived = new URLSearchParams(location.search).get('invite');
+if (arrived) {
+  sessionStorage.setItem(INVITE_KEY, arrived);
+  history.replaceState(null, '', location.pathname + location.hash);
 }
 
 const lock = await own<{ exists: boolean; ways: string[] }>('open');

@@ -1,0 +1,28 @@
+[Unit]
+Description=Weave storage node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=weave-storage
+Group=weave-storage
+EnvironmentFile=/etc/weave-storage.env
+ExecStart=/usr/local/bin/node /opt/weave-storage/weave-storage.mjs run --behind-proxy --origin https://${WEAVE_DOMAIN} --web /opt/weave-storage/web
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# It needs its folder and the network, nothing else of this computer.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/weave-storage
+
+[Install]
+WantedBy=multi-user.target

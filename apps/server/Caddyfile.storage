@@ -1,6 +1,0 @@
-# HTTPS for a storage node, with the page it serves. Caddy gets the certificate for WEAVE_DOMAIN.
-# weave-storage run --behind-proxy --origin https://$WEAVE_DOMAIN --web <the page's folder>
-{$WEAVE_DOMAIN} {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:8790
-}

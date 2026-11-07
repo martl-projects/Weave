@@ -3,8 +3,8 @@
 //   weave-storage run       run it: --dir, --port (8790), --origin https://… (several times), --web <the page's folder>
 //   weave-storage invite    a new invitation, for one account, once: --dir, --origin for the link
 //
-// Its folder is WEAVE_STORAGE_DIR, or --dir. TLS is a proxy's in front of it (see Caddyfile.storage): --behind-proxy
-// then counts connections by the address the proxy names.
+// Its folder is WEAVE_STORAGE_DIR, or --dir. TLS is a proxy's in front of it (see deploy/Caddyfile): --behind-proxy
+// then counts connections by the address the proxy names. Setting one up: docs/web-deploy.md.
 
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
