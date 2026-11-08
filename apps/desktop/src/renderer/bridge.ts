@@ -16,6 +16,8 @@ export interface AppState {
   companyOnly?: boolean;
   /** Weave Web: there's an account here, and nothing has opened it yet. */
   locked?: boolean;
+  /** Weave Web: another tab has the account open, and one tab at a time can. */
+  elsewhere?: boolean;
 }
 
 export interface Bridge {
@@ -84,6 +86,8 @@ export interface Bridge {
   web?: {
     /** Whether a passkey opens this browser's account. */
     passkey(): boolean;
+    /** Take the account over from the tab that has it open; that tab lets go. */
+    takeOver(): Promise<void>;
     /** Open this browser's account: with the words, or without them by asking the passkey. */
     unlock(words?: string): Promise<void>;
     /** Bring an account to this browser from the storage node, the same way. */

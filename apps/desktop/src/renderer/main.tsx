@@ -10,7 +10,7 @@ import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
-import { KeysView, Onboarding, Unlock } from './keys.tsx';
+import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
 import { HomeFeed } from './home.tsx';
@@ -858,6 +858,8 @@ function App() {
         <PhonePairing onDone={refresh} />
       ) : bridge.phone && !state.connected ? (
         <PhoneNotConnected name={state.home} onRetry={refresh} />
+      ) : state.elsewhere ? (
+        <Elsewhere />
       ) : !state.hasIdentity ? (
         <Onboarding onDone={refresh} />
       ) : state.locked ? (

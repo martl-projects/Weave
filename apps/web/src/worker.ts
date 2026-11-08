@@ -114,6 +114,13 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     await wipeDatabases();
   },
 
+  /** Another tab takes over: let go of everything. The page ends this Worker after, and the lock goes with it. */
+  async close() {
+    stopReconciling?.();
+    await node?.close();
+    node = undefined;
+  },
+
   async connect(url: string, invite?: string) {
     useStorage(account.storageLink(HOME, node!, url, { invite, status: (state, detail) => self.postMessage({ event: 'status', state, detail }) }));
     await node!.goOnline();

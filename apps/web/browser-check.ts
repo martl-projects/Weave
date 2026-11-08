@@ -143,6 +143,27 @@ try {
   passed('the passkey opens it again');
   if (!(await run<boolean>(`!!navigator.serviceWorker.controller`))) throw new Error('no service worker in charge');
 
+  // A second tab: one tab at a time has the account, and the second takes it over.
+  const second = (await (await fetch(`http://127.0.0.1:${DEBUG}/json/new?${encodeURIComponent(ORIGIN)}`, { method: 'PUT' })).json()) as { id: string; webSocketDebuggerUrl: string };
+  const tab = await devtools(second.webSocketDebuggerUrl);
+  await tab.send('Runtime.enable');
+  const takeOver = `!!document.querySelector('#take-over')`;
+  const locked = `!!document.querySelector('#unlock-words')`;
+  await until('the second tab to say so', () => tab.run<boolean>(takeOver));
+  passed('a second tab says the account is open in another');
+  await tab.run(`document.querySelector('#take-over').click()`);
+  await until('the first tab to let go', () => run<boolean>(takeOver));
+  await until('the second tab to have it', () => tab.run<boolean>(locked));
+  passed('it takes the account over, and the first tab lets go');
+  await run(`document.querySelector('#take-over').click()`);
+  await until('the first tab to have it again', () => run<boolean>(locked));
+  await until('the second tab to let go', () => tab.run<boolean>(takeOver));
+  tab.close();
+  await fetch(`http://127.0.0.1:${DEBUG}/json/close/${second.id}`);
+  await run(clickDefault);
+  await appUp();
+  passed('and the first takes it back');
+
   server.kill();
   await until('the server to go', () => fetch(`${ORIGIN}/health`).then(() => false, () => true));
   await open(ORIGIN);

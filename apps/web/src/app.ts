@@ -12,7 +12,24 @@ import { askPasskey, makePasskey } from './passkey.ts';
 const STORAGE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/storage`;
 const INVITE_KEY = 'weave.invite';
 
+/*
+ * One tab at a time has the account (the Worker's Web Lock). A tab that finds it taken says so and can take it over: it
+ * reloads asking for it, the tab that has it lets go and reloads to say it's elsewhere now, and the lock comes here.
+ */
+const TAKEN = 'weave.taken';
+const TAKE = 'weave.take';
+const tabs = new BroadcastChannel('weave-tabs');
+const taken = sessionStorage.getItem(TAKEN) !== null;
+const taking = sessionStorage.getItem(TAKE) !== null;
+sessionStorage.removeItem(TAKEN);
+sessionStorage.removeItem(TAKE);
+
 const worker = new Worker('/worker.js', { type: 'module' });
+/** Whether this tab has the account. */
+let holding = false;
+let shown = false;
+let showElsewhere: () => void = () => {};
+const elsewhere = new Promise<undefined>((resolve) => (showElsewhere = () => ((shown = true), resolve(undefined))));
 let next = 1;
 const waiting = new Map<number, (answer: { result?: unknown } | ErrorAnswer) => void>();
 /** The services' Workers, by the node's key: the page starts them for it. */
@@ -40,7 +57,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
     services.get(data.key!)?.terminate();
     return void services.delete(data.key!);
   }
-  if (data.event === 'waiting') return void (document.title = 'Weave (open in another tab)');
+  if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
   if (data.event === 'status') return console.info('storage node:', data.state, data.detail ?? '');
   if (typeof data.event === 'object') return listeners.forEach((listen) => listen(data.event as FeedItem));
   waiting.get(data.id)?.(data.answer);
@@ -72,9 +89,29 @@ if (arrived) {
   history.replaceState(null, '', location.pathname + location.hash);
 }
 
-const lock = await own<{ exists: boolean; ways: string[] }>('open');
+tabs.onmessage = async ({ data }: MessageEvent<string>) => {
+  if (data !== 'take' || !holding) return;
+  holding = false;
+  await Promise.race([own('close'), new Promise((resolve) => setTimeout(resolve, 2000))]);
+  worker.terminate();
+  sessionStorage.setItem(TAKEN, '');
+  location.reload();
+};
+
+// A tab that was just let go of opens nothing: it says the account is elsewhere.
+if (taken) {
+  worker.terminate();
+  showElsewhere();
+}
+const opening = taken ? new Promise<never>(() => {}) : own<{ exists: boolean; ways: string[] }>('open').then((lock) => {
+  holding = true;
+  // The other tab closed while this one said it was there: this one has it now.
+  if (shown) location.reload();
+  return lock;
+});
+const lock = await Promise.race([opening, elsewhere]);
 let open = false;
-let passkey = lock.ways.some((way) => way !== 'words');
+let passkey = !!lock?.ways.some((way) => way !== 'words');
 let given: string | undefined;
 
 // The page keeps working without a network. It needs a secure page; everything else stands without it.
@@ -85,8 +122,15 @@ const goOnline = async (invite?: string) => {
   await own('connect', STORAGE, invite);
 };
 
+/** Ask for the account again, by a reload: the tab that has it lets go when this one waits for it. */
+const takeOver = async (): Promise<void> => {
+  sessionStorage.setItem(TAKE, '');
+  location.reload();
+};
+
 const web: Bridge['web'] = {
   passkey: () => passkey,
+  takeOver,
   needsInvite: () => !invitation(),
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
@@ -114,7 +158,7 @@ const web: Bridge['web'] = {
 
 window.weave = {
   web,
-  state: async (): Promise<AppState> => ({ home: 'Weave', hasIdentity: lock.exists || open, connected: open, locked: lock.exists && !open }),
+  state: async (): Promise<AppState> => (lock ? { home: 'Weave', hasIdentity: lock.exists || open, connected: open, locked: lock.exists && !open } : { home: 'Weave', hasIdentity: true, connected: false, elsewhere: true }),
   /** A new person, with a passkey where the browser has one; where it hasn't, the words alone open the account. */
   init: async (name) => {
     const invite = given || invitation();

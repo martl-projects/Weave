@@ -296,6 +296,32 @@ function WebAccountBox() {
 }
 
 /** Weave Web: this browser's account, not opened yet. A passkey is asked right away by a click; the words always work. */
+/** Weave Web: the account is open in another tab. This one can take it over. */
+export function Elsewhere() {
+  const { t } = useTexts();
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="desktop">
+      <div className="window welcome">
+        <div className="title-bar">
+          <div className="title-bar-text">{t('web.tab.title')}</div>
+        </div>
+        <div className="window-body">
+          <div className="welcome-head">
+            <WeaveMark size={48} />
+            <p>{t('web.tab.intro')}</p>
+          </div>
+          <div className="buttons">
+            <button id="take-over" className="default" disabled={busy} onClick={() => (setBusy(true), void bridge.web!.takeOver())}>
+              {t('web.tab.take')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Unlock({ onDone }: { onDone: () => void }) {
   const { t } = useTexts();
   const [words, setWords] = useState('');
