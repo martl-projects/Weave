@@ -1,4 +1,10 @@
 # HTTPS for a storage node and its page. Caddy gets the certificate for WEAVE_DOMAIN by itself.
+
+{
+	# No admin API: on localhost:2019 anything on this computer could change where the page comes from, and the page is
+	# what every browser runs. A change to this file takes a restart (setup.sh does one).
+	admin off
+}
 {$WEAVE_DOMAIN} {
 	encode zstd gzip
 
