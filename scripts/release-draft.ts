@@ -21,8 +21,16 @@ const api = async (path: string, init: RequestInit = {}) => {
 // A draft isn't found by its tag: look through the newest releases.
 const found = ((await api('/releases?per_page=30')) as unknown as Array<{ id: number; tag_name: string; draft: boolean }>).find((r) => r.tag_name === tag);
 
+// GitHub reads @word in the notes as a mention: that account gets notified and shows as a contributor
+// (v0.31.0's "@tag" brought in the user tag). So @word outside code goes into backticks.
+const unmention = (notes: string) =>
+  notes
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/)
+    .map((part, i) => (i % 2 ? part : part.replace(/(^|[^\w/.`@])@([A-Za-z0-9][\w-]*)/g, '$1`@$2`')))
+    .join('');
+
 if (step === 'draft') {
-  const body = readFileSync(notesFile, 'utf8');
+  const body = unmention(readFileSync(notesFile, 'utf8'));
   if (found) await api(`/releases/${found.id}`, { method: 'PATCH', body: JSON.stringify({ body }) });
   else await api('/releases', { method: 'POST', body: JSON.stringify({ tag_name: tag, name: `Weave ${tag}`, body, draft: true, prerelease: tag.includes('-') }) });
   console.log(`${tag}: ${found ? 'notes updated' : 'drafted'}`);
