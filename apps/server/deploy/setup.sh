@@ -3,8 +3,6 @@
 #
 #   WEAVE_DOMAIN=web.martl.io bash setup.sh
 #
-# On a server that runs a Weave node already (a front door), add WEAVE_FIREWALL=no: the firewall would shut its UDP port.
-#
 # Safe to run again: an update replaces the program and the page, and keeps /var/lib/weave-storage.
 set -euo pipefail
 
@@ -64,15 +62,15 @@ exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /u
 EOF
 chmod 755 /usr/local/bin/weave-storage-invite
 
-# A firewall that lets in only SSH and the web. WEAVE_FIREWALL=no leaves it as it is: next to a Weave node on the DHT,
-# which wants its UDP port reachable, as on a front door.
-if [ "${WEAVE_FIREWALL:-yes}" != no ]; then
-  ufw allow 22/tcp >/dev/null
-  ufw allow 80/tcp >/dev/null
-  ufw allow 443/tcp >/dev/null
-  ufw allow 443/udp >/dev/null
-  ufw --force enable >/dev/null
-fi
+# A firewall: of TCP only SSH and the web come in. UDP stays open, since the DHT is UDP on ports a node picks as it
+# starts: the storage node's own, and a Weave node's next to it (a front door), are found by being reachable.
+ufw default deny incoming >/dev/null
+ufw default allow outgoing >/dev/null
+ufw allow 22/tcp >/dev/null
+ufw allow 80/tcp >/dev/null
+ufw allow 443/tcp >/dev/null
+ufw allow proto udp from any >/dev/null
+ufw --force enable >/dev/null
 
 systemctl daemon-reload
 systemctl enable --now weave-storage
