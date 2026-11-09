@@ -26,6 +26,8 @@ On the server:
 cd /root && tar -xzf weave-storage-*.tar.gz && cd weave-storage-*/ && WEAVE_DOMAIN=web.martl.io bash setup.sh
 ```
 
+On a server that runs a Weave node already, such as a front door, add `WEAVE_FIREWALL=no`: the firewall setup.sh turns on would shut the node's UDP port. The two don't meet otherwise: the node is on the DHT, the storage node behind Caddy on 80 and 443.
+
 Then `https://web.martl.io/health` says `ok`. The DNS record has to point at the server first, or Caddy gets no certificate.
 
 ## Inviting someone
