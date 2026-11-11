@@ -40,7 +40,10 @@ self.addEventListener('activate', (event) => {
 });
 
 async function fromNetwork(cache: Cache, request: Request): Promise<Response> {
-  const response = await fetch(request);
+  // By its address alone: a browser may bring its own If-Modified-Since along, and a 304 handed to the page is an
+  // empty page. Asked this way the browser revalidates by itself, and an unchanged file comes back whole.
+  const response = await fetch(request.url, { cache: 'no-cache', credentials: 'same-origin' });
+  if (response.status === 304) return (await cache.match(request, { ignoreSearch: true })) ?? fetch(request.url, { cache: 'reload', credentials: 'same-origin' });
   if (response.ok) await cache.put(request, response.clone());
   return response;
 }
