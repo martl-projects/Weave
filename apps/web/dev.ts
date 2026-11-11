@@ -22,6 +22,7 @@ import { duplexPair, PeerSession2 } from '@weave/net';
 import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { buildRooms, buildServices, buildWeb } from './build.ts';
+import { roomsCsp } from './src/rooms/csp.ts';
 
 const port = Number(process.env.PORT ?? 8790);
 const onDht = process.env.DHT === '1';
@@ -82,7 +83,7 @@ const server = createServer(async (req, res) => {
   if (/^[a-z2-7]{26}\.localhost:\d+$/.test(req.headers.host ?? '')) {
     const file = url.pathname.startsWith('/__weave/') ? url.pathname.slice('/__weave/'.length) : 'shell.html';
     if (!/^[\w.-]+$/.test(file) || !existsSync(join(dist, 'rooms', '__weave', file))) return res.writeHead(404).end();
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', ...(file === 'sw.js' ? { 'service-worker-allowed': '/' } : {}) });
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'content-security-policy': roomsCsp(`http://localhost:${port}`), ...(file === 'sw.js' ? { 'service-worker-allowed': '/' } : {}) });
     return createReadStream(join(dist, 'rooms', '__weave', file)).pipe(res);
   }
   // Lena links a browser, as from her computer: the link opens this page, and the handover waits here (/link/…).

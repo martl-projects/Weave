@@ -4,6 +4,8 @@
  * website through its tunnel, except its own files under /__weave/. Pages can't do this: it has no wildcard names.
  */
 
+import { roomsCsp } from './src/rooms/csp.ts';
+
 interface Assets {
   fetch(request: Request | URL): Promise<Response>;
 }
@@ -11,17 +13,7 @@ interface Assets {
 declare const STORAGE_ORIGIN: string;
 
 /** The tab's own page and files: they reach the storage node and frame the website, nothing else. */
-const CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  `connect-src ${STORAGE_ORIGIN.replace(/^http/, 'ws')}`,
-  "frame-src 'self'",
-  "worker-src 'self'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join('; ');
+const CSP = roomsCsp(STORAGE_ORIGIN);
 
 export default {
   async fetch(request: Request, env: { ASSETS: Assets }): Promise<Response> {
