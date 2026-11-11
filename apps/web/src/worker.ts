@@ -7,6 +7,8 @@ import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { webMethods } from './methods.ts';
+/** What Weave ships with for newcomers (martl's contact, through martl's front door), as `weave init` applies it. */
+import bundle from '../../../weave.bundle.json' with { type: 'json' };
 import { openWasmDatabase, wipeDatabases } from './wasmdb.ts';
 
 /*
@@ -124,6 +126,8 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   async connect(url: string, invite?: string) {
     useStorage(account.storageLink(HOME, node!, url, { invite, status: (state, detail) => self.postMessage({ event: 'status', state, detail }) }));
     await node!.goOnline();
+    // A new account (it came with its invitation): the contacts Weave ships with, once it can reach them.
+    if (invite) void node!.applyBundle(bundle).catch((error: Error) => console.warn('the contacts Weave ships with:', error.message));
   },
 };
 

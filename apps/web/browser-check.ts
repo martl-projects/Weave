@@ -8,6 +8,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { decodeContact } from '@weave/core';
+import bundle from '../../weave.bundle.json' with { type: 'json' };
 
 const PORT = 8795;
 const DEBUG = 9335;
@@ -96,6 +98,12 @@ try {
   await until('the words', () => run<boolean>(`!!document.querySelector('#wrote')`));
   if (await run<boolean>(`!!document.querySelector('.notice.alarm')`)) throw new Error('no passkey was made');
   passed('a passkey with PRF makes an account');
+  // Weave's own contacts for newcomers, as `weave init` adds them: martl, through the front door.
+  for (const link of bundle.contacts) {
+    const { did } = decodeContact(link);
+    await until('a contact Weave ships with', async () => (await call<{ following?: boolean }>('profile', did)).result?.following);
+  }
+  passed('it knows the contacts Weave ships with');
   await run(`document.querySelector('#wrote').click()`);
   await sleep(100);
   await run(clickDefault);
