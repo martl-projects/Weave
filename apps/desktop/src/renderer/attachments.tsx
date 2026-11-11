@@ -9,8 +9,9 @@ import { t, useTexts } from './texts.tsx';
  * Files and images in chat. A message carries its file by blob reference with
  * name, size and type (all inside the sealed message), the sender holds the
  * encrypted blob and the readers fetch it from whoever has it. Images show as a
- * thumbnail that opens full size; other files as a card to save. The bytes come
- * when asked for: a thumbnail asks at once, a file card when you save it.
+ * thumbnail that opens full size; videos and sound play in place; other files as a
+ * card to save. The bytes come when asked for: a thumbnail or player asks at once,
+ * a file card when you save it.
  */
 
 export const MAX_FILE = 2 * 1024 * 1024;
@@ -20,6 +21,10 @@ export const fileSize = (bytes: number): string =>
   bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 export const isImage = (type: string) => /^image\/(png|jpeg|webp|gif)$/.test(type);
+
+/** A video or sound this app can play in place (what Chromium plays without extra codecs). */
+export const playable = (type: string): 'video' | 'audio' | undefined =>
+  /^video\/(mp4|webm|ogg)$/.test(type) ? 'video' : /^audio\/(mpeg|mp4|aac|ogg|opus|wav|x-wav|webm|flac)$/.test(type) ? 'audio' : undefined;
 
 const toBase64 = (bytes: Uint8Array) => {
   let binary = '';
@@ -163,8 +168,52 @@ function FileAttachment({ file }: { file: Attachment }) {
   );
 }
 
+/**
+ * A video or sound in the chat, played in place with the browser's own controls,
+ * and a line under it with its name, size and Save. If it cannot be played after
+ * all (a codec the app lacks), it shows as a file card to save.
+ */
+function MediaAttachment({ file, kind }: { file: Attachment; kind: 'video' | 'audio' }) {
+  const { t } = useTexts();
+  const blob = useBlob(file.ref, true);
+  const [broken, setBroken] = useState(false);
+  if (broken) return <FileAttachment file={file} />;
+  if (blob.status === 'ready' && blob.url) {
+    return (
+      <div className={`msg-media ${kind}`}>
+        {kind === 'video' ? (
+          <video src={blob.url} controls preload="metadata" playsInline onError={() => setBroken(true)} />
+        ) : (
+          <audio src={blob.url} controls preload="metadata" onError={() => setBroken(true)} />
+        )}
+        <div className="msg-media-bar">
+          <span className="file-name" title={file.name}>
+            {file.name}
+          </span>
+          <span className="file-meta">{fileSize(file.size)}</span>
+          <button className="file-save" title={t('file.save.file')} onClick={() => void saveBlob(file).catch(() => {})}>
+            <Icon name="download" /> {t('button.save')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={`file-card ${blob.status}`}>
+      <Icon name="file" />
+      <span className="file-name" title={file.name}>
+        {file.name}
+      </span>
+      <span className="file-meta">{fileSize(file.size)}</span>
+      <FetchState state={blob} />
+    </div>
+  );
+}
+
 export function AttachmentView({ file }: { file: Attachment }) {
-  return isImage(file.type) ? <ImageAttachment file={file} /> : <FileAttachment file={file} />;
+  if (isImage(file.type)) return <ImageAttachment file={file} />;
+  const kind = playable(file.type);
+  return kind ? <MediaAttachment file={file} kind={kind} /> : <FileAttachment file={file} />;
 }
 
 /** The picture full size over a dimmed screen (in a portal: the chat's rows are transformed, which would pin it inside): Escape, a click outside or the button closes it; Save keeps the file. */

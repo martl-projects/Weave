@@ -13,7 +13,7 @@ import { ask, attempt, Avatar, loadEmbeds, toast } from './ui.tsx';
 import { Marks } from './marks.tsx';
 import { HintSigns, useHints } from './notify.tsx';
 import { AnnounceCard } from './announce.tsx';
-import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, uploadFile } from './attachments.tsx';
+import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, playable, uploadFile } from './attachments.tsx';
 import { pastedFile } from './paste.ts';
 import { t, useTexts } from './texts.tsx';
 
@@ -415,7 +415,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
     estimateSize: (i) => {
       if (rows[i]?.kind === 'day') return 44;
       const row = rows[i] as Extract<Row, { kind: 'msg' }>;
-      return (row.compact ? 26 : 62) + (row.m.file ? (isImage(row.m.file.type) ? 240 : 40) : 0);
+      return (row.compact ? 26 : 62) + (row.m.file ? (isImage(row.m.file.type) || playable(row.m.file.type) === 'video' ? 270 : playable(row.m.file.type) ? 90 : 40) : 0);
     },
     overscan: 12,
     getItemKey: (i) => rows[i].key,
