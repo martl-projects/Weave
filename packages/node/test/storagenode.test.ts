@@ -107,6 +107,16 @@ describe('a storage node', { timeout: 60_000 }, () => {
     await expect(other.register(createIdentity(), invite)).rejects.toThrow('that invitation is not valid');
   });
 
+  it('takes a shared invitation for as many accounts as it says', async () => {
+    const { node, connect, dir } = await start();
+    const shared = node.invite(2);
+    await (await connect()).register(createIdentity(), shared);
+    expect(StorageNode.invitesIn(dir).shared).toEqual([{ id: expect.any(String), left: 1 }]);
+    await (await connect()).register(createIdentity(), shared);
+    await expect((await connect()).register(createIdentity(), shared)).rejects.toThrow('that invitation is not valid');
+    expect(StorageNode.invitesIn(dir)).toEqual({ single: 0, shared: [] });
+  });
+
   it('signs in only with the account key, on this very connection', async () => {
     const { node, connect } = await start();
     const account = createIdentity();

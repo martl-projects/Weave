@@ -55,12 +55,16 @@ cp "$here/Caddyfile" /etc/caddy/Caddyfile
 install -d /etc/systemd/system/caddy.service.d
 printf '[Service]\nEnvironment=WEAVE_DOMAIN=%s\n' "$WEAVE_DOMAIN" > /etc/systemd/system/caddy.service.d/domain.conf
 
-# `weave-storage-invite`: a link for one new account.
+# `weave-storage-invite`: a link for one new account (`--accounts 20`: one link for 20). `weave-storage-invites`: what's left.
 cat > /usr/local/bin/weave-storage-invite <<EOF
 #!/bin/sh
-exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs invite --origin https://$WEAVE_DOMAIN
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs invite --origin https://$WEAVE_DOMAIN "\$@"
 EOF
-chmod 755 /usr/local/bin/weave-storage-invite
+cat > /usr/local/bin/weave-storage-invites <<EOF
+#!/bin/sh
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs invites
+EOF
+chmod 755 /usr/local/bin/weave-storage-invite /usr/local/bin/weave-storage-invites
 
 # A firewall: of TCP only SSH and the web come in. UDP stays open, since the DHT is UDP on ports a node picks as it
 # starts: the storage node's own, and a Weave node's next to it (a front door), are found by being reachable.

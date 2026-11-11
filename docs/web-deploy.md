@@ -38,6 +38,18 @@ weave-storage-invite
 
 prints a link for one new account, once. Only its hash is kept.
 
+```bash
+weave-storage-invite --accounts 20
+```
+
+prints one link for 20 new accounts, to share. Whoever has it gets in until 20 have, so it's worth no more than whom it's given to.
+
+```bash
+weave-storage-invites
+```
+
+shows the invitations not used up: how many for one account, and how many accounts each shared one has left.
+
 ## Updating
 
 The same three steps: `setup.sh` replaces the program and the page and keeps the accounts. The domain is remembered.

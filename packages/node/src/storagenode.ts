@@ -106,10 +106,14 @@ function writeJson(path: string, value: unknown): void {
   renameSync(temp, path);
 }
 
-const readInvites = (dir: string): string[] => {
+/** An invitation's hash: for one account (a string, as before), or for several, with how many are left. */
+export type StoredInvite = string | { hash: string; left: number };
+
+const readInvites = (dir: string): StoredInvite[] => {
   const path = join(dir, 'invites.json');
-  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as string[]) : [];
+  return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as StoredInvite[]) : [];
 };
+const hashOf = (invite: StoredInvite): string => (typeof invite === 'string' ? invite : invite.hash);
 
 function validHold(spaces: unknown): HeldRecord[] | undefined {
   if (!Array.isArray(spaces) || spaces.length > MAX_SPACES) return undefined;
@@ -253,25 +257,38 @@ export class StorageNode {
     writeJson(join(account.dir, 'account.json'), account.file);
   }
 
-  /** A new invitation: one account, once. Only its hash is kept. */
-  invite(): string {
-    return StorageNode.inviteIn(this.#dir);
+  /** A new invitation: for one account, or for `accounts` of them (one link to share). Only its hash is kept. */
+  invite(accounts = 1): string {
+    return StorageNode.inviteIn(this.#dir, accounts);
   }
 
   /** An invitation written straight into a node's folder, from another process while it runs: it reads the file when one is used. */
-  static inviteIn(dir: string): string {
+  static inviteIn(dir: string, accounts = 1): string {
+    if (!Number.isInteger(accounts) || accounts < 1) throw new Error('an invitation is for one account or more');
     mkdirSync(dir, { recursive: true });
     const code = randomBytes(18).toString('base64url');
-    writeJson(join(dir, 'invites.json'), [...readInvites(dir), tokenHash(code)]);
+    const hash = tokenHash(code);
+    writeJson(join(dir, 'invites.json'), [...readInvites(dir), accounts === 1 ? hash : { hash, left: accounts }]);
     return code;
+  }
+
+  /** The invitations not used up: how many for one account, and per shared one (by the start of its hash) how many are left. */
+  static invitesIn(dir: string): { single: number; shared: Array<{ id: string; left: number }> } {
+    const invites = readInvites(dir);
+    return {
+      single: invites.filter((i) => typeof i === 'string').length,
+      shared: invites.flatMap((i) => (typeof i === 'string' ? [] : [{ id: i.hash.slice(0, 8), left: i.left }])),
+    };
   }
 
   #takeInvite(code: string): boolean {
     const hash = Buffer.from(tokenHash(code));
     const invites = readInvites(this.#dir);
-    const at = invites.findIndex((i) => i.length === hash.length && timingSafeEqual(Buffer.from(i), hash));
+    const at = invites.findIndex((i) => hashOf(i).length === hash.length && timingSafeEqual(Buffer.from(hashOf(i)), hash));
     if (at < 0) return false;
-    invites.splice(at, 1);
+    const taken = invites[at];
+    if (typeof taken !== 'string' && taken.left > 1) invites[at] = { ...taken, left: taken.left - 1 };
+    else invites.splice(at, 1);
     writeJson(join(this.#dir, 'invites.json'), invites);
     return true;
   }
