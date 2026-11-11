@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import type HyperDHT from 'hyperdht';
 import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
+import { PLAN_CODE } from './storageplans.ts';
 import { textSocket } from './websocket.ts';
 
 /*
@@ -66,10 +67,12 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
     socket.on('error', () => {});
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname !== '/storage' && url.pathname !== '/dht') return refuse('404 Not Found');
-    // A page from elsewhere gets no socket: the browser says truthfully where a page comes from.
+    // A page from elsewhere gets no socket: the browser says truthfully where a page comes from. A program that isn't a
+    // page (a creator's Weave putting an onboarding link) sends no origin; it could claim any, so refusing it guards nothing.
+    const program = url.pathname === '/storage' && req.headers.origin === undefined;
     const origin = req.headers.origin ?? '';
     const relayOrigin = url.pathname === '/dht' && (options.relayOrigins ?? []).some((pattern) => originMatches(pattern, origin));
-    if (!origins.has(origin) && !relayOrigin) return refuse('403 Forbidden');
+    if (!program && !origins.has(origin) && !relayOrigin) return refuse('403 Forbidden');
     const address = addressOf(req, options.behindProxy);
     const count = open.get(address) ?? 0;
     if (count >= max) return refuse('429 Too Many Requests');
@@ -242,13 +245,55 @@ export function linkHandovers(behindProxy: boolean | undefined, origins: Iterabl
   };
 }
 
-/** The HTTP side: the page's files, if it has them, handovers to linked browsers, and whether it's up. */
+/** Text for an HTML attribute. */
+const attr = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * The page for an onboarding link, with what its link preview shows (og:title, og:description, og:image): for a
+ * node that serves the page itself. web.martl.io does the same in a Pages Function (apps/web/functions/j).
+ */
+export function previewTags(preview: { live: boolean; preview?: { title: string; text?: string }; image?: true } | undefined, imageUrl: string): string {
+  const title = !preview ? 'Weave' : !preview.live ? 'This invite link no longer works' : (preview.preview?.title ?? 'An invitation to Weave');
+  const text = !preview?.live ? 'Ask whoever sent it for a new one.' : (preview.preview?.text ?? 'Join on Weave: a place to build things together.');
+  return [
+    `<meta property="og:title" content="${attr(title)}">`,
+    `<meta property="og:description" content="${attr(text)}">`,
+    '<meta property="og:type" content="website">',
+    '<meta property="og:site_name" content="Weave">',
+    ...(preview?.live && preview.image ? [`<meta property="og:image" content="${attr(imageUrl)}">`, '<meta name="twitter:card" content="summary_large_image">'] : ['<meta name="twitter:card" content="summary">']),
+  ].join('\n');
+}
+
+/** The HTTP side: the page's files, if it has them, handovers to linked browsers, onboarding links' previews, and whether it's up. */
 export function storageServer(node: StorageNode, options: StorageServerOptions): Server {
   const handover = linkHandovers(options.behindProxy, options.origins);
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');
     if (url.pathname.startsWith('/link/')) return handover(req, res, url.pathname.slice('/link/'.length));
+    // An onboarding link's preview: open by design, and nothing of the sealed plan. Fetching it counts no use.
+    const preview = /^\/preview\/([A-Za-z0-9]+)(\.png)?$/.exec(url.pathname);
+    if (preview && PLAN_CODE.test(preview[1]) && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (preview[2]) {
+        const image = node.plans.image(preview[1]);
+        if (!image) return res.writeHead(404).end();
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': image.length, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff' });
+        return res.end(req.method === 'HEAD' ? undefined : image);
+      }
+      const info = node.plans.preview(preview[1]);
+      if (!info) return res.writeHead(404, { 'content-type': 'application/json' }).end('{}');
+      return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=60', 'access-control-allow-origin': '*' }).end(JSON.stringify(info));
+    }
+    // The page of an onboarding link, from a node that serves the page: index.html with the preview's tags.
+    const join_ = /^\/j\/([A-Za-z0-9]+)$/.exec(url.pathname);
+    if (join_ && options.web && (req.method === 'GET' || req.method === 'HEAD')) {
+      const index = join(options.web, 'index.html');
+      if (!existsSync(index)) return res.writeHead(404).end();
+      const base = `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host}`;
+      const html = readFileSync(index, 'utf8').replace('</head>', `${previewTags(PLAN_CODE.test(join_[1]) ? node.plans.preview(join_[1]) : undefined, `${base}/preview/${join_[1]}.png`)}\n</head>`);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+      return res.end(req.method === 'HEAD' ? undefined : html);
+    }
     if (!options.web || (req.method !== 'GET' && req.method !== 'HEAD')) return res.writeHead(404).end();
     const wanted = normalize(decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     const file = join(options.web, wanted);

@@ -80,6 +80,13 @@ exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /u
 EOF
 chmod 755 /usr/local/bin/weave-storage-invite /usr/local/bin/weave-storage-invites
 
+# `weave-storage-planner <did> [--off]`: who may make onboarding links here.
+cat > /usr/local/bin/weave-storage-planner <<EOF
+#!/bin/sh
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs planner "\$@"
+EOF
+chmod 755 /usr/local/bin/weave-storage-planner
+
 # A firewall: of TCP only SSH and the web come in. UDP stays open, since the DHT is UDP on ports a node picks as it
 # starts: the storage node's own, and a Weave node's next to it (a front door), are found by being reachable.
 ufw default deny incoming >/dev/null

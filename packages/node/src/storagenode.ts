@@ -2,9 +2,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, blobHash, MAX_BLOB, publicKeyFromDid, Replica, verify, type Did } from '@weave/core';
-import { LineChannel, PeerSession2, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
+import { LineChannel, PeerSession2, planMessage, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
 import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
+import { PlanStore } from './storageplans.ts';
 import type HyperDHT from 'hyperdht';
 
 /*
@@ -106,6 +107,7 @@ interface Account {
 
 const tokenHash = (token: string): string => createHash('sha256').update('weave/storage/token/v1').update(token).digest('base64url');
 const folderOf = (id: Did): string => createHash('sha256').update(id).digest('hex').slice(0, 32);
+const fieldsOf = (message: unknown): Record<string, unknown> => (message && typeof message === 'object' ? (message as Record<string, unknown>) : {});
 const isText = (v: unknown, max = 4096): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
 
 function writeJson(path: string, value: unknown): void {
@@ -158,6 +160,8 @@ export class StorageNode {
   readonly #accounts = new Map<Did, Account>();
   readonly #boxes = new Map<string, Did>();
   readonly #options: StorageOptions;
+  /** Onboarding links' plans, sealed, and their previews (storageplans.ts). */
+  readonly plans: PlanStore;
   #closing = false;
   /** Tickets for the relay, by their hash: whose, and until when. */
   readonly #tickets = new Map<string, { id: Did; until: number }>();
@@ -168,6 +172,7 @@ export class StorageNode {
     this.#options = options;
     this.#dir = options.dir;
     mkdirSync(join(this.#dir, 'accounts'), { recursive: true });
+    this.plans = new PlanStore(this.#dir);
   }
 
   /** Open a storage node: every account comes back and takes its place on the network. */
@@ -389,14 +394,16 @@ export class StorageNode {
       channel.send({ t: 'no', why });
       if (++tries >= MAX_TRIES) channel.close();
     };
-    const proved = (id: unknown, sig: unknown): id is Did => {
+    const proved = (id: unknown, sig: unknown, message = signinMessage): id is Did => {
       if (!isText(id, 200) || !isText(sig, 200)) return false;
       try {
-        return verify(b64u.decode(sig), signinMessage(stream.handshakeHash), publicKeyFromDid(id));
+        return verify(b64u.decode(sig), message(stream.handshakeHash), publicKeyFromDid(id));
       } catch {
         return false;
       }
     };
+    // A planner signs as their Weave identity, over this connection, with a message of its own.
+    const planner = (m: Record<string, unknown>): Did | undefined => (proved(m.id, m.sig, planMessage) ? m.id : undefined);
 
     const handle = async (m: Record<string, unknown>): Promise<void> => {
       switch (m.t) {
@@ -421,6 +428,31 @@ export class StorageNode {
           if (!proved(m.id, m.sig) || !this.#accounts.has(m.id)) return no('no such account, or the wrong key');
           account = this.#accounts.get(m.id);
           return channel.send({ t: 'ok' });
+        }
+        // Onboarding links: anyone with a code may look and take; only a planner, as themselves, puts and revokes.
+        case 'plan.get': {
+          const plan = this.plans.get(m.code);
+          return plan ? channel.send({ t: 'ok', ...plan }) : no('this invite link no longer works');
+        }
+        case 'plan.take': {
+          const taken = this.plans.take(m.code, m.check, m.account === true, () => this.invite());
+          return channel.send({ t: 'ok', ...taken });
+        }
+        case 'plan.put': {
+          const by = planner(m);
+          if (!by) return no('that proof is not from this key');
+          return channel.send({ t: 'ok', code: this.plans.put(by, m) });
+        }
+        case 'plan.revoke': {
+          const by = planner(m);
+          if (!by) return no('that proof is not from this key');
+          this.plans.revoke(by, m.code);
+          return channel.send({ t: 'ok' });
+        }
+        case 'plan.list': {
+          const by = planner(m);
+          if (!by) return no('that proof is not from this key');
+          return channel.send({ t: 'ok', plans: this.plans.list(by) });
         }
       }
       if (!account) return no('sign in first');
@@ -497,7 +529,7 @@ export class StorageNode {
             return channel.close();
           }
           if (!message || typeof message !== 'object') return channel.close();
-          await handle(message as Record<string, unknown>).catch(() => no('that failed'));
+          await handle(message as Record<string, unknown>).catch((error: Error) => no(String(fieldsOf(message).t ?? '').startsWith('plan.') ? error.message : 'that failed'));
         });
       },
       MAX_LINE,

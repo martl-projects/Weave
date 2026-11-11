@@ -5,13 +5,14 @@
 //   weave-storage invite    a new invitation, for one account, once: --dir, --origin for the link; --accounts 20 for one
 //                           link that 20 people can use
 //   weave-storage invites   the invitations not used up yet
+//   weave-storage planner <did> [--off]   let a Weave identity make onboarding links here (or no longer); no did: the list
 //
 // Its folder is WEAVE_STORAGE_DIR, or --dir. TLS is a proxy's in front of it (see deploy/Caddyfile): --behind-proxy
 // then counts connections by the address the proxy names. Setting one up: docs/web-deploy.md.
 
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { StorageNode, storageServer, swarmNetwork } from '@weave/node';
+import { PlanStore, StorageNode, storageServer, swarmNetwork } from '@weave/node';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -24,6 +25,7 @@ const { values, positionals } = parseArgs({
     web: { type: 'string' },
     'behind-proxy': { type: 'boolean', default: false },
     accounts: { type: 'string', default: '1' },
+    off: { type: 'boolean', default: false },
   },
 });
 
@@ -42,6 +44,14 @@ if (command === 'invite') {
   const { single, shared } = StorageNode.invitesIn(resolve(dir));
   console.log(`for one account: ${single}`);
   for (const { id, left } of shared) console.log(`shared ${id}: ${left} left`);
+} else if (command === 'planner') {
+  const did = positionals[1];
+  if (did && !/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(did)) {
+    console.error('a planner is a Weave identity: did:key:z…');
+    process.exit(1);
+  }
+  const list = did ? PlanStore.allowIn(resolve(dir), did as `did:key:z${string}`, !values.off) : PlanStore.plannersIn(resolve(dir));
+  console.log(list.length ? list.join('\n') : '(nobody makes onboarding links here yet)');
 } else if (command === 'run') {
   if (!values.origin.length) {
     console.error('say where pages may connect from: --origin https://…');
@@ -59,6 +69,6 @@ if (command === 'invite') {
   process.once('SIGINT', () => void stop());
   process.once('SIGTERM', () => void stop());
 } else {
-  console.error('weave-storage run | invite | invites');
+  console.error('weave-storage run | invite | invites | planner');
   process.exit(1);
 }

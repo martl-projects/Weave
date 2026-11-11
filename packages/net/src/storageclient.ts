@@ -39,6 +39,31 @@ export interface StorageUsage {
 }
 
 export const signinMessage = (handshakeHash: Uint8Array): Uint8Array => new Uint8Array([...utf8('weave/storage/signin/v1'), ...handshakeHash]);
+/** What a creator signs, as their Weave identity, to put, list or revoke onboarding links (never an account's signin). */
+export const planMessage = (handshakeHash: Uint8Array): Uint8Array => new Uint8Array([...utf8('weave/storage/plan/v1'), ...handshakeHash]);
+
+/** An onboarding link's plan as a creator puts it: sealed, with the key's check, and what its preview shows. */
+export interface PutPlan {
+  sealed: string;
+  check: string;
+  preview?: { title: string; text?: string };
+  /** The preview's picture: a PNG, base64. */
+  image?: string;
+  uses?: number;
+  expires?: string;
+}
+
+/** A creator's link as the storage node keeps it. */
+export interface PlanListing {
+  code: string;
+  preview?: { title: string; text?: string };
+  image?: true;
+  uses?: number;
+  used: number;
+  expires?: string;
+  revoked?: true;
+  created: string;
+}
 
 /** A connection's first part, line by line; `release` hands what follows to a session, with nothing lost in between. */
 export class LineChannel {
@@ -149,6 +174,35 @@ export class StorageClient {
 
   #proof(account: SigningIdentity): { id: Did; sig: string } {
     return { id: account.did, sig: b64u.encode(sign(signinMessage(this.#channel.handshakeHash), account.keys.secretKey)) };
+  }
+
+  #planProof(identity: SigningIdentity): { id: Did; sig: string } {
+    return { id: identity.did, sig: b64u.encode(sign(planMessage(this.#channel.handshakeHash), identity.keys.secretKey)) };
+  }
+
+  /** Put an onboarding link's plan, as its creator; the node answers with its code. */
+  async putPlan(identity: SigningIdentity, plan: PutPlan): Promise<string> {
+    return (await this.#ask({ t: 'plan.put', ...this.#planProof(identity), ...plan })).code as string;
+  }
+
+  /** A link's sealed plan and who made it; refused once the link no longer works. */
+  async getPlan(code: string): Promise<{ sealed: string; by: Did }> {
+    const { sealed, by } = await this.#ask({ t: 'plan.get', code });
+    return { sealed: sealed as string, by: by as Did };
+  }
+
+  /** Use a link (with the key's check); `account`: one is needed, and its invitation comes back. */
+  async takePlan(code: string, check: string, account: boolean): Promise<{ invite?: string }> {
+    const { invite } = await this.#ask({ t: 'plan.take', code, check, account });
+    return typeof invite === 'string' ? { invite } : {};
+  }
+
+  async revokePlan(identity: SigningIdentity, code: string): Promise<void> {
+    await this.#ask({ t: 'plan.revoke', ...this.#planProof(identity), code });
+  }
+
+  async listPlans(identity: SigningIdentity): Promise<PlanListing[]> {
+    return (await this.#ask({ t: 'plan.list', ...this.#planProof(identity) })).plans as PlanListing[];
   }
 
   /** The sealed box this token opens, if there is one. */
