@@ -60,13 +60,37 @@ declare module 'hyperdht/testnet.js' {
 }
 
 declare module 'hyperdht' {
-  import type { DhtSocket } from 'hyperswarm';
+  import type { DhtServer, DhtSocket } from 'hyperswarm';
   export default class HyperDHT {
+    createServer(options?: { firewall?: (remotePublicKey: Buffer) => boolean }, onconnection?: (socket: DhtSocket) => void): DhtServer;
     constructor(options?: { bootstrap?: Array<{ host: string; port: number }> });
     static keyPair(seed?: Buffer): { publicKey: Buffer; secretKey: Buffer };
     connect(publicKey: Buffer): DhtSocket;
     destroy(options?: { force?: boolean }): Promise<void>;
     /** Ready: bootstrapped, and its address known. */
     ready(): Promise<void>;
+  }
+}
+
+/** The DHT over a framed stream (docs/web-stage2.md, step 9): a storage node relays, a browser connects through it. */
+declare module '@hyperswarm/dht-relay' {
+  import type { DhtSocket } from 'hyperswarm';
+  import type HyperDHT from 'hyperdht';
+  import type { Duplex } from 'node:stream';
+  /** Relay a DHT's connections over a stream (the relaying side). */
+  export function relay(dht: HyperDHT, stream: Duplex): void;
+  /** A DHT whose connections a relay makes; not custodial: the key stays here, and so does the Noise handshake. */
+  export default class RelayedDHT {
+    constructor(stream: Duplex, options?: { custodial?: boolean; keyPair?: { publicKey: Buffer; secretKey: Buffer } });
+    connect(publicKey: Buffer, options?: { keyPair?: { publicKey: Buffer; secretKey: Buffer } }): DhtSocket;
+    destroy(): Promise<void>;
+  }
+}
+
+declare module '@hyperswarm/dht-relay/ws' {
+  import type { Duplex } from 'node:stream';
+  /** A WebSocket (the browser's, or ws's) as the relay's stream. */
+  export default class RelayStream extends Duplex {
+    constructor(isInitiator: boolean, socket: unknown);
   }
 }

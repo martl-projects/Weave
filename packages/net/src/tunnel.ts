@@ -44,18 +44,39 @@ export function readLine(socket: Duplex, maxBytes = 16_384): Promise<{ line: str
   });
 }
 
-/** Pipe two streams into each other, with `rest` (already read from `a`) written to `b` first. */
+/** How long the other side of a splice may take to close by itself once one side has. */
+const SPLICE_LINGER_MS = 10_000;
+
+/**
+ * Two streams into each other, with `rest` (already read from `a`) written to `b` first. Not with pipe: a DHT stream
+ * (streamx) piped into a socket is destroyed the moment that socket closes, and what it still had to send was lost,
+ * a website's last answer among it (through a relay, always). Here an end is passed on as an end, and a side that
+ * closed leaves the other to finish, for a while.
+ */
 export function splice(a: Duplex, b: Duplex, rest: Buffer = Buffer.alloc(0)): void {
   if (rest.length) b.write(rest);
-  a.pipe(b).on('error', () => a.destroy());
-  b.pipe(a).on('error', () => b.destroy());
+  const forward = (from: Duplex, to: Duplex) => {
+    let ended = false;
+    from.on('data', (chunk: Buffer) => {
+      if (!to.write(chunk)) {
+        from.pause();
+        to.once('drain', () => from.resume());
+      }
+    });
+    from.once('end', () => ((ended = true), to.end()));
+    from.once('close', () => {
+      if (!ended) to.end();
+      setTimeout(() => to.destroy(), SPLICE_LINGER_MS).unref?.();
+    });
+  };
+  forward(a, b);
+  forward(b, a);
   const end = () => {
     a.destroy();
     b.destroy();
   };
-  a.on('close', end);
-  b.on('close', end);
   a.on('error', end);
   b.on('error', end);
   a.resume();
+  b.resume();
 }
