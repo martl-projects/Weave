@@ -110,12 +110,18 @@ try {
   await appUp();
 
   const { link } = await run<{ link: string }>(`fetch('/dev/invite').then((r) => r.json())`);
+  // What "Open link" shows before joining.
+  const look = await call<{ space?: { name?: string } }>('lookAtInvite', link);
+  if (look.error || look.result?.space?.name !== 'Climb') throw new Error(`the invitation wasn't looked at: ${look.error ?? JSON.stringify(look.result)}`);
   await call('joinSpace', link);
   await until('the group', async () => (await texts()).includes('the rope is in the van'));
   passed('it joins a group and reads it');
   await call('say', { space: 'Climb', text: 'from Chrome' });
   await until('the other person', async () => ((await (await fetch(`${ORIGIN}/dev/messages`)).json()) as string[]).includes('from Chrome'));
   passed('the other person reads what it says');
+  const attached = await call<{ ref?: string }>('putFile', { data: btoa('a small file'), name: 'note.txt', type: 'text/plain' });
+  if (attached.error) throw new Error(`no file attached: ${attached.error}`);
+  passed('it attaches a file');
 
   const id = (await call<Array<{ id: string }>>('spaces')).result![0].id;
   const hints = () => call<Array<{ hints: Array<{ tooltip?: string }> }>>('hints', { slot: 'place', subjects: [{ space: id }] });
@@ -135,7 +141,7 @@ try {
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 
-  // On a phone's width: what the menu bar has on a computer is under Me.
+  // On a phone's width: what the menu bar has on a computer is under Settings.
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await until('the Me tab', () => run<boolean>(`(() => { const me = document.querySelector('.toolbar a[href="#/me"]'); return !!me && getComputedStyle(me).display !== 'none'; })()`));
   await run(`location.hash = '#/me'`);
@@ -146,7 +152,7 @@ try {
   if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'hub.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
   await run(`location.hash = '#/'`);
   await send('Emulation.clearDeviceMetricsOverride');
-  passed('on a phone, Me has the hub, keys and the look');
+  passed('on a phone, Settings has the hub, keys and the look');
 
   // Lena links a browser from her computer. A browser of its own (a context with nothing in it) opens the link, makes a
   // passkey, and is Lena there: no words asked.

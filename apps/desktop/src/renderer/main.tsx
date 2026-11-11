@@ -863,7 +863,7 @@ function Shell() {
         <ToolButton icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
         <ToolButton icon="users" label={t('nav.people')} href="#/people" on={route[0] === 'people' && !placesOpen} />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
-        <ToolButton icon="user" label={t('nav.me')} href="#/me" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
+        <ToolButton icon="gear" label={t('nav.me')} href="#/me" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
         <span className="tool-sep" />
         <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
