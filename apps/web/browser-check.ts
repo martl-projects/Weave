@@ -163,6 +163,18 @@ try {
   await fetch(`http://127.0.0.1:${DEBUG}/json/close/${websiteTab.id}`);
   passed("Lena's website opens in a tab of its own, through the relay", websiteText.split('\n').at(-1));
 
+  // Opened again: now its service worker answers for the tab's own page too.
+  await run(`window.weave.web.openWebsite({ id: ${JSON.stringify(website)}, name: 'Party' })`);
+  const againTab = await until('the website tab again', async () => ((await (await fetch(`http://127.0.0.1:${DEBUG}/json/list`)).json()) as Array<{ id: string; type: string; url: string; webSocketDebuggerUrl: string }>).find((t) => t.type === 'page' && /\.localhost:/.test(t.url)));
+  const again = await devtools(againTab.webSocketDebuggerUrl);
+  await again.send('Runtime.enable');
+  await until('the website again', async () => (await again.run<string | undefined>(`document.querySelector('iframe')?.contentDocument?.body?.innerText`))?.includes('api:'), 45_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; the tab says: ${await again.run<string>(`document.body?.innerText?.slice(0, 300) ?? location.href`).catch((e: Error) => e.message)}`);
+  });
+  again.close();
+  await fetch(`http://127.0.0.1:${DEBUG}/json/close/${againTab.id}`);
+  passed('and again, with its service worker in charge of the tab');
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 

@@ -8,7 +8,8 @@ export function roomsCsp(storage: string): string {
     "default-src 'none'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    `connect-src ${new URL(storage).origin.replace(/^http/, 'ws')}`,
+    // Itself too: its service worker fetches the tab's page for a tab opened again.
+    `connect-src 'self' ${new URL(storage).origin.replace(/^http/, 'ws')}`,
     "frame-src 'self'",
     "worker-src 'self'",
     "base-uri 'none'",
