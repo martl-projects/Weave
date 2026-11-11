@@ -62,7 +62,8 @@ if [ "$WEAVE_PAGE" = "https://$WEAVE_DOMAIN" ]; then WEAVE_SERVE="--web /opt/wea
 # Websites' tabs (docs/web-stage2.md, step 9), which may use the relay to reach websites: like https://*.weave-rooms.net.
 WEAVE_ROOMS="${WEAVE_ROOMS:-}"
 if [ -n "$WEAVE_ROOMS" ]; then WEAVE_RELAY="--relay-origin $WEAVE_ROOMS"; else WEAVE_RELAY=""; fi
-printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_SERVE=%s\nWEAVE_ROOMS=%s\nWEAVE_RELAY=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" "$WEAVE_SERVE" "$WEAVE_ROOMS" "$WEAVE_RELAY" > /etc/weave-storage.env
+# Quoted: this file is read back by this script's shell, and systemd takes the quotes off.
+printf 'WEAVE_DOMAIN="%s"\nWEAVE_PAGE="%s"\nWEAVE_ALSO="%s"\nWEAVE_SERVE="%s"\nWEAVE_ROOMS="%s"\nWEAVE_RELAY="%s"\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" "$WEAVE_SERVE" "$WEAVE_ROOMS" "$WEAVE_RELAY" > /etc/weave-storage.env
 cp "$here/weave-storage.service" /etc/systemd/system/weave-storage.service
 cp "$here/Caddyfile" /etc/caddy/Caddyfile
 install -d /etc/systemd/system/caddy.service.d
