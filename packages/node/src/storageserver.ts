@@ -146,7 +146,48 @@ function onlyConnecting(dht: HyperDHT): HyperDHT {
     server.close = async () => {};
     return server;
   };
-  return { connect: dht.connect.bind(dht), lookup: nothing, announce: nothing, lookupAndUnannounce: nothing, createServer: noServer } as unknown as HyperDHT;
+  // A browser's handshake, one step at a time (oneStepAtATime).
+  const connect = (publicKey: Buffer, options?: { createHandshake?: (...args: unknown[]) => Handshake }) =>
+    dht.connect(publicKey, (options?.createHandshake ? { ...options, createHandshake: (...args: unknown[]) => oneStepAtATime(options.createHandshake!(...args)) } : options) as never);
+  return { connect, lookup: nothing, announce: nothing, lookupAndUnannounce: nothing, createServer: noServer } as unknown as HyperDHT;
+}
+
+/** What HyperDHT asks of a handshake, as the relay's stand-in for a browser's does it. */
+interface Handshake {
+  send(payload: unknown): Promise<unknown>;
+  recv(payload: unknown): Promise<unknown>;
+  [other: string]: unknown;
+}
+
+/**
+ * A browser's Noise handshake, a step at a time. HyperDHT tries several ways to a host at once, and with a handshake that
+ * answers later (the relay's, which asks the browser) they all got to the same step together: the relay keeps one
+ * answer pending at a time, and the browser's handshake throws at a second go at a step it has done. So the steps go
+ * in turn, and once one way got through, the others are told "nothing" (HyperDHT drops a way that gets that).
+ */
+export function oneStepAtATime(handshake: Handshake): Handshake {
+  let queue: Promise<unknown> = Promise.resolve();
+  let received = false;
+  const inTurn = <T>(step: () => Promise<T>): Promise<T> => {
+    const run = queue.then(step);
+    queue = run.catch(() => {});
+    return run;
+  };
+  return new Proxy(handshake, {
+    get(target, property) {
+      if (property === 'send') return (payload: unknown) => inTurn(() => target.send(payload));
+      if (property === 'recv')
+        return (payload: unknown) =>
+          inTurn(async () => {
+            if (received) return null;
+            const answer = await target.recv(payload);
+            if (answer) received = true;
+            return answer;
+          });
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+  });
 }
 
 /** A browser link's handover (browserlink.ts): this big at most, this many at once, this many an hour from one address. */

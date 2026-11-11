@@ -65,7 +65,7 @@ declare module 'hyperdht' {
     createServer(options?: { firewall?: (remotePublicKey: Buffer) => boolean }, onconnection?: (socket: DhtSocket) => void): DhtServer;
     constructor(options?: { bootstrap?: Array<{ host: string; port: number }> });
     static keyPair(seed?: Buffer): { publicKey: Buffer; secretKey: Buffer };
-    connect(publicKey: Buffer): DhtSocket;
+    connect(publicKey: Buffer, options?: Record<string, unknown>): DhtSocket;
     destroy(options?: { force?: boolean }): Promise<void>;
     /** Ready: bootstrapped, and its address known. */
     ready(): Promise<void>;

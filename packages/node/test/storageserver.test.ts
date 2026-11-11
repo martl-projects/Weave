@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StorageNode } from '../src/storagenode.ts';
-import { storageServer, type StorageServerOptions } from '../src/storageserver.ts';
+import { oneStepAtATime, storageServer, type StorageServerOptions } from '../src/storageserver.ts';
 import { acceptWebSocket } from '../src/websocket.ts';
 
 /** What stands between a storage node and the open internet, over real sockets, and the frames of a WebSocket as a browser sends them. */
@@ -144,6 +144,24 @@ describe('a storage node on the internet', { timeout: 20_000 }, () => {
     expect((await fetch(at(token))).status).toBe(404);
     expect((await fetch(at(token), { headers: { origin: 'https://elsewhere.example' } })).headers.get('access-control-allow-origin')).toBeNull();
     expect((await fetch(at('short'), { method: 'POST', body: 'x' })).status).toBe(404);
+  });
+
+  it("takes a browser's handshake a step at a time, and tells the ways after the first one nothing", async () => {
+    // As a browser's handshake is: an answer later, and an error at a second go at a step.
+    let steps = 0;
+    const browser = {
+      send: async (payload: unknown) => payload,
+      recv: async (payload: unknown) => {
+        if (steps++) throw new Error('this.handshake.shift is not a function');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { got: payload };
+      },
+    };
+    const handshake = oneStepAtATime(browser);
+    // HyperDHT's ways to the host, all at once.
+    const answers = await Promise.all([handshake.recv('a'), handshake.recv('b'), handshake.recv('c')]);
+    expect(answers).toEqual([{ got: 'a' }, null, null]);
+    expect(steps).toBe(1);
   });
 
   it('serves no files when it has none, and a closed door is still up', async () => {
