@@ -199,7 +199,9 @@ export class StorageNode {
     replica.onAppend((r) => {
       if (!wrote(r.scope, r.author) || r.scope === 'public') return;
       clearTimeout(refresh);
-      refresh = setTimeout(() => account.network.refreshPublic?.(), 100);
+      // Not once the node or this account closed: its store is gone by then (a test closing at once saw it, on CI).
+      refresh = setTimeout(() => !this.#closing && this.#accounts.get(file.id) === account && account.network.refreshPublic?.(), 100);
+      refresh.unref?.();
     });
     // Strangers are turned away: only who shows one of these spaces gets anything.
     account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)), publicFor: (shared) => this.#publicFor(account, shared) }, this.#fromPeers(account));
