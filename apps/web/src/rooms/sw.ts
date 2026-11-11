@@ -28,14 +28,21 @@ self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()))
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 async function throughTheTab(request: Request): Promise<Response> {
-  const tab = (await self.clients.matchAll({ type: 'window' })).find((client) => client.frameType === 'top-level');
-  if (!tab) return new Response('This website is open in no tab of Weave’s: open it from Weave.', { status: 502 });
+  // The tab is the top-level window. A browser that doesn't say which one is (Safari has no frameType) asks them all:
+  // only the tab answers, the website's own frames don't listen.
+  const windows = await self.clients.matchAll({ type: 'window' });
+  const tabs = windows.some((client) => client.frameType === 'top-level') ? windows.filter((client) => client.frameType === 'top-level') : windows;
+  if (!tabs.length) return said('this website is open in no tab: open it from Weave');
   const url = new URL(request.url);
   const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
-  const channel = new MessageChannel();
-  const answer = new Promise<{ error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer }>((resolve) => (channel.port1.onmessage = ({ data }) => resolve(data)));
-  tab.postMessage({ type: 'weave-ask', method: request.method, url: url.pathname + url.search, headers: [...request.headers], body }, [channel.port2, ...(body ? [body] : [])]);
-  const got = await answer;
+  type Got = { error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer };
+  const asked = tabs.map((tab) => {
+    const channel = new MessageChannel();
+    const copy = body?.slice(0);
+    tab.postMessage({ type: 'weave-ask', method: request.method, url: url.pathname + url.search, headers: [...request.headers], body: copy }, [channel.port2, ...(copy ? [copy] : [])]);
+    return new Promise<Got>((resolve) => (channel.port1.onmessage = ({ data }) => resolve(data)));
+  });
+  const got = await Promise.race([...asked, new Promise<Got>((resolve) => setTimeout(() => resolve({ error: 'no tab of this website answered: open it from Weave again' } as Got), 90_000))]);
   if (got.error) return said(got.error);
   const empty = request.method === 'HEAD' || got.status === 204 || got.status === 304;
   // Headers the browser refuses in an answer made here are left out, one by one, rather than the whole answer.
