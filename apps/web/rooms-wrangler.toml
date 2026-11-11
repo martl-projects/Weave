@@ -10,3 +10,7 @@ routes = [{ pattern = "*.weave-rooms.net/*", zone_name = "weave-rooms.net" }]
 directory = "dist/rooms"
 binding = "ASSETS"
 run_worker_first = true
+
+# No logs of who opened which website when: the Worker needs none.
+[observability]
+enabled = false
