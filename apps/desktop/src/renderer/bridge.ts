@@ -98,6 +98,11 @@ export interface Bridge {
      * browser lets the tab open.
      */
     openWebsite(room: { id: string; name: string }): void;
+    /**
+     * A website in a frame of Weave's own page instead of a tab: on a phone, so with Weave on the home screen no browser
+     * bar shows. `attach` once the frame is there; `onFailed` when it can't run in a frame (then a tab, openWebsite).
+     */
+    websiteFrame(room: { id: string; name: string }): { url: string; attach(window: Window, onFailed: (why: string) => void): void; detach(): void };
     /** Whether this page was opened with a link from one of the person's computers (linkBrowser). */
     linking(): boolean;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */

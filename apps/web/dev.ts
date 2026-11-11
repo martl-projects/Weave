@@ -87,7 +87,7 @@ const server = createServer(async (req, res) => {
   if (/^[a-z2-7]{26}\.localhost:\d+$/.test(req.headers.host ?? '')) {
     const file = url.pathname.startsWith('/__weave/') ? url.pathname.slice('/__weave/'.length) : 'shell.html';
     if (!/^[\w.-]+$/.test(file) || !existsSync(join(dist, 'rooms', '__weave', file))) return res.writeHead(404).end();
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'content-security-policy': roomsCsp(`http://localhost:${port}`), ...(file === 'sw.js' ? { 'service-worker-allowed': '/' } : {}) });
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'content-security-policy': roomsCsp(`http://localhost:${port}`, `http://localhost:${port}`), ...(file === 'sw.js' ? { 'service-worker-allowed': '/' } : {}) });
     return createReadStream(join(dist, 'rooms', '__weave', file)).pipe(res);
   }
   // Lena links a browser, as from her computer: the link opens this page, and the handover waits here (/link/…).

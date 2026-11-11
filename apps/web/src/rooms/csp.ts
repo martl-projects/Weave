@@ -3,7 +3,7 @@
  * WebAssembly its sodium compiles (BLAKE2b and the like, wasm-unsafe-eval), the storage node's relay, and the website in
  * a frame of its own origin. Nothing else.
  */
-export function roomsCsp(storage: string): string {
+export function roomsCsp(storage: string, web: string): string {
   return [
     "default-src 'none'",
     "script-src 'self' 'wasm-unsafe-eval'",
@@ -14,6 +14,7 @@ export function roomsCsp(storage: string): string {
     "worker-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
-    "frame-ancestors 'none'",
+    // Framed by Weave's page only (a website on a phone), and by nothing else.
+    `frame-ancestors ${new URL(web).origin}`,
   ].join('; ');
 }

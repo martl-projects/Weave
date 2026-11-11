@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { buildRooms, buildServices, buildWeb, connectSrc } from './build.ts';
+import { buildRooms, buildServices, buildWeb, connectSrc, framesFrom } from './build.ts';
 
 const storage = new URL(process.argv[2] ?? 'https://storage.martl.io').origin;
 const dist = join(import.meta.dirname, 'dist');
@@ -32,6 +32,7 @@ const csp = [
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   `connect-src ${connectSrc(storage)}`,
+  `frame-src ${framesFrom('https://{label}.weave-rooms.net')}`,
   "manifest-src 'self'",
   "base-uri 'none'",
   "form-action 'none'",

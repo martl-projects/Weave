@@ -6,6 +6,33 @@ import { askPasskey, makePasskey } from './passkey.ts';
 
 declare const ROOMS_BASE: string;
 
+/**
+ * A website's tab or frame asks for its pass, and later for new relay tickets: answered to it alone (by its window and
+ * its origin), for this website alone. `failed`: it says it can't run here (a frame without its service worker).
+ */
+function answerWebsite(room: { id: string }, origin: string, window: () => Window | null, failed?: (why: string) => void): () => void {
+  const answer = async ({ origin: from, source, data }: MessageEvent<{ type?: string; key?: string; error?: string }>) => {
+    const to = window();
+    if (from !== origin || !to || source !== to) return;
+    const reply = (message: Record<string, unknown>) => to.postMessage(message, origin);
+    if (data?.type === 'weave-website-failed') return failed?.(data.error ?? 'the website could not start here');
+    if (data?.type === 'weave-website') {
+      const pass = await ask('websitePass', { room: room.id, key: data.key });
+      if ('error' in pass) return reply({ type: 'weave-website-pass', error: pass.error });
+      const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
+      if (typeof ticket !== 'string') return reply({ type: 'weave-website-pass', error: ticket.error });
+      return reply({ type: 'weave-website-pass', ...(pass.result as object), ticket });
+    }
+    if (data?.type === 'weave-website-ticket') {
+      const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
+      return reply(typeof ticket === 'string' ? { type: 'weave-website-ticket', ticket } : { type: 'weave-website-ticket', error: ticket.error });
+    }
+  };
+  const listen = (event: MessageEvent) => void answer(event);
+  addEventListener('message', listen);
+  return () => removeEventListener('message', listen);
+}
+
 /** A website's own origin: {label} in ROOMS_BASE (build.ts) is a name made from its id, lower case, as DNS has them. */
 function websiteOrigin(id: string): string {
   const bytes = sha256(new TextEncoder().encode(`weave/website/v1 ${id}`));
@@ -164,23 +191,18 @@ const web: Bridge['web'] = {
     const origin = websiteOrigin(room.id);
     const tab = window.open(`${origin}/`, '_blank');
     if (!tab) throw new Error('the browser kept the website from opening a tab: allow pop-ups for Weave');
-    // The tab asks for its pass, and later for new relay tickets: answered to it alone, for this website alone.
-    const answer = async ({ origin: from, source, data }: MessageEvent<{ type?: string; key?: string }>) => {
-      if (from !== origin || source !== tab) return;
-      const reply = (message: Record<string, unknown>) => tab.postMessage(message, origin);
-      if (data?.type === 'weave-website') {
-        const pass = await ask('websitePass', { room: room.id, key: data.key });
-        if ('error' in pass) return reply({ type: 'weave-website-pass', error: pass.error });
-        const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
-        if (typeof ticket !== 'string') return reply({ type: 'weave-website-pass', error: ticket.error });
-        return reply({ type: 'weave-website-pass', ...(pass.result as object), ticket });
-      }
-      if (data?.type === 'weave-website-ticket') {
-        const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
-        return reply(typeof ticket === 'string' ? { type: 'weave-website-ticket', ticket } : { type: 'weave-website-ticket', error: ticket.error });
-      }
+    answerWebsite(room, origin, () => tab);
+  },
+  websiteFrame: (room) => {
+    const origin = websiteOrigin(room.id);
+    let frame: Window | null = null;
+    let failed: (why: string) => void = () => {};
+    const stop = answerWebsite(room, origin, () => frame, (why) => failed(why));
+    return {
+      url: `${origin}/`,
+      attach: (window, onFailed) => void ((frame = window), (failed = onFailed)),
+      detach: () => stop(),
     };
-    addEventListener('message', (event) => void answer(event));
   },
   linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
   link: async () => {

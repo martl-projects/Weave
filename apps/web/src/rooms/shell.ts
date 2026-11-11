@@ -29,6 +29,15 @@ interface Pass {
 
 const say = (text: string) => void (document.querySelector('#say')!.textContent = text);
 
+/** Weave, which opened this website: the tab's opener, or the page around it when it's a frame of Weave's (a phone). */
+const weave: Window | null = window.opener ?? (window.parent !== window ? window.parent : null);
+
+/** This can't run here (a frame without its service worker): Weave offers a tab instead. */
+const cantRunHere = (why: string) => {
+  say(why);
+  weave?.postMessage({ type: 'weave-website-failed', error: why }, WEB_ORIGIN);
+};
+
 const keyPair = { publicKey: b4a.alloc(32), secretKey: b4a.alloc(64) };
 sodium.crypto_sign_keypair(keyPair.publicKey, keyPair.secretKey);
 const ourKey = b4a.toString(keyPair.publicKey, 'hex');
@@ -45,7 +54,7 @@ function fromWeave<T>(type: string, answer: string): Promise<T> {
       else resolve(data);
     };
     addEventListener('message', listen);
-    window.opener.postMessage({ type, key: ourKey }, WEB_ORIGIN);
+    weave!.postMessage({ type, key: ourKey }, WEB_ORIGIN);
   });
 }
 
@@ -66,7 +75,7 @@ async function relayed(pass: Pass): Promise<RelayedDHT> {
 }
 
 async function start(): Promise<void> {
-  if (!window.opener) return say('Open this website from Weave.');
+  if (!weave) return say('Open this website from Weave.');
   say('Asking Weave…');
   const pass = await fromWeave<Pass>('weave-website', 'weave-website-pass');
   document.title = pass.name;
@@ -162,7 +171,12 @@ async function start(): Promise<void> {
   say('Connecting…');
   // The service worker as this build has it: a browser keeps the one it has until asked (Safari, at least), so it's asked,
   // and the website waits for a new one to take over.
-  const registration = await navigator.serviceWorker.register('/__weave/sw.js', { scope: '/', updateViaCache: 'none' });
+  if (!('serviceWorker' in navigator)) return cantRunHere('This browser runs no service worker here.');
+  const registration = await navigator.serviceWorker.register('/__weave/sw.js', { scope: '/', updateViaCache: 'none' }).catch((error: Error) => {
+    cantRunHere(`The website can't start here: ${error.message}`);
+    return undefined;
+  });
+  if (!registration) return;
   await registration.update().catch(() => {});
   if (registration.installing || registration.waiting) {
     await new Promise<void>((resolve) => {
@@ -170,7 +184,8 @@ async function start(): Promise<void> {
       setTimeout(resolve, 8000);
     });
   }
-  await navigator.serviceWorker.ready;
+  const ready = await Promise.race([navigator.serviceWorker.ready.then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), 15_000))]);
+  if (!ready) return cantRunHere("The website's service worker didn't start here.");
   // The website, in a frame the service worker answers for: where this tab was opened.
   const frame = document.createElement('iframe');
   frame.src = location.pathname + location.search;

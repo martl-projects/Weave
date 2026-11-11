@@ -96,7 +96,7 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
   });
   await build({ entryPoints: [join(DESKTOP, 'src/renderer/styles.css')], outfile: join(dist, 'styles.css'), bundle: true, minify: true, logLevel: 'warning', loader: { '.woff': 'dataurl', '.woff2': 'dataurl' } });
   copyFileSync(join(import.meta.dirname, 'src', 'manifest.json'), join(dist, 'manifest.json'));
-  writeFileSync(join(dist, 'index.html'), readFileSync(join(import.meta.dirname, 'src', 'index.html'), 'utf8').replace("connect-src 'self'", `connect-src ${connectSrc(storage)}`));
+  writeFileSync(join(dist, 'index.html'), readFileSync(join(import.meta.dirname, 'src', 'index.html'), 'utf8').replace("connect-src 'self'", `connect-src ${connectSrc(storage)}; frame-src ${framesFrom(options.rooms)}`));
   copyFileSync(join(DESKTOP, 'assets/icon.png'), join(dist, 'icon.png'));
   // Weave avatar's renderer, pinned as on the desktop.
   if (options.avatars) cpSync(await pinnedRelease('avatar'), join(dist, 'avatar3d'), { recursive: true });
@@ -118,8 +118,11 @@ export async function buildRooms(dist: string, options: { web: string; storage: 
   // The website's own WebSocket, which the service worker puts first in its pages.
   await build({ entryPoints: { ws: join(import.meta.dirname, 'src/rooms/ws.ts') }, outdir: out, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
   copyFileSync(join(import.meta.dirname, 'src/rooms/shell.html'), join(out, 'shell.html'));
-  await build({ entryPoints: [join(import.meta.dirname, 'rooms-worker.ts')], outfile: join(dist, 'rooms-worker.js'), bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { STORAGE_ORIGIN: define.STORAGE_ORIGIN } });
+  await build({ entryPoints: [join(import.meta.dirname, 'rooms-worker.ts')], outfile: join(dist, 'rooms-worker.js'), bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { STORAGE_ORIGIN: define.STORAGE_ORIGIN, WEB_ORIGIN: define.WEB_ORIGIN } });
 }
+
+/** Where the page may frame websites from: any of their own origins (ROOMS_BASE with its {label} as *). */
+export const framesFrom = (rooms = 'https://{label}.weave-rooms.net'): string => rooms.replace('{label}', '*');
 
 /** Where the page may connect: itself, and its storage node when that's elsewhere (its socket and its handovers). */
 export const connectSrc = (storage: string): string => (storage ? `'self' ${storage} ${storage.replace(/^http/, 'ws')}` : "'self'");

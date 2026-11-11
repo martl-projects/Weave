@@ -11,9 +11,10 @@ interface Assets {
 }
 
 declare const STORAGE_ORIGIN: string;
+declare const WEB_ORIGIN: string;
 
 /** The tab's own page and files: they reach the storage node and frame the website, nothing else. */
-const CSP = roomsCsp(STORAGE_ORIGIN);
+const CSP = roomsCsp(STORAGE_ORIGIN, WEB_ORIGIN);
 
 export default {
   async fetch(request: Request, env: { ASSETS: Assets }): Promise<Response> {

@@ -177,6 +177,41 @@ try {
   await fetch(`http://127.0.0.1:${DEBUG}/json/close/${againTab.id}`);
   passed('and again, with its service worker in charge of the tab');
 
+  // On a phone: over Weave, in a frame of Weave's own page (no second browser bar), from the project's Live page.
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  const partyId = ((await call<Array<{ id: string; name: string }>>('spaces')).result ?? []).find((s) => s.name === 'Party')!.id;
+  await run(`location.hash = '#/p/${partyId}/live'`);
+  await until('the website on the Live page', () => run<boolean>(`!!document.querySelector('.room button.play')`), 30_000);
+  await run(`document.querySelector('.room button.play').click()`);
+  const framedText = await until(
+    'the website over Weave',
+    async () => {
+      const text = await run<string | undefined>(`(() => { const outer = document.querySelector('.website-frame iframe'); if (!outer) return undefined; return 'framed'; })()`);
+      return text;
+    },
+    15_000,
+  );
+  // The website's frame is another origin: what it shows is read from its own target.
+  const framedTarget = await until('its frame', async () => ((await (await fetch(`http://127.0.0.1:${DEBUG}/json/list`)).json()) as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>).find((t) => t.type === 'iframe' && /\.localhost:/.test(t.url)));
+  const framed = await devtools(framedTarget.webSocketDebuggerUrl);
+  await framed.send('Runtime.enable');
+  const framedShows = await until(
+    'the website in the frame',
+    async () => {
+      const text = await framed.run<string | undefined>(`document.querySelector('iframe')?.contentDocument?.body?.innerText`);
+      return text?.includes('ws: echo') && text.includes('api:') ? text : undefined;
+    },
+    45_000,
+  ).catch(async (error: Error) => {
+    throw new Error(`${error.message}; the frame says: ${await framed.run<string>(`document.body?.innerText?.slice(0, 300)`).catch((e: Error) => e.message)}`);
+  });
+  framed.close();
+  await run(`document.querySelector('.website-frame-bar button[aria-label]').click()`);
+  await until('the frame closed', () => run<boolean>(`!document.querySelector('.website-frame')`));
+  await run(`location.hash = '#/'`);
+  await send('Emulation.clearDeviceMetricsOverride');
+  passed('on a phone it opens over Weave, in a frame', [framedText, framedShows.split('\n').filter((l) => l.startsWith('ws:')).join('')]);
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 

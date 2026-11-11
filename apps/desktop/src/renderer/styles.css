@@ -689,6 +689,13 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .pair-phone .qr { flex: none; width: 200px; height: 200px; background: #fff; border: 1px solid #808080; }
 .pair-phone .qr svg { display: block; width: 100%; height: 100%; }
 
+/* ---------- a website over Weave, on a phone (WebsiteFrame) */
+.website-frame { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: #000; }
+.website-frame-bar { display: flex; align-items: center; gap: 8px; padding: calc(4px + env(safe-area-inset-top)) 8px 4px; background: #111; color: #eee; }
+.website-frame-bar b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.website-frame > .notice { margin: 8px; }
+.website-frame iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+
 /* ---------- Me (a phone's tab): rows big enough for a thumb */
 .me-rows { display: flex; flex-direction: column; margin: 8px 0 12px; }
 /* A link and a button look the same here: every look styles both, so these win (:root[data-skin] outweighs them). */

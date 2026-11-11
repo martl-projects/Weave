@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { AppManifest, AppReleases, ArtifactLine, ArtifactInfo, BoardInfo, HintServiceInfo, HostedWebsiteInfo, KeyvaultInfo, MemberInfo, ProjectInfo, WebsiteChatMessage, WebsiteInfo, ServiceInfo, ShippedServiceInfo, ServiceProfileInfo, SpaceInfo, ShowInfo } from '@weave/node/client';
 import { fieldName, type ActionWho, type TextPackage } from '@weave/core';
 import { Icon, type IconName } from './icons.tsx';
@@ -28,6 +29,46 @@ const play = (room: WebsiteInfo) => {
   if (bridge.phone) return void bridge.phone.openRoom(room.id, room.url).catch((error: Error) => toast(error.message, 'error'));
   void bridge.openApp(room.url, room.name);
 };
+
+/** On a phone's width, Weave on the web opens a website over itself rather than in a tab: no second browser bar. */
+const inAFrame = () => !!bridge.web && matchMedia('(max-width: 700px)').matches;
+
+/**
+ * A website over Weave, on the whole screen (docs/web-stage2.md, step 9): its own origin in a frame, which reaches its
+ * host itself as a tab does. Where it can't run in a frame (no service worker there), it says so, and a tab is a click.
+ */
+function WebsiteFrame({ room, onClose }: { room: WebsiteInfo; onClose(): void }) {
+  const { t } = useTexts();
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [link] = useState(() => bridge.web!.websiteFrame(room));
+  const [failed, setFailed] = useState<string>();
+  useEffect(() => {
+    if (frame.current?.contentWindow) link.attach(frame.current.contentWindow, setFailed);
+    return () => link.detach();
+  }, [link]);
+  const inBrowser = () => {
+    bridge.web!.openWebsite(room);
+    onClose();
+  };
+  return createPortal(
+    <div className="website-frame">
+      <div className="website-frame-bar">
+        <b>{room.name}</b>
+        <button onClick={inBrowser}>{t('web.website.in.browser')}</button>
+        <button aria-label={t('button.close')} onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      {failed && (
+        <p className="notice alarm">
+          {failed} <button onClick={inBrowser}>{t('web.website.in.browser')}</button>
+        </p>
+      )}
+      <iframe ref={frame} src={link.url} title={room.name} allow="fullscreen; autoplay; clipboard-write" />
+    </div>,
+    document.body,
+  );
+}
 
 function WebsiteChat({ room }: { room: WebsiteInfo }) {
   const { t } = useTexts();
@@ -72,6 +113,8 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = whoFor(room, shows);
   const label = room.service?.label ?? t(room.mine ? 'web.open' : 'web.play');
+  // Open over Weave, on a phone (WebsiteFrame).
+  const [framed, setFramed] = useState(false);
   // "Race, offered by martl · website".
   const offered = `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy?.name ?? t('web.a.service')}`;
   let main;
@@ -88,9 +131,12 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   // On the web a website opens in a tab of its own, which reaches the host itself (docs/web-stage2.md, step 9).
   else if (bridge.web)
     main = room.mayJoin ? (
-      <button className="default play" onClick={() => attempt(async () => bridge.web!.openWebsite(room))}>
-        ▶ {label}
-      </button>
+      <>
+        <button className="default play" onClick={() => attempt(async () => (inAFrame() ? setFramed(true) : bridge.web!.openWebsite(room)))}>
+          ▶ {label}
+        </button>
+        {framed && <WebsiteFrame room={room} onClose={() => setFramed(false)} />}
+      </>
     ) : (
       <span className="small muted">{who.length ? t(show && !show.open ? 'web.for.while.on' : 'web.for', { who }) : t('web.not.invited')}</span>
     );
