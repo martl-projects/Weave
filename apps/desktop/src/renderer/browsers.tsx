@@ -6,8 +6,9 @@ import { api, bump } from './lib.ts';
 import { ask, attempt, AsyncButton, Info } from './ui.tsx';
 import { useTexts } from './texts.tsx';
 
-/** Weave Web, where a linked browser gets its handover (the storage node next to the page). */
+/** Weave Web: the page a link opens, and the storage node it uses, where the handover waits. */
 const WEB = 'https://web.martl.io';
+const STORAGE = 'https://storage.martl.io';
 
 /**
  * Browsers linked to this person (docs/web-stage2.md): each gets a key of its own from this computer, without the
@@ -56,7 +57,7 @@ export function LinkedBrowsers({ keys }: { keys: KeyInfo[] }) {
           <input className="grow" placeholder={t('browser.name.placeholder')} value={name} maxLength={32} onChange={(e) => setName(e.target.value)} />
           <AsyncButton
             onClick={async () => {
-              const linked = await attempt(() => api<{ link: string; name: string }>('linkBrowser', { url: WEB, name }));
+              const linked = await attempt(() => api<{ link: string; name: string }>('linkBrowser', { url: WEB, storage: STORAGE, name }));
               if (!linked) return;
               const svg = await QRCode.toString(linked.link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
               setMade({ ...linked, svg });

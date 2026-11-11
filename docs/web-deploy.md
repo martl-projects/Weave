@@ -54,6 +54,25 @@ shows the invitations not used up: how many for one account, and how many accoun
 
 The same three steps: `setup.sh` replaces the program and the page and keeps the accounts. The domain is remembered.
 
+## The page from elsewhere
+
+Before real users the page doesn't come from this server (docs/web-stage2.md, step 10): it's static files at Cloudflare Pages under `web.martl.io`, and this server is `storage.martl.io`, with the storage node's socket and the browser link handovers only. Whoever takes this server can't change the code browsers run.
+
+1. **DNS** (Cloudflare): `storage.martl.io`, type A, to the server's address, DNS only.
+2. **The storage node under its own name**, the old one kept while DNS moves:
+
+   ```bash
+   cd /root/weave-storage-*/ && WEAVE_DOMAIN=storage.martl.io WEAVE_PAGE=https://web.martl.io WEAVE_ALSO=web.martl.io bash setup.sh
+   ```
+
+   Invitations now lead to `WEAVE_PAGE`.
+3. **A token for GitHub** (Cloudflare → My Profile → API Tokens → Create Token → Custom token): permission *Account → Cloudflare Pages → Edit*, for martl's account only. In the repository's Settings → Secrets → Actions: `CLOUDFLARE_API_TOKEN` (the token) and `CLOUDFLARE_ACCOUNT_ID` (on the Cloudflare dashboard's overview, right).
+4. **The first upload:** a tag `web-1` on main (or Actions → Weave Web → Run workflow). It builds the page for `https://storage.martl.io` (`apps/web/pages.ts`), makes the project `weave-web` the first time, uploads it, and keeps the hashes of every file.
+5. **The name moves:** Cloudflare → Workers & Pages → weave-web → Custom domains → `web.martl.io`. Cloudflare puts its own record in place of the A record. The origin stays `web.martl.io`, so passkeys and what browsers hold stay too.
+6. Once everything answers from there: `WEAVE_ALSO=` (nothing) and `setup.sh` again, and this server answers to `storage.martl.io` only.
+
+**Updating the page** is a new tag (`web-2`, …), no longer `setup.sh`. **The watcher** (Actions → Weave Web watch) fetches every file from `web.martl.io` every hour and compares it with the last upload's hashes. A difference fails that run, and GitHub says so by mail. By hand: `node apps/web/watch.ts apps/web/dist/pages-hashes.json`.
+
 ## Looking at it
 
 ```bash

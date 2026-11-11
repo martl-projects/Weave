@@ -5,7 +5,8 @@
 	# what every browser runs. A change to this file takes a restart (setup.sh does one).
 	admin off
 }
-{$WEAVE_DOMAIN} {
+# WEAVE_ALSO: a name it still answers to while DNS moves (setup.sh), or nothing.
+{$WEAVE_DOMAIN} {$WEAVE_ALSO} {
 	encode zstd gzip
 
 	header {

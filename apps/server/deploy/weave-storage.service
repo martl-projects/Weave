@@ -7,7 +7,8 @@ Wants=network-online.target
 User=weave-storage
 Group=weave-storage
 EnvironmentFile=/etc/weave-storage.env
-ExecStart=/usr/local/bin/node /opt/weave-storage/weave-storage.mjs run --behind-proxy --origin https://${WEAVE_DOMAIN} --web /opt/weave-storage/web
+# The page may come from its own address (WEAVE_PAGE, Cloudflare Pages), or from here.
+ExecStart=/usr/local/bin/node /opt/weave-storage/weave-storage.mjs run --behind-proxy --origin https://${WEAVE_DOMAIN} --origin ${WEAVE_PAGE} --web /opt/weave-storage/web
 Restart=always
 RestartSec=5
 LimitNOFILE=65536

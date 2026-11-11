@@ -55,7 +55,12 @@ const webHost: Plugin = {
   },
 };
 
-export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean } = {}): Promise<void> {
+/**
+ * `storage`: the storage node the page uses, when it isn't the page's own origin (https://storage.martl.io, while the
+ * page comes from elsewhere: docs/web-stage2.md, step 10). The page may connect to it and to nothing else.
+ */
+export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean; storage?: string } = {}): Promise<void> {
+  const storage = options.storage ? new URL(options.storage).origin : '';
   mkdirSync(dist, { recursive: true });
   // A service's Worker has no host of ours: only what preview2-shim brings for a browser.
   // The page's offline side, with a number of its own: a new one replaces the old caches.
@@ -86,16 +91,20 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
     sourcemap: options.minify ? false : 'inline',
     minify: options.minify,
     logLevel: 'warning',
-    define: { 'process.env.NODE_ENV': options.minify ? '"production"' : '"development"', WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
+    define: { 'process.env.NODE_ENV': options.minify ? '"production"' : '"development"', STORAGE_ORIGIN: JSON.stringify(storage), WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
     loader: { '.svg': 'text', '.png': 'dataurl' },
   });
   await build({ entryPoints: [join(DESKTOP, 'src/renderer/styles.css')], outfile: join(dist, 'styles.css'), bundle: true, minify: true, logLevel: 'warning', loader: { '.woff': 'dataurl', '.woff2': 'dataurl' } });
-  for (const file of ['index.html', 'manifest.json']) copyFileSync(join(import.meta.dirname, 'src', file), join(dist, file));
+  copyFileSync(join(import.meta.dirname, 'src', 'manifest.json'), join(dist, 'manifest.json'));
+  writeFileSync(join(dist, 'index.html'), readFileSync(join(import.meta.dirname, 'src', 'index.html'), 'utf8').replace("connect-src 'self'", `connect-src ${connectSrc(storage)}`));
   copyFileSync(join(DESKTOP, 'assets/icon.png'), join(dist, 'icon.png'));
   // Weave avatar's renderer, pinned as on the desktop.
   if (options.avatars) cpSync(await pinnedRelease('avatar'), join(dist, 'avatar3d'), { recursive: true });
   copyFileSync(join(require.resolve('@sqlite.org/sqlite-wasm/package.json'), '..', 'dist', 'sqlite3.wasm'), join(dist, 'sqlite3.wasm'));
 }
+
+/** Where the page may connect: itself, and its storage node when that's elsewhere (its socket and its handovers). */
+export const connectSrc = (storage: string): string => (storage ? `'self' ${storage} ${storage.replace(/^http/, 'ws')}` : "'self'");
 
 /**
  * The services a page runs, transpiled here because a page has no transpiler: each once by its digest, into

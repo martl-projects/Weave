@@ -1157,12 +1157,14 @@ export class WeaveNode implements Backend {
    * your encryption keys and your spaces. That goes sealed to the storage node at `url`, and the link it gives back opens
    * it there, once, within 15 minutes. Revoke it like an always-on node, in Keys & devices.
    */
-  async linkBrowser(input: { url: string; name?: string }): Promise<{ link: string; name: string; key: Did }> {
+  async linkBrowser(input: { url: string; storage?: string; name?: string }): Promise<{ link: string; name: string; key: Did }> {
     const me = this.identity.author;
     const mine = this.replica.authority.grant(this.identity.did);
     if (this.identity.did !== me && mine?.role !== 'device') throw new Error('link browsers from one of your own computers');
+    // The page the link opens, and the storage node it uses: the same origin, unless the page comes from elsewhere.
     const url = new URL(input.url);
-    if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('a storage node is reached over https');
+    const storage = new URL(input.storage ?? input.url);
+    for (const at of [url, storage]) if (at.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(at.hostname)) throw new Error('a storage node is reached over https');
     const name = (input.name ?? '').trim().replace(/\s+/g, '-').slice(0, 32) || 'web';
     const keys = generateKeyPair();
     const key = didFromPublicKey(keys.publicKey);
@@ -1184,14 +1186,13 @@ export class WeaveNode implements Backend {
       ] as unknown as Json[],
       spaces: this.#nodeSpaces() as unknown as Json[],
     };
-    const base = url.origin;
-    const res = await fetch(`${base}/link/${linkToken(secret)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: sealLink(secret, handover as unknown as Json) });
+    const res = await fetch(`${storage.origin}/link/${linkToken(secret)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: sealLink(secret, handover as unknown as Json) });
     if (!res.ok) {
       // Nothing reached the browser: its key goes again.
       this.replica.write(this.identity, revocation(key, 0));
       throw new Error(res.status === 429 ? 'too many browser links from here this hour: try again later' : `the storage node didn't take it (${res.status})`);
     }
-    return { link: browserLinkUrl(base, secret), name, key };
+    return { link: browserLinkUrl(url.origin, secret), name, key };
   }
 
   /** Set up a browser's home from a link's handover (linkBrowser): the person, with the key it was given. */

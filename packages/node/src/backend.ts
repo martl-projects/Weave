@@ -2097,7 +2097,7 @@ export interface Backend {
    * spaces (but direct chats), boxed to it. The answer goes back to the node (weave node join).
    */
   linkNode(input: { request: string }): Promise<{ answer: string; key: Did; name: string }>;
-  linkBrowser(input: { url: string; name?: string }): Promise<{ link: string; name: string; key: Did }>;
+  linkBrowser(input: { url: string; storage?: string; name?: string }): Promise<{ link: string; name: string; key: Did }>;
   /** Where this computer can keep the home key (stage 17): the operating system's keystore and the hardware ones it has. */
   keystores(): Promise<Array<{ keystore: KeystoreKind; name: string; ready: boolean; why?: string; current: boolean }>>;
   /** Keep the home key somewhere else (stage 17): `os` for the operating system's keystore. */

@@ -88,13 +88,17 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
  * Handovers to linked browsers: one of a person's computers leaves one (POST /link/<token>), sealed, and the browser
  * with the link takes it (GET), once, within LINK_MS. Held in memory: a restart loses them, and the link is made again.
  */
-export function linkHandovers(behindProxy: boolean | undefined) {
+export function linkHandovers(behindProxy: boolean | undefined, origins: Iterable<string> = []) {
+  const pages = new Set(origins);
   const waiting = new Map<string, { data: Buffer; until: number }>();
   const posted = new Map<string, number[]>();
   return (req: IncomingMessage, res: ServerResponse, token: string): void => {
     const now = Date.now();
     for (const [t, w] of waiting) if (w.until <= now) waiting.delete(t);
-    const done = (status: number, body = '') => void res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body);
+    // The page takes its handover from another origin when it comes from elsewhere: those it may come from may read it.
+    const origin = req.headers.origin;
+    const cors: Record<string, string> = origin && pages.has(origin) ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {};
+    const done = (status: number, body = '') => void res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors }).end(body);
     if (!TOKEN.test(token)) return done(404);
     if (req.method === 'GET') {
       const w = waiting.get(token);
@@ -128,7 +132,7 @@ export function linkHandovers(behindProxy: boolean | undefined) {
 
 /** The HTTP side: the page's files, if it has them, handovers to linked browsers, and whether it's up. */
 export function storageServer(node: StorageNode, options: StorageServerOptions): Server {
-  const handover = linkHandovers(options.behindProxy);
+  const handover = linkHandovers(options.behindProxy, options.origins);
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');

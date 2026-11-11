@@ -136,10 +136,13 @@ describe('a storage node on the internet', { timeout: 20_000 }, () => {
     expect((await fetch(at(token))).status).toBe(404);
     expect((await fetch(at(token), { method: 'POST', body: '{"sealed":1}' })).status).toBe(201);
     expect((await fetch(at(token), { method: 'POST', body: 'again' })).status).toBe(409);
-    const taken = await fetch(at(token));
+    // The page takes it, from its own origin (it may come from elsewhere than the storage node): that origin may read it.
+    const taken = await fetch(at(token), { headers: { origin: ORIGIN } });
     expect(taken.status).toBe(200);
+    expect(taken.headers.get('access-control-allow-origin')).toBe(ORIGIN);
     expect(await taken.text()).toBe('{"sealed":1}');
     expect((await fetch(at(token))).status).toBe(404);
+    expect((await fetch(at(token), { headers: { origin: 'https://elsewhere.example' } })).headers.get('access-control-allow-origin')).toBeNull();
     expect((await fetch(at('short'), { method: 'POST', body: 'x' })).status).toBe(404);
   });
 

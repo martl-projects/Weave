@@ -3,6 +3,11 @@
 #
 #   WEAVE_DOMAIN=web.martl.io bash setup.sh
 #
+# With the page from elsewhere (docs/web-stage2.md, step 10), the storage node has a name of its own and says where the
+# page is; WEAVE_ALSO is a name it still answers to while DNS moves:
+#
+#   WEAVE_DOMAIN=storage.martl.io WEAVE_PAGE=https://web.martl.io WEAVE_ALSO=web.martl.io bash setup.sh
+#
 # Safe to run again: an update replaces the program and the page, and keeps /var/lib/weave-storage.
 set -euo pipefail
 
@@ -49,16 +54,19 @@ cp "$here/weave-storage.mjs" "$here/package.json" /opt/weave-storage/
 rm -rf /opt/weave-storage/web
 cp -r "$here/web" /opt/weave-storage/web
 
-printf 'WEAVE_DOMAIN=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" > /etc/weave-storage.env
+# Where the page is: here, unless it comes from elsewhere. Kept like the domain.
+WEAVE_PAGE="${WEAVE_PAGE:-https://$WEAVE_DOMAIN}"
+WEAVE_ALSO="${WEAVE_ALSO:-}"
+printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" > /etc/weave-storage.env
 cp "$here/weave-storage.service" /etc/systemd/system/weave-storage.service
 cp "$here/Caddyfile" /etc/caddy/Caddyfile
 install -d /etc/systemd/system/caddy.service.d
-printf '[Service]\nEnvironment=WEAVE_DOMAIN=%s\n' "$WEAVE_DOMAIN" > /etc/systemd/system/caddy.service.d/domain.conf
+printf '[Service]\nEnvironment=WEAVE_DOMAIN=%s\nEnvironment=WEAVE_ALSO=%s\n' "$WEAVE_DOMAIN" "$WEAVE_ALSO" > /etc/systemd/system/caddy.service.d/domain.conf
 
 # `weave-storage-invite`: a link for one new account (`--accounts 20`: one link for 20). `weave-storage-invites`: what's left.
 cat > /usr/local/bin/weave-storage-invite <<EOF
 #!/bin/sh
-exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs invite --origin https://$WEAVE_DOMAIN "\$@"
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs invite --origin $WEAVE_PAGE "\$@"
 EOF
 cat > /usr/local/bin/weave-storage-invites <<EOF
 #!/bin/sh

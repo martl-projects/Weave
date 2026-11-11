@@ -9,7 +9,10 @@ import { askPasskey, makePasskey } from './passkey.ts';
  * loads the renderer after.
  */
 
-const STORAGE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/storage`;
+declare const STORAGE_ORIGIN: string;
+/** The storage node: where the build said (build.ts), or the page's own origin (dev.ts, a node that serves its page). */
+const STORAGE_AT = STORAGE_ORIGIN || location.origin;
+const STORAGE = `${STORAGE_AT.replace(/^http/, 'ws')}/storage`;
 const INVITE_KEY = 'weave.invite';
 
 /*
@@ -147,8 +150,8 @@ const web: Bridge['web'] = {
     if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
     // A passkey opens this browser; with no words here, it's the way in.
     const made = await makePasskey('Weave');
-    // The handover waits next to this page (/link/…); the storage node is reached over its socket after.
-    await own('link', location.origin, sessionStorage.getItem(LINK_KEY), made);
+    // The handover waits at the storage node (/link/…), which is reached over its socket after.
+    await own('link', STORAGE_AT, sessionStorage.getItem(LINK_KEY), made);
     sessionStorage.removeItem(LINK_KEY);
     passkey = true;
     await goOnline(invite);

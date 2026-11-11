@@ -1,0 +1,31 @@
+# Whether web.martl.io serves what the last upload built (docs/web-stage2.md, step 10): every hour, every file against
+# the hashes the Weave Web workflow kept. A difference fails this run, and GitHub says so.
+name: Weave Web watch
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: The hashes of the last upload
+        run: |
+          run=$(gh run list --workflow web-pages.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$run" ]; then echo "no upload yet"; exit 0; fi
+          gh run download "$run" --name web-hashes --dir hashes
+      - name: What web.martl.io serves
+        if: hashFiles('hashes/pages-hashes.json') != ''
+        run: node apps/web/watch.ts hashes/pages-hashes.json https://web.martl.io
