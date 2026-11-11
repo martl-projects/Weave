@@ -4,6 +4,7 @@ import RelayStream from '@hyperswarm/dht-relay/ws';
 import b4a from 'b4a';
 import sodium from 'sodium-universal';
 import { ask, CookieJar, type Asked, type Tunnel } from './http.ts';
+import { closeFrame, frame as wsFrame, FrameReader, OP, textOf, upgradeAnswer, upgradeRequest } from './wsframes.ts';
 
 /*
  * A website's tab (docs/web-stage2.md, step 9), at <website>.weave-rooms.net: an origin of its own for each website,
@@ -86,6 +87,77 @@ async function start(): Promise<void> {
       ports[0].postMessage({ error: (error as Error).message });
     }
   });
+
+  // The website's WebSockets, from its frame (ws.ts): each through a tunnel of its own, opened with an upgrade.
+  (window as unknown as { __weaveWebSocket: unknown }).__weaveWebSocket = (
+    path: string,
+    protocols: string[],
+    events: { open(protocol: string): void; message(binary: boolean, data: Uint8Array): void; close(code: number, reason: string, clean: boolean): void; error(): void },
+  ) => {
+    let tunnel: Tunnel | undefined;
+    let open = false;
+    let closed = false;
+    const waiting: Uint8Array[] = [];
+    const finish = (code: number, reason: string, clean: boolean) => {
+      if (closed) return;
+      closed = true;
+      tunnel?.destroy();
+      events.close(code, reason, clean);
+    };
+    const failed = () => {
+      if (!closed) events.error();
+      finish(1006, '', false);
+    };
+    void (async () => {
+      const t = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
+      tunnel = t;
+      if (closed) return t.destroy();
+      t.write(pass.tunnel);
+      const key = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+      t.write(upgradeRequest(path, location.host, protocols, jar.header(), key));
+      const reader = new FrameReader();
+      let head: Uint8Array | undefined = new Uint8Array(0);
+      t.on('data', (chunk) => {
+        if (head) {
+          const all = new Uint8Array(head.length + chunk.length);
+          all.set(head);
+          all.set(chunk, head.length);
+          const answer = upgradeAnswer(all);
+          if (!answer) return void (head = all);
+          if (answer.status !== 101) return failed();
+          head = undefined;
+          jar.take(answer.headers);
+          open = true;
+          events.open(answer.protocol);
+          for (const f of waiting.splice(0)) t.write(f);
+          chunk = answer.rest;
+        }
+        for (const got of reader.push(chunk)) {
+          if (got.opcode === OP.text || got.opcode === OP.binary) events.message(got.opcode === OP.binary, got.payload);
+          else if (got.opcode === OP.ping) t.write(wsFrame(OP.pong, got.payload));
+          else if (got.opcode === OP.close) {
+            const code = got.payload.length >= 2 ? (got.payload[0] << 8) | got.payload[1] : 1005;
+            t.write(closeFrame(code === 1005 ? 1000 : code, ''));
+            finish(code, textOf(got.payload.subarray(2)), true);
+          }
+        }
+      });
+      t.on('error', failed);
+      t.on('close', () => finish(1006, '', false));
+    })().catch(failed);
+    return {
+      send: (binary: boolean, data: Uint8Array) => {
+        const f = wsFrame(binary ? OP.binary : OP.text, data);
+        if (open && tunnel) tunnel.write(f);
+        else waiting.push(f);
+      },
+      close: (code: number, reason: string) => {
+        if (!open || !tunnel) return finish(code, reason, false);
+        tunnel.write(closeFrame(code, reason));
+        setTimeout(() => finish(code, reason, true), 1000);
+      },
+    };
+  };
 
   say('Connecting…');
   await navigator.serviceWorker.register('/__weave/sw.js', { scope: '/' });

@@ -159,9 +159,11 @@ try {
     throw new Error(`${error.message}; the tab says: ${await site.run<string>(`document.body.innerText.slice(0, 300)`)}; ${state}`);
   });
   if (!websiteText.includes("Hello from Lena's website") || !websiteText.includes('visit=1')) throw new Error(`the website showed: ${websiteText}`);
+  const echoed = await until('its WebSocket, through the tunnel', async () => { const text = await site.run<string | undefined>(`document.querySelector('iframe')?.contentDocument?.querySelector('#ws')?.textContent`); return text?.startsWith('ws:') ? text : undefined; }, 30_000);
+  if (echoed !== 'ws: echo: hello') throw new Error(`the WebSocket said: ${echoed}`);
   site.close();
   await fetch(`http://127.0.0.1:${DEBUG}/json/close/${websiteTab.id}`);
-  passed("Lena's website opens in a tab of its own, through the relay", websiteText.split('\n').at(-1));
+  passed("Lena's website opens in a tab of its own, through the relay, and its WebSocket too", [websiteText.split('\n').at(-1), echoed]);
 
   // Opened again: now its service worker answers for the tab's own page too.
   await run(`window.weave.web.openWebsite({ id: ${JSON.stringify(website)}, name: 'Party' })`);

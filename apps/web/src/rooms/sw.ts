@@ -48,6 +48,14 @@ async function throughTheTab(request: Request): Promise<Response> {
     }
   }
   const status = got.status >= 200 && got.status <= 599 ? got.status : 502;
+  // A page of the website gets the tab's WebSocket first (ws.js), before any script of its own.
+  if (!empty && /text\/html/i.test(headers.get('content-type') ?? '')) {
+    const page = new TextDecoder().decode(got.body);
+    const ours = '<script src="/__weave/ws.js"></script>';
+    const withOurs = /<head[^>]*>/i.test(page) ? page.replace(/<head[^>]*>/i, (head) => head + ours) : ours + page;
+    headers.delete('content-length');
+    return new Response(withOurs, { status, statusText: /^[\t\x20-\x7e]*$/.test(got.statusText) ? got.statusText : '', headers });
+  }
   return new Response(empty ? null : got.body, { status, statusText: /^[\t\x20-\x7e]*$/.test(got.statusText) ? got.statusText : '', headers });
 }
 

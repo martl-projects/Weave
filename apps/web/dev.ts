@@ -21,6 +21,7 @@ import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
 import HyperDHT from 'hyperdht';
+import { WebSocketServer } from 'ws';
 import { buildRooms, buildServices, buildWeb } from './build.ts';
 import { roomsCsp } from './src/rooms/csp.ts';
 
@@ -60,8 +61,11 @@ const relayDht = onDht ? undefined : new HyperDHT();
 const app = createServer((req, res) => {
   if (req.url === '/api') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'visit=1; Path=/' });
-  res.end(`<!doctype html><title>Party</title><h1>Hello from Lena's website</h1><p id="api">…</p><script>fetch('/api').then((r) => r.json()).then((j) => (document.getElementById('api').textContent = 'api: ' + JSON.stringify(j)))</script>`);
+  res.end(`<!doctype html><title>Party</title><h1>Hello from Lena's website</h1><p id="ws">…</p><p id="api">…</p><script>const ws = new WebSocket('ws://' + location.host + '/echo'); ws.onopen = () => ws.send('hello'); ws.onmessage = (e) => (document.getElementById('ws').textContent = 'ws: ' + e.data); fetch('/api').then((r) => r.json()).then((j) => (document.getElementById('api').textContent = 'api: ' + JSON.stringify(j)))</script>`);
 });
+// And a WebSocket, which says back what it's told.
+const echo = new WebSocketServer({ noServer: true });
+app.on('upgrade', (req, socket, head) => echo.handleUpgrade(req, socket, head, (ws) => ws.on('message', (data) => ws.send(`echo: ${String(data)}`))));
 await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
 await person.createProject({ name: 'Party' });
 const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network: onDht ? swarmNetwork() : Object.assign(standIn, { dht: () => relayDht! }) });

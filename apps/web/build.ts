@@ -115,6 +115,8 @@ export async function buildRooms(dist: string, options: { web: string; storage: 
   const define = { WEB_ORIGIN: JSON.stringify(new URL(options.web).origin), STORAGE_ORIGIN: JSON.stringify(new URL(options.storage).origin), global: 'globalThis' };
   await build({ entryPoints: { shell: join(import.meta.dirname, 'src/rooms/shell.ts') }, outdir: out, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define, inject: [require.resolve('buffer/')] });
   await build({ entryPoints: { sw: join(import.meta.dirname, 'src/rooms/sw.ts') }, outdir: out, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { BUILD: JSON.stringify(Date.now().toString(36)) } });
+  // The website's own WebSocket, which the service worker puts first in its pages.
+  await build({ entryPoints: { ws: join(import.meta.dirname, 'src/rooms/ws.ts') }, outdir: out, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
   copyFileSync(join(import.meta.dirname, 'src/rooms/shell.html'), join(out, 'shell.html'));
   await build({ entryPoints: [join(import.meta.dirname, 'rooms-worker.ts')], outfile: join(dist, 'rooms-worker.js'), bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { STORAGE_ORIGIN: define.STORAGE_ORIGIN } });
 }
