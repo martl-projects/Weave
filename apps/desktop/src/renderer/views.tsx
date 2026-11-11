@@ -143,7 +143,11 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
     <Page title={<>{p.me ? t('nav.hub') : t('hub.theirs', { name })}</>} actions={
         p.me && (
           <>
-            <button onClick={() => setAvatar(true)}>{t('hub.avatar')}</button> <button onClick={() => setEditing(true)}>{t('hub.customize')}</button>
+            <button onClick={() => setAvatar(true)}>{t('hub.avatar')}</button> <button onClick={() => setEditing(true)}>{t('hub.customize')}</button>{' '}
+            {/* On a phone, what a computer has in its menu bar: from your hub, as Settings. */}
+            <button className="mobile-only" onClick={() => (location.hash = '#/me')}>
+              {t('nav.me')}
+            </button>
           </>
         )
       }

@@ -701,6 +701,7 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .mobile-only { display: none !important; }
 @media (max-width: 700px) {
   .mobile-only { display: flex !important; }
+  button.mobile-only { align-items: center; justify-content: center; }
   .not-mobile, .menubar, .brand, .toolbar .tool-sep, .members, .status-bar, .app-window > .title-bar .title-bar-controls { display: none !important; }
   .app-window > .toolbar { border-top: 1px solid #fff; border-bottom: none; box-shadow: 0 -1px #808080; }
   /* Every look styles its bars; on a phone these win (:root[data-skin] outweighs a look's own rules),

@@ -143,16 +143,17 @@ try {
 
   // On a phone's width: what the menu bar has on a computer is under Settings.
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-  await until('the Me tab', () => run<boolean>(`(() => { const me = document.querySelector('.toolbar a[href="#/me"]'); return !!me && getComputedStyle(me).display !== 'none'; })()`));
-  await run(`location.hash = '#/me'`);
-  await until('Me', () => run<boolean>(`!!document.querySelector('.me-hub') && !!document.querySelector('a.me-row[href="#/keys"]') && document.querySelectorAll('.page select').length >= 2`));
-  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'me.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
-  await run(`document.querySelector('.me-hub').click()`);
-  await until('the hub', () => run<boolean>(`location.hash === '#/space'`));
+  const shown = (selector: string) => `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return !!el && getComputedStyle(el).display !== 'none'; })()`;
+  await until('the My hub tab', () => run<boolean>(shown('.toolbar a.mobile-only[href="#/space"]')));
+  await run(`document.querySelector('.toolbar a.mobile-only[href="#/space"]').click()`);
+  await until('the hub, with Settings', () => run<boolean>(shown('.pane-head button.mobile-only')));
   if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'hub.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  await run(`document.querySelector('.pane-head button.mobile-only').click()`);
+  await until('Settings', () => run<boolean>(`location.hash === '#/me' && !!document.querySelector('a.me-row[href="#/keys"]') && document.querySelectorAll('.page select').length >= 2`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'me.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
   await run(`location.hash = '#/'`);
   await send('Emulation.clearDeviceMetricsOverride');
-  passed('on a phone, Settings has the hub, keys and the look');
+  passed('on a phone, My hub has Settings: keys and the look');
 
   // Lena links a browser from her computer. A browser of its own (a context with nothing in it) opens the link, makes a
   // passkey, and is Lena there: no words asked.
