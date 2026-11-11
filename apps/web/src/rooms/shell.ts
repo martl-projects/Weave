@@ -82,8 +82,11 @@ async function start(): Promise<void> {
   const jar = new CookieJar();
 
   // What the website asks, from the service worker: through a tunnel of its own each time.
-  navigator.serviceWorker.addEventListener('message', async ({ data, ports }: MessageEvent<{ type?: string } & Asked>) => {
-    if (data?.type !== 'weave-ask' || !ports[0]) return;
+  // On the website's channel (sw.ts): its service worker asks, this tab answers.
+  const channel = new BroadcastChannel('weave-website');
+  channel.onmessage = async ({ data }: MessageEvent<{ type?: string; id?: string } & Asked>) => {
+    if (data?.type !== 'weave-ask' || !data.id) return;
+    const reply = (answer: Record<string, unknown>) => channel.postMessage({ type: 'weave-answer', id: data.id, ...answer });
     try {
       const tunnel = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
       tunnel.write(pass.tunnel);
@@ -91,11 +94,11 @@ async function start(): Promise<void> {
       const asked: Asked = { ...data, headers: [...data.headers.filter(([n]) => n.toLowerCase() !== 'cookie'), ...(cookie ? [['Cookie', cookie] as [string, string]] : [])] };
       const answer = await ask(tunnel, asked, location.host);
       jar.take(answer.headers);
-      ports[0].postMessage({ ...answer, headers: answer.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie') }, [answer.body]);
+      reply({ ...answer, headers: answer.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie') });
     } catch (error) {
-      ports[0].postMessage({ error: (error as Error).message });
+      reply({ error: (error as Error).message });
     }
-  });
+  };
 
   // The website's WebSockets, from its frame (ws.ts): each through a tunnel of its own, opened with an upgrade.
   (window as unknown as { __weaveWebSocket: unknown }).__weaveWebSocket = (

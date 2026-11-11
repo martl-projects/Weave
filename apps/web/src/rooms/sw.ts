@@ -27,23 +27,29 @@ declare const self: { addEventListener(type: string, listener: (event: WorkerEve
 self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
+type Got = { error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer };
+
+/** The website's tabs, and their answers by request (the first one counts). */
+const tabs = new BroadcastChannel('weave-website');
+const waiting = new Map<string, (answer: Got) => void>();
+tabs.onmessage = ({ data }: MessageEvent<Got & { type?: string; id?: string }>) => {
+  if (data?.type !== 'weave-answer' || !data.id) return;
+  const answer = waiting.get(data.id);
+  waiting.delete(data.id);
+  answer?.(data);
+};
+
 async function throughTheTab(request: Request): Promise<Response> {
-  // The tab is the top-level window. A browser that doesn't say which one is (Safari has no frameType) asks them all:
-  // only the tab answers, the website's own frames don't listen.
-  // Controlled or not: the tab came before this service worker, and a browser may not hand it over (Safari).
-  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  const tabs = windows.some((client) => client.frameType === 'top-level') ? windows.filter((client) => client.frameType === 'top-level') : windows;
-  if (!tabs.length) return said('this website is open in no tab: open it from Weave');
+  // Asked on the website's channel, which its tab listens on (shell.ts): not through clients, which a browser may not
+  // show the tab among (Safari, the tab in a frame of Weave's page).
   const url = new URL(request.url);
   const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
-  type Got = { error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer };
-  const asked = tabs.map((tab) => {
-    const channel = new MessageChannel();
-    const copy = body?.slice(0);
-    tab.postMessage({ type: 'weave-ask', method: request.method, url: url.pathname + url.search, headers: [...request.headers], body: copy }, [channel.port2, ...(copy ? [copy] : [])]);
-    return new Promise<Got>((resolve) => (channel.port1.onmessage = ({ data }) => resolve(data)));
+  const id = crypto.randomUUID();
+  const got = await new Promise<Got>((resolve) => {
+    const timer = setTimeout(() => (waiting.delete(id), resolve({ error: 'no tab of this website answered: open it from Weave again' } as Got)), 90_000);
+    waiting.set(id, (answer) => (clearTimeout(timer), resolve(answer)));
+    tabs.postMessage({ type: 'weave-ask', id, method: request.method, url: url.pathname + url.search, headers: [...request.headers], body });
   });
-  const got = await Promise.race([...asked, new Promise<Got>((resolve) => setTimeout(() => resolve({ error: 'no tab of this website answered: open it from Weave again' } as Got), 90_000))]);
   if (got.error) return said(got.error);
   const empty = request.method === 'HEAD' || got.status === 204 || got.status === 304;
   // Headers the browser refuses in an answer made here are left out, one by one, rather than the whole answer.
