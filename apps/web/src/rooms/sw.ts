@@ -6,6 +6,10 @@
 
 export {};
 
+declare const BUILD: string;
+/** Which build this is: a new one is a new file, so a browser takes the new service worker. */
+(self as unknown as { weaveBuild: string }).weaveBuild = BUILD;
+
 interface WorkerEvent {
   request: Request;
   waitUntil(work: Promise<unknown>): void;
@@ -55,7 +59,8 @@ const answerSafely = (request: Request) => throughTheTab(request).catch((error: 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== location.origin || url.pathname.startsWith('/__weave/')) return;
-  // The tab itself, opened anew (a reload, a link from outside): its page, which opens the website in its frame.
-  if (event.request.mode === 'navigate' && event.request.destination === 'document') return event.respondWith(fetch('/__weave/shell.html'));
+  // The tab itself, opened anew (a reload, a link from outside): left to the Worker, which answers any address with the
+  // tab's page. Fetched here, it took the CSP of the day this service worker came, and the tab didn't open.
+  if (event.request.mode === 'navigate' && event.request.destination === 'document') return;
   event.respondWith(answerSafely(event.request));
 });
