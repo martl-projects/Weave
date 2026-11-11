@@ -3917,6 +3917,10 @@ export class WeaveNode implements Backend {
     return this.#website.visitWebsite(...args);
   }
 
+  websitePass(...args: Parameters<Website['websitePass']>): ReturnType<Website['websitePass']> {
+    return this.#website.websitePass(...args);
+  }
+
   leaveWebsite(...args: Parameters<Website['leaveWebsite']>): ReturnType<Website['leaveWebsite']> {
     return this.#website.leaveWebsite(...args);
   }

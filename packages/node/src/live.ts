@@ -41,6 +41,16 @@ interface Proof {
   time: string;
 }
 
+/**
+ * The first line of a connection to a room's host: who this is, signed, bound to the connection's own DHT key (hex), so
+ * it can't be used on another. A browser's room tab makes its connections itself, and gets its lines from Weave.
+ */
+export function proofLine(room: Room, me: SigningIdentity, key: string, purpose: Proof['purpose']): string {
+  const proof: Proof = { room: room.id, person: me.author, signer: me.did, key, purpose, time: new Date().toISOString() };
+  const sig = b64u.encode(sign(utf8(canonicalJson(proof as unknown as Json)), me.keys.secretKey));
+  return `${JSON.stringify({ proof, sig })}\n`;
+}
+
 /** What the runtime needs from its node. */
 export interface LiveHost {
   dht(): HyperDHT | undefined;
@@ -386,10 +396,7 @@ export class LiveRooms {
 
   #dial(room: Room, purpose: Proof['purpose']): DhtSocket {
     const socket = this.#need().connect(Buffer.from(room.key, 'hex'));
-    const me = this.#host.signer();
-    const proof: Proof = { room: room.id, person: me.author, signer: me.did, key: socket.publicKey.toString('hex'), purpose, time: new Date().toISOString() };
-    const sig = b64u.encode(sign(utf8(canonicalJson(proof as unknown as Json)), me.keys.secretKey));
-    socket.write(`${JSON.stringify({ proof, sig })}\n`);
+    socket.write(proofLine(room, this.#host.signer(), socket.publicKey.toString('hex'), purpose));
     return socket;
   }
 

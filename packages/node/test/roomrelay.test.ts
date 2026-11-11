@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js';
 import HyperDHT from 'hyperdht';
@@ -8,6 +11,7 @@ import RelayStream from '@hyperswarm/dht-relay/ws';
 import { b64u, canonicalJson, createIdentity, randomBytes, sign, utf8, type Json, type Room } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
 import { LiveRooms } from '../src/live.ts';
+import { loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
 
 /*
  * A website through a storage node, end to end (docs/web-stage2.md, step 9): a browser has no DHT, so a relay carries
@@ -20,6 +24,7 @@ describe("a website through a relay that can't read it", () => {
   let app: Server;
   let appPort: number;
   const closing: Array<() => unknown> = [];
+  const dirs: string[] = [];
 
   beforeAll(async () => {
     testnet = await createTestnet(3);
@@ -31,6 +36,7 @@ describe("a website through a relay that can't read it", () => {
     for (const close of closing.reverse()) await close();
     await new Promise<void>((resolve) => app.close(() => resolve()));
     await testnet.destroy();
+    dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true }));
   });
 
   it('opens a tunnel to the host, with a proof the host accepts', async () => {
@@ -81,4 +87,61 @@ describe("a website through a relay that can't read it", () => {
     expect(answer).toMatch(/^HTTP\/1\.1 200/);
     expect(answer).toContain('the party app');
   }, 60_000);
+
+  it("gives a browser's tab its pass from Weave, and the tab reaches the website with it", async () => {
+    const person = (name: string) => {
+      const dir = mkdtempSync(join(tmpdir(), 'weave-roomrelay-'));
+      dirs.push(dir);
+      const node = WeaveNode.init(name, dir);
+      node.config = { ...loadConfig(resolveHome(dir)), bootstrap: testnet.bootstrap };
+      saveConfig(resolveHome(dir), node.config);
+      closing.push(() => node.close());
+      return node;
+    };
+    const martl = person('martl');
+    const lena = person('Lena');
+    const mallory = person('Mallory');
+    await martl.createProject({ name: 'Party' });
+    await lena.joinSpace(await martl.invite('Party'));
+    await martl.goOnline();
+    await lena.goOnline();
+    await martl.addService({ builtin: 'website', spaces: ['Party'] });
+    const hosted = await martl.openWebsite({ project: 'Party', name: 'Saturday', port: appPort });
+    const seen = await until(async () => (await lena.websites('Party')).find((w) => w.id === hosted.id));
+
+    // The tab's own DHT, through a relay; Weave (Lena's node) signs its first lines for the tab's key.
+    const relayDht = new HyperDHT({ bootstrap: testnet.bootstrap });
+    closing.push(() => relayDht.destroy());
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    closing.push(() => new Promise((resolve) => wss.close(resolve)));
+    wss.on('connection', (socket) => relay(relayDht, new RelayStream(false, socket)));
+    await new Promise((resolve) => wss.once('listening', resolve));
+    const keyPair = HyperDHT.keyPair();
+    const dht = new RelayedDHT(new RelayStream(true, new WebSocket(`ws://127.0.0.1:${(wss.address() as { port: number }).port}`)), { custodial: false, keyPair });
+    closing.push(() => dht.destroy());
+    await expect(lena.websitePass({ room: seen.id, key: 'not a key' })).rejects.toThrow(/connection's key/);
+    await expect(mallory.websitePass({ room: seen.id, key: keyPair.publicKey.toString('hex') })).rejects.toThrow();
+    const pass = await lena.websitePass({ room: seen.id, key: keyPair.publicKey.toString('hex') });
+
+    const tunnel = dht.connect(Buffer.from(pass.key, 'hex'));
+    tunnel.write(pass.tunnel);
+    tunnel.write('GET / HTTP/1.1\r\nHost: saturday\r\nConnection: close\r\n\r\n');
+    const answer = await new Promise<string>((resolve) => {
+      let text = '';
+      tunnel.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+      tunnel.on('close', () => resolve(text));
+      tunnel.on('error', () => resolve(text));
+    });
+    expect(answer).toContain('the party app');
+  }, 90_000);
 });
+
+async function until<T>(get: () => Promise<T | undefined>, timeoutMs = 30_000): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const value = await get();
+    if (value) return value;
+    if (Date.now() - start > timeoutMs) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}

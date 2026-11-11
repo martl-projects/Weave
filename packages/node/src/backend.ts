@@ -2546,6 +2546,8 @@ export interface Backend {
   /** Join a room: connect to the host and open the local tunnel; WebsiteInfo.url is what to open. */
   visitWebsite(room: string): Promise<WebsiteInfo>;
   leaveWebsite(room: string): Promise<void>;
+  /** A browser tab's way to a website's host: its key, and its connections' first lines signed for the tab's key. */
+  websitePass(input: { room: string; key: string }): Promise<{ id: string; name: string; key: string; tunnel: string; control: string }>;
   websiteChat(room: string): Promise<WebsiteChatMessage[]>;
   sayOnWebsite(input: { room: string; text: string }): Promise<void>;
 
@@ -2705,7 +2707,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',
   'showPosts', 'mentions', 'followClaudeCode', 'claudeCode', 'sessions', 'activeSessions', 'session', 'focusedSession', 'workOn', 'doneWith', 'restack', 'workTarget', 'expectSession', 'rememberFolder', 'folders', 'setSessionRole', 'workers', 'hideSession', 'unhideSessions', 'assign', 'nameSession',
   'desk', 'deskFolder', 'setupDesk', 'routines', 'setRoutine', 'removeRoutine', 'runRoutine',
-  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'reach', 'setReach', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
+  'projectApp', 'publishApp', 'releaseApp', 'releaseService', 'appReleases', 'artifactLines', 'artifactReleases', 'releaseArtifact', 'publishArtifact', 'websiteEnv', 'updateCheck', 'updateFetch', 'updateState', 'updateReady', 'updateSettings', 'reach', 'setReach', 'preferences', 'setPreferences', 'websites', 'closeWebsite', 'visitWebsite', 'websitePass', 'leaveWebsite', 'websiteChat', 'sayOnWebsite',
   'createTier', 'setTier', 'gumroad', 'connectGumroad', 'disconnectGumroad', 'sellTierOnGumroad', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   'createBadgeSeries', 'setBadgeSeries', 'badgeSeries', 'giveBadge', 'publishBadgeNote', 'badges', 'transferBadge',
   'marks', 'markServices', 'addMarks', 'removeMarks', 'setOfficial', 'hints', 'hintServices', 'addHints', 'setHints', 'removeHints', 'seen',

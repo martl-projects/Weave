@@ -3,7 +3,7 @@ import { releaseById, b64u, showOpen, KIND_ROOM, parsePages, type RoomPages, ran
 import { roomKeyPair } from '@weave/net';
 import { type AppEnv, type AppPerson, type HostedWebsiteInfo, type WebsiteChatMessage, type WebsiteInfo } from './backend.ts';
 import { createHash, createHmac } from 'node:crypto';
-import { portOpen } from './live.ts';
+import { portOpen, proofLine } from './live.ts';
 import { programConsent } from './runtime.ts';
 import { type AgentKey } from './keystore.ts';
 import { AppApiError, sameToken, startAppApi, type AppApiServer } from './appapi.ts';
@@ -18,6 +18,17 @@ import type { Services } from './services.ts';
  * lets visitors in through an encrypted tunnel (see live.ts), and tells whatever answers who each visitor is, in a
  * signed header and through the app API, here too.
  */
+
+/** A browser tab's way to a website's host (websitePass). */
+export interface WebsitePass {
+  id: string;
+  name: string;
+  /** The room's DHT key (hex). */
+  key: string;
+  /** The first line of each connection: the app's (tunnel) and presence and chat's (control). */
+  tunnel: string;
+  control: string;
+}
 
 export class Website {
   readonly h: WebsiteHost;
@@ -242,6 +253,19 @@ export class Website {
     if (!this.mayJoin(room, this.h.identity.author)) throw new Error(room.show || room.groups ? "this website is for a show's ticket holders, while it's on (weave shows), or for members of its tiers" : "you're not invited to this website");
     await this.h.live.join(room, room.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'room');
     return this.roomInfo(room, project);
+  }
+
+  /**
+   * What a browser's tab for a website needs to reach its host itself (docs/web-stage2.md, step 9): the room's DHT key,
+   * and the first lines of its connections, signed here for the tab's own DHT key. The tab's connections go through
+   * the storage node's relay, encrypted from the tab to the host; the person's key stays here.
+   */
+  async websitePass(input: { room: string; key: string }): Promise<WebsitePass> {
+    const { room } = this.roomById(input.room);
+    if (!room.open) throw new Error('this website is closed');
+    if (!this.mayJoin(room, this.h.identity.author)) throw new Error("you're not invited to this website");
+    if (!/^[0-9a-f]{64}$/.test(input.key)) throw new Error("that isn't a connection's key");
+    return { id: room.id, name: room.name, key: room.key, tunnel: proofLine(room, this.h.identity, input.key, 'tunnel'), control: proofLine(room, this.h.identity, input.key, 'control') };
   }
 
   async leaveWebsite(ref: string): Promise<void> {
