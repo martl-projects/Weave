@@ -532,3 +532,4 @@ export {
   type TextsOptions,
   type TextValues,
 } from './texts.ts';
+export { newPlanSecret, onboardLink, ONBOARD_PATH, openPlan, parseOnboardLink, parsePlan, planCheck, sealPlan, type OnboardPlan, type OnboardStep } from './onboard.ts';
