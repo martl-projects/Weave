@@ -42,6 +42,7 @@ function WebsiteFrame({ room, onClose }: { room: WebsiteInfo; onClose(): void })
   const frame = useRef<HTMLIFrameElement>(null);
   const [link] = useState(() => bridge.web!.websiteFrame(room));
   const [failed, setFailed] = useState<string>();
+  const [menu, setMenu] = useState(false);
   useEffect(() => {
     if (frame.current?.contentWindow) link.attach(frame.current.contentWindow, setFailed);
     return () => link.detach();
@@ -50,21 +51,33 @@ function WebsiteFrame({ room, onClose }: { room: WebsiteInfo; onClose(): void })
     bridge.web!.openWebsite(room);
     onClose();
   };
+  // The website has the whole screen; Weave's own controls wait behind one small button, in a corner.
   return createPortal(
     <div className="website-frame">
-      <div className="website-frame-bar">
-        <b>{room.name}</b>
-        <button onClick={inBrowser}>{t('web.website.in.browser')}</button>
-        <button aria-label={t('button.close')} onClick={onClose}>
-          ✕
-        </button>
-      </div>
-      {failed && (
-        <p className="notice alarm">
-          {failed} <button onClick={inBrowser}>{t('web.website.in.browser')}</button>
-        </p>
-      )}
       <iframe ref={frame} src={link.url} title={room.name} allow="fullscreen; autoplay; clipboard-write" />
+      <button className="website-frame-handle" aria-label={room.name} aria-expanded={menu} onClick={() => setMenu((open) => !open)}>
+        ⋯
+      </button>
+      {menu && (
+        <div className="website-frame-menu" role="menu">
+          <b>{room.name}</b>
+          <button role="menuitem" onClick={inBrowser}>
+            {t('web.website.in.browser')}
+          </button>
+          <button role="menuitem" className="website-frame-close" onClick={onClose}>
+            {t('button.close')}
+          </button>
+        </div>
+      )}
+      {failed && (
+        <div className="website-frame-failed">
+          <p>{failed}</p>
+          <button className="default" onClick={inBrowser}>
+            {t('web.website.in.browser')}
+          </button>
+          <button onClick={onClose}>{t('button.close')}</button>
+        </div>
+      )}
     </div>,
     document.body,
   );

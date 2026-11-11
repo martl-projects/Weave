@@ -206,7 +206,11 @@ try {
     throw new Error(`${error.message}; the frame says: ${await framed.run<string>(`document.body?.innerText?.slice(0, 300)`).catch((e: Error) => e.message)}`);
   });
   framed.close();
-  await run(`document.querySelector('.website-frame-bar button[aria-label]').click()`);
+  // Weave's controls wait behind the corner button: open them, then close.
+  await run(`document.querySelector('.website-frame-handle').click()`);
+  await until('the menu', () => run<boolean>(`!!document.querySelector('.website-frame-menu')`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'framed.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  await run(`document.querySelector('.website-frame-close').click()`);
   await until('the frame closed', () => run<boolean>(`!document.querySelector('.website-frame')`));
   await run(`location.hash = '#/'`);
   await send('Emulation.clearDeviceMetricsOverride');
