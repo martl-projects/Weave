@@ -22,7 +22,7 @@ interface Client {
   postMessage(message: unknown, transfer: Transferable[]): void;
 }
 
-declare const self: { addEventListener(type: string, listener: (event: WorkerEvent) => void): void; skipWaiting(): Promise<void>; clients: { claim(): Promise<void>; matchAll(options: { type: string }): Promise<Client[]> } };
+declare const self: { addEventListener(type: string, listener: (event: WorkerEvent) => void): void; skipWaiting(): Promise<void>; clients: { claim(): Promise<void>; matchAll(options: { type: string; includeUncontrolled?: boolean }): Promise<Client[]> } };
 
 self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
@@ -30,7 +30,8 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 async function throughTheTab(request: Request): Promise<Response> {
   // The tab is the top-level window. A browser that doesn't say which one is (Safari has no frameType) asks them all:
   // only the tab answers, the website's own frames don't listen.
-  const windows = await self.clients.matchAll({ type: 'window' });
+  // Controlled or not: the tab came before this service worker, and a browser may not hand it over (Safari).
+  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const tabs = windows.some((client) => client.frameType === 'top-level') ? windows.filter((client) => client.frameType === 'top-level') : windows;
   if (!tabs.length) return said('this website is open in no tab: open it from Weave');
   const url = new URL(request.url);

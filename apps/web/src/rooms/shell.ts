@@ -160,7 +160,16 @@ async function start(): Promise<void> {
   };
 
   say('Connecting…');
-  await navigator.serviceWorker.register('/__weave/sw.js', { scope: '/' });
+  // The service worker as this build has it: a browser keeps the one it has until asked (Safari, at least), so it's asked,
+  // and the website waits for a new one to take over.
+  const registration = await navigator.serviceWorker.register('/__weave/sw.js', { scope: '/', updateViaCache: 'none' });
+  await registration.update().catch(() => {});
+  if (registration.installing || registration.waiting) {
+    await new Promise<void>((resolve) => {
+      navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true });
+      setTimeout(resolve, 8000);
+    });
+  }
   await navigator.serviceWorker.ready;
   // The website, in a frame the service worker answers for: where this tab was opened.
   const frame = document.createElement('iframe');
