@@ -57,7 +57,9 @@ cp -r "$here/web" /opt/weave-storage/web
 # Where the page is: here, unless it comes from elsewhere. Kept like the domain.
 WEAVE_PAGE="${WEAVE_PAGE:-https://$WEAVE_DOMAIN}"
 WEAVE_ALSO="${WEAVE_ALSO:-}"
-printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" > /etc/weave-storage.env
+# The page from here, or from elsewhere: then nothing here is code a browser runs.
+if [ "$WEAVE_PAGE" = "https://$WEAVE_DOMAIN" ]; then WEAVE_SERVE="--web /opt/weave-storage/web"; else WEAVE_SERVE=""; fi
+printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_SERVE=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" "$WEAVE_SERVE" > /etc/weave-storage.env
 cp "$here/weave-storage.service" /etc/systemd/system/weave-storage.service
 cp "$here/Caddyfile" /etc/caddy/Caddyfile
 install -d /etc/systemd/system/caddy.service.d

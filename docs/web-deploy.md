@@ -69,7 +69,7 @@ Before real users the page doesn't come from this server (docs/web-stage2.md, st
 3. **A token for GitHub** (Cloudflare → My Profile → API Tokens → Create Token → Custom token): permission *Account → Cloudflare Pages → Edit*, for martl's account only. In the repository's Settings → Secrets → Actions: `CLOUDFLARE_API_TOKEN` (the token) and `CLOUDFLARE_ACCOUNT_ID` (on the Cloudflare dashboard's overview, right).
 4. **The first upload:** a tag `web-1` on main (or Actions → Weave Web → Run workflow). It builds the page for `https://storage.martl.io` (`apps/web/pages.ts`), makes the project `weave-web` the first time, uploads it, and keeps the hashes of every file.
 5. **The name moves:** Cloudflare → Workers & Pages → weave-web → Custom domains → `web.martl.io`. Cloudflare puts its own record in place of the A record. The origin stays `web.martl.io`, so passkeys and what browsers hold stay too.
-6. Once everything answers from there: `WEAVE_ALSO=` (nothing) and `setup.sh` again, and this server answers to `storage.martl.io` only.
+6. Once everything answers from there: `WEAVE_ALSO=` (nothing) and `setup.sh` again. This server then answers to `storage.martl.io` only and serves no page at all: with `WEAVE_PAGE` elsewhere, the storage node runs without `--web` and lets in pages from `WEAVE_PAGE` only. Done for martl.io on 11.11.2026.
 
 **Updating the page** is a new tag (`web-2`, …), no longer `setup.sh`. **The watcher** (Actions → Weave Web watch) fetches every file from `web.martl.io` every hour and compares it with the last upload's hashes. A difference fails that run, and GitHub says so by mail. By hand: `node apps/web/watch.ts apps/web/dist/pages-hashes.json`.
 
