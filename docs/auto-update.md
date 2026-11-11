@@ -21,7 +21,7 @@ Tried on Windows (31.10.2026): a 0.23.0 build installed per user found a release
 |---|---|---|
 | Windows per-user installer (`.exe`, NSIS) | yes | The setup runs silently (`/S --updated`), per user, no UAC. Unsigned: no SmartScreen (a file our process wrote has no Mark-of-the-Web), and Weave's SHA-256 check is the only origin check, the same as for every project app. Signed (Azure Trusted Signing): electron-updater also verifies the publisher, and a signed app refuses an unsigned update. |
 | Windows MSI (per machine) | no | IT rolls out versions (`msiexec /i … /qn`). Recognized at runtime: the MSI leaves no `Uninstall Weave.exe` next to `Weave.exe`. |
-| Microsoft Store | no | The Store updates it (`process.windowsStore`). There is no Store build yet; the gate is there for it. |
+| Microsoft Store | no | The Store updates it (`process.windowsStore`), so the app never looks for updates itself. Built with `npm run package -- --store`, on the Windows runner through the Installers workflow (`store` input). Its path has the version in it: after a Store update the daemon repoints agent apps at the new one on start (`repairHarnesses`). It has no `weave` command on PATH: the Store package can't change PATH. |
 | Linux AppImage | yes | electron-updater replaces the file at `$APPIMAGE` and relaunches. |
 | macOS (`.dmg`, `.zip`) | once signed | Each release has the app as a `.zip` for Squirrel.Mac, but Squirrel refuses an app that isn't signed with a Developer ID, so self-update stays off until the Mac build is signed (`resources/update.json`, written by `package.ts`). Until then the prompt offers the download. |
 | macOS `.pkg` | once signed | The same app bundle as the dmg: same rule. IT may also roll it out. |

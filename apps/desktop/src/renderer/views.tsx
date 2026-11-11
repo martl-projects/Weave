@@ -292,7 +292,7 @@ export function ContactDialog({ onClose }: { onClose(): void }) {
       <textarea className="wide invite" readOnly rows={4} value={message || t('contact.making')} />
       {reach?.door && (
         <p className="small">
-          <button type="button" className="link" onClick={() => setPersonal((p) => !p)}>
+          <button type="button" className="link door-switch" onClick={() => setPersonal((p) => !p)}>
             {t(door ? 'contact.personal' : 'contact.door')}
           </button>
         </p>
