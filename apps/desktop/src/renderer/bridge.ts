@@ -92,6 +92,12 @@ export interface Bridge {
     unlock(words?: string): Promise<void>;
     /** Bring an account to this browser from the storage node, the same way. */
     arrive(words?: string): Promise<void>;
+    /**
+     * Open a website in a tab of its own (docs/web-stage2.md, step 9): its own origin, which reaches the host itself and
+     * gets from here only what it needs for that (websitePass, a relay ticket). Called on the click itself, so the
+     * browser lets the tab open.
+     */
+    openWebsite(room: { id: string; name: string }): void;
     /** Whether this page was opened with a link from one of the person's computers (linkBrowser). */
     linking(): boolean;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */

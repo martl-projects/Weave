@@ -138,6 +138,31 @@ try {
   if (!/doesn't hold/.test(linked.error ?? '')) throw new Error(`GitHub's verifier didn't answer: ${linked.error ?? 'it held'}`);
   passed("GitHub's verifier asks GitHub, from the browser");
 
+  // Lena's website, in a tab of its own (its own origin) that reaches her computer through the storage node's relay: the
+  // page, what its script asks for, and the cookie it set, all through the tunnel.
+  const { party, website } = (await (await fetch(`${ORIGIN}/dev/invite`)).json()) as { party: string; website: string };
+  await call('joinSpace', party);
+  await until("Lena's website", async () => ((await call<Array<{ id: string; mayJoin?: boolean }>>('websites', 'Party')).result ?? []).some((w) => w.id === website && w.mayJoin), 30_000);
+  await run(`window.weave.web.openWebsite({ id: ${JSON.stringify(website)}, name: 'Party' })`);
+  const websiteTab = await until('the website tab', async () => ((await (await fetch(`http://127.0.0.1:${DEBUG}/json/list`)).json()) as Array<{ id: string; type: string; url: string; webSocketDebuggerUrl: string }>).find((t) => t.type === 'page' && /\.localhost:/.test(t.url)));
+  const site = await devtools(websiteTab.webSocketDebuggerUrl);
+  await site.send('Runtime.enable');
+  const websiteText = await until(
+    'the website, through the tunnel',
+    async () => {
+      const text = await site.run<string | undefined>(`document.querySelector('iframe')?.contentDocument?.body?.innerText`);
+      return text?.includes('api:') ? text : undefined;
+    },
+    45_000,
+  ).catch(async (error: Error) => {
+    const state = await site.run<string>(`JSON.stringify({ worker: !!navigator.serviceWorker.controller, frame: document.querySelector('iframe')?.contentDocument?.body?.innerText?.slice(0, 200) })`).catch((e: Error) => e.message);
+    throw new Error(`${error.message}; the tab says: ${await site.run<string>(`document.body.innerText.slice(0, 300)`)}; ${state}`);
+  });
+  if (!websiteText.includes("Hello from Lena's website") || !websiteText.includes('visit=1')) throw new Error(`the website showed: ${websiteText}`);
+  site.close();
+  await fetch(`http://127.0.0.1:${DEBUG}/json/close/${websiteTab.id}`);
+  passed("Lena's website opens in a tab of its own, through the relay", websiteText.split('\n').at(-1));
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 

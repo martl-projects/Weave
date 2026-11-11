@@ -2,7 +2,7 @@ import './host/globals.ts';
 import { b64u, errorToWire } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
-import { handOnAgain, useStorage } from './host/net.ts';
+import { handOnAgain, relayTicket, useStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
@@ -108,6 +108,11 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
       throw new Error("that link doesn't open what's there: make a new one on your computer");
     }
     await ready(await account.linkAccount(HOME, wayIn(passkey), handover));
+  },
+
+  /** A ticket for the relay, for a website's tab this page opened. */
+  relayTicket() {
+    return relayTicket();
   },
 
   ways() {

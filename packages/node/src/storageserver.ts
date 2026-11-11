@@ -3,10 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, normalize, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import RelayStream from '@hyperswarm/dht-relay/ws';
-import { relay } from '@hyperswarm/dht-relay';
 import type HyperDHT from 'hyperdht';
-import { WebSocketServer } from 'ws';
 import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
 import { textSocket } from './websocket.ts';
@@ -46,6 +43,8 @@ export interface StorageServerOptions {
   maxPerAddress?: number;
   idleMs?: number;
   maxQueued?: number;
+  /** Where websites' tabs may use the relay from, as origins or as patterns like https://*.weave-rooms.net. */
+  relayOrigins?: string[];
   /** Behind a proxy of our own: the address is the last one it names in X-Forwarded-For. */
   behindProxy?: boolean;
 }
@@ -68,7 +67,9 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname !== '/storage' && url.pathname !== '/dht') return refuse('404 Not Found');
     // A page from elsewhere gets no socket: the browser says truthfully where a page comes from.
-    if (!origins.has(req.headers.origin ?? '')) return refuse('403 Forbidden');
+    const origin = req.headers.origin ?? '';
+    const relayOrigin = url.pathname === '/dht' && (options.relayOrigins ?? []).some((pattern) => originMatches(pattern, origin));
+    if (!origins.has(origin) && !relayOrigin) return refuse('403 Forbidden');
     const address = addressOf(req, options.behindProxy);
     const count = open.get(address) ?? 0;
     if (count >= max) return refuse('429 Too Many Requests');
@@ -80,12 +81,7 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
     });
     if (url.pathname === '/dht') {
       // A browser's connections to websites, for a ticket its storage connection got (StorageNode.relayFor).
-      const relayed = node.relayFor(url.searchParams.get('ticket') ?? '');
-      if (!relayed) return refuse('403 Forbidden');
-      return void relaying.handleUpgrade(req, socket, head, (ws) => {
-        ws.once('close', relayed.done);
-        relay(onlyConnecting(relayed.dht), new RelayStream(false, ws));
-      });
+      return relayUpgrade(node, url.searchParams.get('ticket') ?? '', req, socket, head) ? undefined : refuse('403 Forbidden');
     }
     const text = textSocket(req, socket, head, { idleMs: options.idleMs ?? IDLE_MS, maxQueued: options.maxQueued ?? MAX_QUEUED });
     if (!text) return refuse('400 Bad Request');
@@ -93,8 +89,45 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
   };
 }
 
-/** The relay's WebSockets: binary, unlike the storage connection's. */
-const relaying = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+/**
+ * The relay's parts, loaded when it's first used: a storage node's only, and this module is in a browser's bundle too,
+ * where they don't load. Its WebSockets are binary, unlike the storage connection's.
+ */
+let relayParts: Promise<{ handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer, done: (ws: { once(event: 'close', f: () => void): void }) => void) => void; relayOver: (dht: HyperDHT, ws: unknown) => void }> | undefined;
+const loadRelay = () =>
+  (relayParts ??= Promise.all([import('ws'), import('@hyperswarm/dht-relay'), import('@hyperswarm/dht-relay/ws')]).then(([ws, dhtRelay, wsStream]) => {
+    const server = new ws.WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+    const relay = ((dhtRelay as unknown as { default?: { relay?: typeof dhtRelay.relay } }).default?.relay ?? dhtRelay.relay) as typeof dhtRelay.relay;
+    const RelayStream = wsStream.default;
+    return {
+      handleUpgrade: (req, socket, head, done) => server.handleUpgrade(req, socket, head, done as never),
+      relayOver: (dht, socket) => void relay(dht, new RelayStream(false, socket)),
+    };
+  }));
+
+/** An origin and a pattern: the same, or one name under a *. (https://*.weave-rooms.net takes https://a1.weave-rooms.net). */
+export function originMatches(pattern: string, origin: string): boolean {
+  if (pattern === origin) return true;
+  const star = /^(https?:\/\/)\*\.(.+)$/.exec(pattern);
+  if (!star || !origin.startsWith(star[1])) return false;
+  const host = origin.slice(star[1].length);
+  return host.endsWith(`.${star[2]}`) && /^[a-z0-9-]+$/.test(host.slice(0, -star[2].length - 1));
+}
+
+/** A browser's connections to websites, for a ticket its storage connection got (StorageNode.relayFor): false without one. */
+export function relayUpgrade(node: StorageNode, ticket: string, req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
+  const relayed = node.relayFor(ticket);
+  if (!relayed) return false;
+  void loadRelay().then(
+    ({ handleUpgrade, relayOver }) =>
+      handleUpgrade(req, socket, head, (ws) => {
+        ws.once('close', relayed.done);
+        relayOver(onlyConnecting(relayed.dht), ws);
+      }),
+    () => (relayed.done(), socket.destroy()),
+  );
+  return true;
+}
 
 /**
  * The DHT as the relay may use it: connections, to a website's host, and nothing else. Lookups and announcements end at

@@ -59,7 +59,10 @@ WEAVE_PAGE="${WEAVE_PAGE:-https://$WEAVE_DOMAIN}"
 WEAVE_ALSO="${WEAVE_ALSO:-}"
 # The page from here, or from elsewhere: then nothing here is code a browser runs.
 if [ "$WEAVE_PAGE" = "https://$WEAVE_DOMAIN" ]; then WEAVE_SERVE="--web /opt/weave-storage/web"; else WEAVE_SERVE=""; fi
-printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_SERVE=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" "$WEAVE_SERVE" > /etc/weave-storage.env
+# Websites' tabs (docs/web-stage2.md, step 9), which may use the relay to reach websites: like https://*.weave-rooms.net.
+WEAVE_ROOMS="${WEAVE_ROOMS:-}"
+if [ -n "$WEAVE_ROOMS" ]; then WEAVE_RELAY="--relay-origin $WEAVE_ROOMS"; else WEAVE_RELAY=""; fi
+printf 'WEAVE_DOMAIN=%s\nWEAVE_PAGE=%s\nWEAVE_ALSO=%s\nWEAVE_SERVE=%s\nWEAVE_ROOMS=%s\nWEAVE_RELAY=%s\nWEAVE_STORAGE_DIR=/var/lib/weave-storage\n' "$WEAVE_DOMAIN" "$WEAVE_PAGE" "$WEAVE_ALSO" "$WEAVE_SERVE" "$WEAVE_ROOMS" "$WEAVE_RELAY" > /etc/weave-storage.env
 cp "$here/weave-storage.service" /etc/systemd/system/weave-storage.service
 cp "$here/Caddyfile" /etc/caddy/Caddyfile
 install -d /etc/systemd/system/caddy.service.d

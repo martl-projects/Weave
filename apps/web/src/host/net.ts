@@ -52,6 +52,19 @@ export function socketTo(url: string): Promise<TextSocket> {
   });
 }
 
+/** A ticket for the storage node's relay, for a website's tab (docs/web-stage2.md, step 9): over a short connection of its own. */
+export async function relayTicket(): Promise<string> {
+  const account = link?.account();
+  if (!link || !account) throw new Error('not connected to a storage node yet');
+  const client = await StorageClient.connect(await socketTo(link.url));
+  try {
+    await client.signIn(account);
+    return await client.relayTicket();
+  } finally {
+    client.close();
+  }
+}
+
 /** The node's blob store, as far as this uses it. */
 type Blobs = BlobSource & { put(data: Uint8Array): string };
 

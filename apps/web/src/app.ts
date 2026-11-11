@@ -1,7 +1,23 @@
 import type { ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
+import { sha256 } from '@noble/hashes/sha2.js';
 import { askPasskey, makePasskey } from './passkey.ts';
+
+declare const ROOMS_BASE: string;
+
+/** A website's own origin: {label} in ROOMS_BASE (build.ts) is a name made from its id, lower case, as DNS has them. */
+function websiteOrigin(id: string): string {
+  const bytes = sha256(new TextEncoder().encode(`weave/website/v1 ${id}`));
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+  let label = '';
+  for (let i = 0, bits = 0, value = 0; i < bytes.length && label.length < 26; i++) {
+    value = (value << 8) | bytes[i];
+    bits += 8;
+    while (bits >= 5 && label.length < 26) label += alphabet[(value >>> (bits -= 5)) & 31];
+  }
+  return ROOMS_BASE.replace('{label}', label);
+}
 
 /*
  * Weave in a browser: the desktop's renderer, as it is, with a bridge to the node in the Worker where it would have one to
@@ -144,6 +160,28 @@ const takeOver = async (): Promise<void> => {
 const web: Bridge['web'] = {
   passkey: () => passkey,
   takeOver,
+  openWebsite: (room) => {
+    const origin = websiteOrigin(room.id);
+    const tab = window.open(`${origin}/`, '_blank');
+    if (!tab) throw new Error('the browser kept the website from opening a tab: allow pop-ups for Weave');
+    // The tab asks for its pass, and later for new relay tickets: answered to it alone, for this website alone.
+    const answer = async ({ origin: from, source, data }: MessageEvent<{ type?: string; key?: string }>) => {
+      if (from !== origin || source !== tab) return;
+      const reply = (message: Record<string, unknown>) => tab.postMessage(message, origin);
+      if (data?.type === 'weave-website') {
+        const pass = await ask('websitePass', { room: room.id, key: data.key });
+        if ('error' in pass) return reply({ type: 'weave-website-pass', error: pass.error });
+        const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
+        if (typeof ticket !== 'string') return reply({ type: 'weave-website-pass', error: ticket.error });
+        return reply({ type: 'weave-website-pass', ...(pass.result as object), ticket });
+      }
+      if (data?.type === 'weave-website-ticket') {
+        const ticket = await own<string>('relayTicket').catch((error: Error) => ({ error: error.message }));
+        return reply(typeof ticket === 'string' ? { type: 'weave-website-ticket', ticket } : { type: 'weave-website-ticket', error: ticket.error });
+      }
+    };
+    addEventListener('message', (event) => void answer(event));
+  },
   linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
   link: async () => {
     const invite = given || invitation();

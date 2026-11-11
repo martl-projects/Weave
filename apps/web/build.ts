@@ -59,7 +59,7 @@ const webHost: Plugin = {
  * `storage`: the storage node the page uses, when it isn't the page's own origin (https://storage.martl.io, while the
  * page comes from elsewhere: docs/web-stage2.md, step 10). The page may connect to it and to nothing else.
  */
-export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean; storage?: string } = {}): Promise<void> {
+export async function buildWeb(dist: string, options: { minify?: boolean; avatars?: boolean; storage?: string; rooms?: string } = {}): Promise<void> {
   const storage = options.storage ? new URL(options.storage).origin : '';
   mkdirSync(dist, { recursive: true });
   // A service's Worker has no host of ours: only what preview2-shim brings for a browser.
@@ -91,7 +91,7 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
     sourcemap: options.minify ? false : 'inline',
     minify: options.minify,
     logLevel: 'warning',
-    define: { 'process.env.NODE_ENV': options.minify ? '"production"' : '"development"', STORAGE_ORIGIN: JSON.stringify(storage), WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
+    define: { 'process.env.NODE_ENV': options.minify ? '"production"' : '"development"', STORAGE_ORIGIN: JSON.stringify(storage), ROOMS_BASE: JSON.stringify(options.rooms ?? 'https://{label}.weave-rooms.net'), WEAVE_VERSION: JSON.stringify(version), AVATAR_RELEASE: JSON.stringify(pins().avatar?.sha256.slice(0, 16) ?? 'dev') },
     loader: { '.svg': 'text', '.png': 'dataurl' },
   });
   await build({ entryPoints: [join(DESKTOP, 'src/renderer/styles.css')], outfile: join(dist, 'styles.css'), bundle: true, minify: true, logLevel: 'warning', loader: { '.woff': 'dataurl', '.woff2': 'dataurl' } });
@@ -101,6 +101,22 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
   // Weave avatar's renderer, pinned as on the desktop.
   if (options.avatars) cpSync(await pinnedRelease('avatar'), join(dist, 'avatar3d'), { recursive: true });
   copyFileSync(join(require.resolve('@sqlite.org/sqlite-wasm/package.json'), '..', 'dist', 'sqlite3.wasm'), join(dist, 'sqlite3.wasm'));
+}
+
+/**
+ * A website's tab (src/rooms/, docs/web-stage2.md, step 9), for <website>.weave-rooms.net: its page, its service worker
+ * and the relay's client, into dist/rooms/__weave/, and the Cloudflare Worker in front of them into dist/rooms-worker.js.
+ * `web`: where Weave's page is, the only one that may give it a pass; `storage`: its storage node, whose relay it uses.
+ */
+export async function buildRooms(dist: string, options: { web: string; storage: string; minify?: boolean }): Promise<void> {
+  const out = join(dist, 'rooms', '__weave');
+  rmSync(join(dist, 'rooms'), { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  const define = { WEB_ORIGIN: JSON.stringify(new URL(options.web).origin), STORAGE_ORIGIN: JSON.stringify(new URL(options.storage).origin), global: 'globalThis' };
+  await build({ entryPoints: { shell: join(import.meta.dirname, 'src/rooms/shell.ts') }, outdir: out, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define, inject: [require.resolve('buffer/')] });
+  await build({ entryPoints: { sw: join(import.meta.dirname, 'src/rooms/sw.ts') }, outdir: out, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
+  copyFileSync(join(import.meta.dirname, 'src/rooms/shell.html'), join(out, 'shell.html'));
+  await build({ entryPoints: [join(import.meta.dirname, 'rooms-worker.ts')], outfile: join(dist, 'rooms-worker.js'), bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { STORAGE_ORIGIN: define.STORAGE_ORIGIN } });
 }
 
 /** Where the page may connect: itself, and its storage node when that's elsewhere (its socket and its handovers). */

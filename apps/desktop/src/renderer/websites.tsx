@@ -85,6 +85,15 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
         <button disabled>{t('web.waiting.answers')}</button> <button onClick={bump}>{t('web.check.again')}</button>
       </span>
     );
+  // On the web a website opens in a tab of its own, which reaches the host itself (docs/web-stage2.md, step 9).
+  else if (bridge.web)
+    main = room.mayJoin ? (
+      <button className="default play" onClick={() => attempt(async () => bridge.web!.openWebsite(room))}>
+        ▶ {label}
+      </button>
+    ) : (
+      <span className="small muted">{who.length ? t(show && !show.open ? 'web.for.while.on' : 'web.for', { who }) : t('web.not.invited')}</span>
+    );
   else if (!room.joined)
     main = room.mayJoin ? (
       <AsyncButton className="default" onClick={() => attempt(() => api('visitWebsite', room.id).then(bump))}>

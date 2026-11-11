@@ -9,7 +9,7 @@ Group=weave-storage
 EnvironmentFile=/etc/weave-storage.env
 # Pages may connect from WEAVE_PAGE. WEAVE_SERVE (setup.sh) is what serving the page here adds, or nothing when it comes
 # from elsewhere (Cloudflare Pages): then this server sends no code a browser runs.
-ExecStart=/usr/local/bin/node /opt/weave-storage/weave-storage.mjs run --behind-proxy --origin ${WEAVE_PAGE} $WEAVE_SERVE
+ExecStart=/usr/local/bin/node /opt/weave-storage/weave-storage.mjs run --behind-proxy --origin ${WEAVE_PAGE} $WEAVE_SERVE $WEAVE_RELAY
 Restart=always
 RestartSec=5
 LimitNOFILE=65536

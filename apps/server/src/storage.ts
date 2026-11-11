@@ -1,6 +1,7 @@
 // A storage node: holds people's spaces for their browsers, without being able to read them (docs/web-stage2.md).
 //
-//   weave-storage run       run it: --dir, --port (8790), --origin https://… (several times), --web <the page's folder>
+//   weave-storage run       run it: --dir, --port (8790), --origin https://… (several times), --web <the page's folder>,
+//                           --relay-origin https://*.weave-rooms.net (websites' tabs, which may use the relay)
 //   weave-storage invite    a new invitation, for one account, once: --dir, --origin for the link; --accounts 20 for one
 //                           link that 20 people can use
 //   weave-storage invites   the invitations not used up yet
@@ -19,6 +20,7 @@ const { values, positionals } = parseArgs({
     port: { type: 'string', default: '8790' },
     host: { type: 'string', default: '127.0.0.1' },
     origin: { type: 'string', multiple: true, default: [] },
+    'relay-origin': { type: 'string', multiple: true, default: [] },
     web: { type: 'string' },
     'behind-proxy': { type: 'boolean', default: false },
     accounts: { type: 'string', default: '1' },
@@ -46,7 +48,7 @@ if (command === 'invite') {
     process.exit(1);
   }
   const node = await StorageNode.open({ dir: resolve(dir), network: swarmNetwork() });
-  const server = storageServer(node, { origins: values.origin, web: values.web && resolve(values.web), behindProxy: values['behind-proxy'] });
+  const server = storageServer(node, { origins: values.origin, relayOrigins: values['relay-origin'], web: values.web && resolve(values.web), behindProxy: values['behind-proxy'] });
   server.listen(Number(values.port), values.host, () => console.log(`weave-storage on ${values.host}:${values.port}, for ${values.origin.join(', ')}`));
   const stop = async () => {
     server.closeAllConnections();
