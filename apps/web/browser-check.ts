@@ -5,7 +5,7 @@
 // with nothing of any real home. CHROME says which browser, if it isn't where Chrome usually is.
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodeContact } from '@weave/core';
@@ -134,6 +134,19 @@ try {
 
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
+
+  // On a phone's width: what the menu bar has on a computer is under Me.
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await until('the Me tab', () => run<boolean>(`(() => { const me = document.querySelector('.toolbar a[href="#/me"]'); return !!me && getComputedStyle(me).display !== 'none'; })()`));
+  await run(`location.hash = '#/me'`);
+  await until('Me', () => run<boolean>(`!!document.querySelector('.me-hub') && !!document.querySelector('a.me-row[href="#/keys"]') && document.querySelectorAll('.page select').length >= 2`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'me.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  await run(`document.querySelector('.me-hub').click()`);
+  await until('the hub', () => run<boolean>(`location.hash === '#/space'`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'hub.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  await run(`location.hash = '#/'`);
+  await send('Emulation.clearDeviceMetricsOverride');
+  passed('on a phone, Me has the hub, keys and the look');
 
   // Leaving this browser, and coming back with nothing but the passkey.
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;

@@ -626,6 +626,84 @@ function ToolButton({ icon, label, onClick, href, on, className = '' }: { icon: 
   );
 }
 
+/**
+ * On a phone, what the menu bar and the toolbar's other buttons are on a computer: your hub (your avatar, links and
+ * theme are there), Keys & devices, a link, something new, and how Weave looks here.
+ */
+function MeView({ me, open, look }: { me: Profile; open(dialog: Dialog): void; look: { skin: Skin; mode: Mode; language: LanguageSetting; setSkin(s: Skin): void; setMode(m: Mode): void; setLanguage(l: LanguageSetting): void } }) {
+  const { t } = useTexts();
+  const row = (icon: IconName, label: string, to: string | (() => void)) =>
+    typeof to === 'string' ? (
+      <a className="me-row" href={to}>
+        <Icon name={icon} /> {label}
+      </a>
+    ) : (
+      <button className="me-row" onClick={to}>
+        <Icon name={icon} /> {label}
+      </button>
+    );
+  return (
+    <Page title={t('nav.me')}>
+      <a className="me-row me-hub" href="#/space">
+        <Avatar did={me.did} size={40} />
+        <span>
+          <b>{me.name ?? t('word.you')}</b>
+          <br />
+          <small className="muted">{t('me.hub')}</small>
+        </span>
+      </a>
+      <div className="me-rows">
+        {row('lock', t('nav.keys'), '#/keys')}
+        {row('link', t('tool.link'), () => open({ kind: 'link' }))}
+        {row('plus', t('tool.new'), () => open({ kind: 'new' }))}
+        {row('megaphone', t('menu.view.notifications'), () => open({ kind: 'notify' }))}
+        {row('star', t('menu.view.marks'), () => open({ kind: 'marks' }))}
+      </div>
+      <h3>{t('me.look')}</h3>
+      <div className="field-row-stacked">
+        <select
+          aria-label={t('me.look')}
+          value={look.skin}
+          onChange={(e) => {
+            applySkin(e.target.value as Skin);
+            look.setSkin(e.target.value as Skin);
+          }}
+        >
+          {(Object.keys(SKINS) as Skin[]).map((s) => (
+            <option key={s} value={s}>
+              {t(`look.${s}`)}
+            </option>
+          ))}
+        </select>
+        {/* Light or dark: the Clean look has both; Arcade is always dark, Windows 95 and Cozy always light. */}
+        {look.skin === 'clean' && (
+          <select
+            aria-label={t('me.mode')}
+            value={look.mode}
+            onChange={(e) => {
+              applyMode(e.target.value as Mode);
+              look.setMode(e.target.value as Mode);
+            }}
+          >
+            {(Object.keys(MODES) as Mode[]).map((m) => (
+              <option key={m} value={m}>
+                {t(`mode.${m}`)}
+              </option>
+            ))}
+          </select>
+        )}
+        <select aria-label={t('me.language')} value={look.language} onChange={(e) => look.setLanguage(e.target.value as LanguageSetting)}>
+          {(['system', ...LANGUAGES] as LanguageSetting[]).map((l) => (
+            <option key={l} value={l}>
+              {t(`language.${l}`)}
+            </option>
+          ))}
+        </select>
+      </div>
+    </Page>
+  );
+}
+
 function Shell() {
   const route = useRoute();
   const { data: me } = useApi(() => api<Profile>('profile'), []);
@@ -651,7 +729,7 @@ function Shell() {
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const whereName = ({ saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
+  const whereName = ({ saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', me: 'nav.me', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
   const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : t(whereName);
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
@@ -667,6 +745,7 @@ function Shell() {
     else if (route[0] === 'people') center = <PeopleView />;
     else if (route[0] === 'inbox') center = <InboxView admissions={waiting ?? []} knocks={knocks ?? []} />;
     else if (route[0] === 'keys') center = <KeysView />;
+    else if (route[0] === 'me') center = <MeView me={me} open={setDialog} look={{ skin, mode, language, setSkin, setMode, setLanguage }} />;
     else if (route[0] === 'sessions') center = <SessionsView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
@@ -784,6 +863,7 @@ function Shell() {
         <ToolButton icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
         <ToolButton icon="users" label={t('nav.people')} href="#/people" on={route[0] === 'people' && !placesOpen} />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
+        <ToolButton icon="user" label={t('nav.me')} href="#/me" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
         <span className="tool-sep" />
         <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
