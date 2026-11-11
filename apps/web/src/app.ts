@@ -44,6 +44,7 @@ interface FromWorker {
   detail?: string;
   key?: string;
   base?: string;
+  net?: string[];
   port?: MessagePort;
 }
 
@@ -51,7 +52,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   if (data.event === 'service') {
     const service = new Worker('/service.js', { type: 'module' });
     services.set(data.key!, service);
-    return service.postMessage({ base: data.base, port: data.port }, [data.port!]);
+    return service.postMessage({ base: data.base, net: data.net, port: data.port }, [data.port!]);
   }
   if (data.event === 'service-stop') {
     services.get(data.key!)?.terminate();

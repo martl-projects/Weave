@@ -38,7 +38,7 @@ export class Runtime extends OnAComputer {
     return this.#running.has(key);
   }
 
-  override startWasm(key: string, run: { entry: string }): void {
+  override startWasm(key: string, run: { entry: string; net?: string[] }): void {
     if (this.running(key)) return;
     const { port1: port, port2: theirs } = new MessageChannel();
     const entry: Running = { port, next: 1, waiting: new Map(), ready: Promise.resolve() };
@@ -56,7 +56,7 @@ export class Runtime extends OnAComputer {
     });
     entry.ready.catch(() => {});
     this.#running.set(key, entry);
-    self.postMessage({ event: 'service', key, base: `/services/${run.entry}`, port: theirs }, [theirs]);
+    self.postMessage({ event: 'service', key, base: `/services/${run.entry}`, net: run.net ?? [], port: theirs }, [theirs]);
   }
 
   override callWasm(key: string, fn: string, args: unknown[]): Promise<unknown> {

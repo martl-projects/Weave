@@ -24,6 +24,11 @@ const BARE = /^(sodium-native|sodium-universal|hyperswarm|hyperdht|oxc-minify|ud
 const SWAPPED: Record<string, string> = { './sqlitestore.ts': 'sqlitestore.ts', './lock.ts': 'lock.ts', './runtime.ts': 'runtime.ts' };
 /** The services a page runs: those that only fold and answer. */
 const SERVICES = ['unread', 'spotlight'];
+/**
+ * The verifiers a page runs. They ask their platform over HTTPS and wait for the answer, which a browser gives only to a
+ * component suspended by JSPI: they're transpiled with it, and a browser without it can't check accounts yet.
+ */
+const VERIFIERS = ['github-verify'];
 const SHIPPED = join(import.meta.dirname, '..', '..', 'packages', 'shipped', 'dist');
 
 const webHost: Plugin = {
@@ -100,14 +105,16 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
 export async function buildServices(dist: string): Promise<string[]> {
   const list = existsSync(join(SHIPPED, 'shipped.json')) ? (JSON.parse(readFileSync(join(SHIPPED, 'shipped.json'), 'utf8')) as Record<string, { component: string; digest: string }>) : {};
   const web: typeof list = {};
-  for (const name of SERVICES.filter((n) => list[n])) {
+  for (const name of [...SERVICES, ...VERIFIERS].filter((n) => list[n])) {
     const dir = join(dist, 'services', name);
     const marker = join(dir, '.component');
     if (!existsSync(marker) || readFileSync(marker, 'utf8') !== list[name].digest) {
       rmSync(dir, { recursive: true, force: true });
       mkdirSync(dir, { recursive: true });
-      const { transpileBytes } = await import('@bytecodealliance/jco-transpile');
-      const { files } = await transpileBytes(readFileSync(join(SHIPPED, list[name].component)), { name: 'component', instantiation: { tag: 'async' }, emitTypescriptDeclarations: false });
+      const { transpile } = await import('@bytecodealliance/jco-transpile');
+      // asyncWasiImports, given at all, adds jco's list of WASI's waiting calls (poll, blocking reads and writes).
+      const jspi = VERIFIERS.includes(name) ? { asyncMode: 'jspi' as const, asyncWasiImports: [], asyncExports: ['verify', 'prove'] } : {};
+      const { files } = await transpile(join(SHIPPED, list[name].component), { name: 'component', instantiation: { tag: 'async' }, emitTypescriptDeclarations: false, ...jspi });
       for (const [file, content] of Object.entries(files)) {
         mkdirSync(dirname(join(dir, file)), { recursive: true });
         writeFileSync(join(dir, file), content);
@@ -115,6 +122,9 @@ export async function buildServices(dist: string): Promise<string[]> {
       writeFileSync(marker, list[name].digest);
     }
     web[name] = { ...list[name], digest: `sha256:${createHash('sha256').update(`web:${name}`).digest('hex')}` };
+    // A proof made with a sign-in with a code asks github.com, which doesn't answer pages: here a proof is made by hand.
+    const verifier = (web[name] as { manifest?: { verifier?: { prove?: unknown } } }).manifest?.verifier;
+    if (verifier) delete verifier.prove;
   }
   writeFileSync(join(dist, 'shipped-web.json'), JSON.stringify(web));
   return Object.keys(web);

@@ -117,6 +117,13 @@ try {
   const counted = await until('a count', async () => (await hints()).result?.[0].hints[0]?.tooltip);
   passed('Unread counts a mention', counted);
 
+  // GitHub's verifier runs here and asks GitHub: octocat's gist is octocat's, and doesn't hold this account's line.
+  const platforms = (await call<Array<{ platform: string; prove?: true }>>('platforms')).result!;
+  if (!platforms.some((p) => p.platform === 'github' && !p.prove)) throw new Error(`GitHub isn't there, proven by hand: ${JSON.stringify(platforms)}`);
+  const linked = await call('linkAccount', { platform: 'github', handle: 'octocat', proof: 'https://gist.github.com/octocat/6cad326836d38bd3a7ae' });
+  if (!/doesn't hold/.test(linked.error ?? '')) throw new Error(`GitHub's verifier didn't answer: ${linked.error ?? 'it held'}`);
+  passed("GitHub's verifier asks GitHub, from the browser");
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 

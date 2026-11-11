@@ -5,7 +5,7 @@
  */
 
 /** Asked by the everyday screens, and fine in a browser. */
-const MORE = ['hints', 'hintServices', 'seen', 'marks', 'markServices', 'services', 'servicesIn', 'fetchers', 'preferences', 'setPreferences', 'reach', 'imprint', 'avatars', 'badges', 'myAccounts', 'platforms', 'artifacts', 'catalog', 'shows'];
+const MORE = ['hints', 'hintServices', 'seen', 'marks', 'markServices', 'services', 'servicesIn', 'fetchers', 'preferences', 'setPreferences', 'reach', 'imprint', 'avatars', 'badges', 'myAccounts', 'platforms', 'accountProof', 'linkAccount', 'accounts', 'artifacts', 'catalog', 'shows'];
 
 /** On a phone through its computer, and without one here: a room's tunnel goes through the DHT (step 9). */
 const NOT_HERE = ['visitWebsite', 'leaveWebsite', 'closeWebsite', 'sayOnWebsite', 'websiteChat', 'updateCheck'];
