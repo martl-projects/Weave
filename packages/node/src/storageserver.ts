@@ -67,12 +67,10 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
     socket.on('error', () => {});
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname !== '/storage' && url.pathname !== '/dht') return refuse('404 Not Found');
-    // A page from elsewhere gets no socket: the browser says truthfully where a page comes from. A program that isn't a
-    // page (a creator's Weave putting an onboarding link) sends no origin; it could claim any, so refusing it guards nothing.
-    const program = url.pathname === '/storage' && req.headers.origin === undefined;
+    // A page from elsewhere gets no socket: the browser says truthfully where a page comes from.
     const origin = req.headers.origin ?? '';
     const relayOrigin = url.pathname === '/dht' && (options.relayOrigins ?? []).some((pattern) => originMatches(pattern, origin));
-    if (!program && !origins.has(origin) && !relayOrigin) return refuse('403 Forbidden');
+    if (!origins.has(origin) && !relayOrigin) return refuse('403 Forbidden');
     const address = addressOf(req, options.behindProxy);
     const count = open.get(address) ?? 0;
     if (count >= max) return refuse('429 Too Many Requests');
