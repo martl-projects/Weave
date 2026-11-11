@@ -9,14 +9,16 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { buildServices, buildWeb, connectSrc } from './build.ts';
+import { buildRooms, buildServices, buildWeb, connectSrc } from './build.ts';
 
 const storage = new URL(process.argv[2] ?? 'https://storage.martl.io').origin;
 const dist = join(import.meta.dirname, 'dist');
 const out = join(dist, 'pages');
 
 rmSync(out, { recursive: true, force: true });
-await buildWeb(out, { minify: true, avatars: true, storage });
+await buildWeb(out, { minify: true, avatars: true, storage, rooms: 'https://{label}.weave-rooms.net' });
+// Websites' tabs, for the Worker at *.weave-rooms.net (rooms-wrangler.toml).
+await buildRooms(dist, { web: 'https://web.martl.io', storage, minify: true });
 const services = await buildServices(out);
 if (services.length < 2) throw new Error(`only ${services.join(', ') || 'no services'} in the page: build packages/shipped first`);
 
@@ -58,4 +60,8 @@ for (const file of files(out)) {
   hashes[path === '/index.html' ? '/' : path] = createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 writeFileSync(join(dist, 'pages-hashes.json'), `${JSON.stringify(hashes, null, 2)}\n`);
+// And the websites' tabs' own files, as any website's name serves them.
+const rooms: Record<string, string> = {};
+for (const file of files(join(dist, 'rooms'))) rooms[`/${relative(join(dist, 'rooms'), file).split(sep).join('/')}`] = createHash('sha256').update(readFileSync(file)).digest('hex');
+writeFileSync(join(dist, 'rooms-hashes.json'), `${JSON.stringify(rooms, null, 2)}\n`);
 console.log(`${Object.keys(hashes).length} files for ${storage}, in ${out}`);

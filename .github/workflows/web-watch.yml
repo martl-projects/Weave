@@ -29,3 +29,7 @@ jobs:
       - name: What web.martl.io serves
         if: hashFiles('hashes/pages-hashes.json') != ''
         run: node apps/web/watch.ts hashes/pages-hashes.json https://web.martl.io
+      # The websites' tabs: the same files under any website's name.
+      - name: What weave-rooms.net serves
+        if: hashFiles('hashes/rooms-hashes.json') != ''
+        run: node apps/web/watch.ts hashes/rooms-hashes.json https://watch.weave-rooms.net
