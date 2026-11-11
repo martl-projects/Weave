@@ -121,6 +121,14 @@ describe('a storage node on the internet', { timeout: 20_000 }, () => {
     expect(await rawGet(port, '/.hidden/secret')).toBe(404);
   });
 
+  it("has the page's code asked again each time, and answers an unchanged file with a 304", async () => {
+    const { port } = await start();
+    const first = await fetch(`http://127.0.0.1:${port}/`);
+    expect(first.headers.get('cache-control')).toBe('no-cache');
+    const modified = first.headers.get('last-modified')!;
+    expect((await fetch(`http://127.0.0.1:${port}/`, { headers: { 'if-modified-since': modified } })).status).toBe(304);
+  });
+
   it('serves no files when it has none, and a closed door is still up', async () => {
     const { port } = await start({ web: undefined });
     expect((await get(port, '/')).status).toBe(404);

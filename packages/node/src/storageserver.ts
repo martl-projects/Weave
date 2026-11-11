@@ -17,6 +17,9 @@ const IDLE_MS = 90_000;
 /** What may wait for a reader who doesn't read: a few images. */
 const MAX_QUEUED = 32 * 1024 * 1024;
 
+/** The page's large files, which change only with a release (as apps/web/src/sw.ts has them). */
+const LARGE = /^\/(services|avatar3d)\/|^\/sqlite3\.wasm$/;
+
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
@@ -84,7 +87,12 @@ export function storageServer(node: StorageNode, options: StorageServerOptions):
     const file = join(options.web, wanted);
     // Nothing above the page's folder, and nothing hidden in it.
     if (!file.startsWith(options.web + sep) || wanted.split(sep).some((part) => part.startsWith('.')) || !existsSync(file) || !statSync(file).isFile()) return res.writeHead(404).end();
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'x-content-type-options': 'nosniff', 'cache-control': extname(file) === '.html' ? 'no-cache' : 'public, max-age=3600' });
+    // The page's code is asked again each time (unchanged, it's a 304), so an update is there at the next reload; only
+    // the large files that change with a release are kept for a while (and the service worker has them first anyway).
+    const modified = statSync(file).mtime.toUTCString();
+    const headers = { 'x-content-type-options': 'nosniff', 'last-modified': modified, 'cache-control': LARGE.test(url.pathname) ? 'public, max-age=3600' : 'no-cache' };
+    if (req.headers['if-modified-since'] === modified) return res.writeHead(304, headers).end();
+    res.writeHead(200, { ...headers, 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
     if (req.method === 'HEAD') return res.end();
     createReadStream(file).pipe(res);
   });
