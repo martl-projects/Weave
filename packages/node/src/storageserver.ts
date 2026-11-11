@@ -2,6 +2,11 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { EventEmitter } from 'node:events';
+import RelayStream from '@hyperswarm/dht-relay/ws';
+import { relay } from '@hyperswarm/dht-relay';
+import type HyperDHT from 'hyperdht';
+import { WebSocketServer } from 'ws';
 import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
 import { textSocket } from './websocket.ts';
@@ -60,7 +65,8 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
       socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     };
     socket.on('error', () => {});
-    if (new URL(req.url ?? '/', 'http://here').pathname !== '/storage') return refuse('404 Not Found');
+    const url = new URL(req.url ?? '/', 'http://here');
+    if (url.pathname !== '/storage' && url.pathname !== '/dht') return refuse('404 Not Found');
     // A page from elsewhere gets no socket: the browser says truthfully where a page comes from.
     if (!origins.has(req.headers.origin ?? '')) return refuse('403 Forbidden');
     const address = addressOf(req, options.behindProxy);
@@ -72,10 +78,42 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
       if (left > 0) open.set(address, left);
       else open.delete(address);
     });
+    if (url.pathname === '/dht') {
+      // A browser's connections to websites, for a ticket its storage connection got (StorageNode.relayFor).
+      const relayed = node.relayFor(url.searchParams.get('ticket') ?? '');
+      if (!relayed) return refuse('403 Forbidden');
+      return void relaying.handleUpgrade(req, socket, head, (ws) => {
+        ws.once('close', relayed.done);
+        relay(onlyConnecting(relayed.dht), new RelayStream(false, ws));
+      });
+    }
     const text = textSocket(req, socket, head, { idleMs: options.idleMs ?? IDLE_MS, maxQueued: options.maxQueued ?? MAX_QUEUED });
     if (!text) return refuse('400 Bad Request');
     node.accept(text).catch(() => text.close());
   };
+}
+
+/** The relay's WebSockets: binary, unlike the storage connection's. */
+const relaying = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+
+/**
+ * The DHT as the relay may use it: connections, to a website's host, and nothing else. Lookups and announcements end at
+ * once with nothing, and a server never listens: a browser hosts nothing through a storage node, and nobody uses it to
+ * look around the DHT.
+ */
+function onlyConnecting(dht: HyperDHT): HyperDHT {
+  const nothing = () => {
+    const query = new EventEmitter();
+    setImmediate(() => query.emit('close'));
+    return query;
+  };
+  const noServer = () => {
+    const server = new EventEmitter() as EventEmitter & { listen(): Promise<void>; close(): Promise<void> };
+    server.listen = async () => void setImmediate(() => server.emit('close'));
+    server.close = async () => {};
+    return server;
+  };
+  return { connect: dht.connect.bind(dht), lookup: nothing, announce: nothing, lookupAndUnannounce: nothing, createServer: noServer } as unknown as HyperDHT;
 }
 
 /** A browser link's handover (browserlink.ts): this big at most, this many at once, this many an hour from one address. */

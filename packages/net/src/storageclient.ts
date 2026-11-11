@@ -176,6 +176,11 @@ export class StorageClient {
     await this.#ask({ t: 'unbox', token: b64u.encode(token) });
   }
 
+  /** A ticket for the storage node's relay (/dht?ticket=…): good once, for a minute, for the account signed in here. */
+  async relayTicket(): Promise<string> {
+    return (await this.#ask({ t: 'relay' })).ticket as string;
+  }
+
   async usage(): Promise<StorageUsage> {
     const { used, quota, over } = await this.#ask({ t: 'usage' });
     return { used: used as number, quota: quota as number, ...(over ? { over: true } : {}) };

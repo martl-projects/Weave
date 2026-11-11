@@ -5,6 +5,7 @@ import { b64u, blobHash, MAX_BLOB, publicKeyFromDid, Replica, verify, type Did }
 import { LineChannel, PeerSession2, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
 import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
+import type HyperDHT from 'hyperdht';
 
 /*
  * A storage node (docs/web-stage2.md): always on, it holds people's spaces without being able to open them. Each
@@ -27,6 +28,10 @@ const MAX_SPACES = 5000;
 const MAX_KEYS = 64;
 /** Wrong tokens, proofs or invitations on one connection before it's closed. */
 const MAX_TRIES = 5;
+/** A ticket for the relay (relayTicket) is good this long, once. */
+const TICKET_MS = 60_000;
+/** Relayed connections to websites one account may have open at once. */
+const MAX_RELAYS = 4;
 const CONTROL_MS = 60_000;
 /** A person's own space: its events are all theirs (packages/node/src/shared.ts). */
 const SELF_SCOPE = 'self';
@@ -46,8 +51,11 @@ export interface StorageNetwork {
   destroy(): Promise<void>;
 }
 
-/** Where each account goes on the network; `close` ends what they share, after them. */
-export type StorageNetworks = ((replica: Replica, access: SpaceAccess, blobs: BlobSource) => StorageNetwork) & { close?(): Promise<void> };
+/**
+ * Where each account goes on the network; `close` ends what they share, after them. `dht`: the DHT node they share, which
+ * also carries browsers' connections to websites (relayDht), if this network has one.
+ */
+export type StorageNetworks = ((replica: Replica, access: SpaceAccess, blobs: BlobSource) => StorageNetwork) & { close?(): Promise<void>; dht?(): HyperDHT };
 
 export interface StorageOptions {
   dir: string;
@@ -139,7 +147,7 @@ export function swarmNetwork(options: { bootstrap?: Array<{ host: string; port: 
     shared ??= sharedDht(options);
     return new SwarmNode(replica, { dht: shared.dht }, blobs, access);
   };
-  return Object.assign(networks, { close: async () => void (await shared?.destroy()) });
+  return Object.assign(networks, { close: async () => void (await shared?.destroy()), dht: () => (shared ??= sharedDht(options)).dht });
 }
 
 /** Join each topic, looking only where that's all it should do. */
@@ -151,6 +159,10 @@ export class StorageNode {
   readonly #boxes = new Map<string, Did>();
   readonly #options: StorageOptions;
   #closing = false;
+  /** Tickets for the relay, by their hash: whose, and until when. */
+  readonly #tickets = new Map<string, { id: Did; until: number }>();
+  /** Relayed connections open, per account. */
+  readonly #relays = new Map<Did, number>();
 
   private constructor(options: StorageOptions) {
     this.#options = options;
@@ -335,6 +347,32 @@ export class StorageNode {
     rmSync(account.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 
+  /**
+   * The relay, for a ticket (once, within a minute): the DHT a browser's connections to websites go through, and the
+   * account's place among the relayed connections, given back by `done`. Undefined: no ticket, or too many open.
+   */
+  relayFor(ticket: string): { dht: HyperDHT; done(): void } | undefined {
+    const hash = tokenHash(ticket);
+    const t = this.#tickets.get(hash);
+    this.#tickets.delete(hash);
+    const dht = this.#options.network.dht?.();
+    if (!t || t.until <= Date.now() || !dht) return undefined;
+    const open = this.#relays.get(t.id) ?? 0;
+    if (open >= MAX_RELAYS) return undefined;
+    this.#relays.set(t.id, open + 1);
+    let given = false;
+    return {
+      dht,
+      done: () => {
+        if (given) return;
+        given = true;
+        const left = (this.#relays.get(t.id) ?? 1) - 1;
+        if (left > 0) this.#relays.set(t.id, left);
+        else this.#relays.delete(t.id);
+      },
+    };
+  }
+
   /** Serve a WebSocket just accepted. Who may connect is anyone: what they get depends on what they prove. */
   async accept(socket: TextSocket): Promise<void> {
     const stream = await wsPeerStream(socket, false);
@@ -412,6 +450,15 @@ export class StorageNode {
             this.#save(mine);
           }
           return channel.send({ t: 'ok' });
+        }
+        // A ticket for the relay (/dht): a browser's way to its websites, which it opens next to this connection.
+        case 'relay': {
+          if (!this.#options.network.dht) return no('this storage node relays nothing');
+          const ticket = randomBytes(24).toString('base64url');
+          const now = Date.now();
+          for (const [hash, t] of this.#tickets) if (t.until <= now) this.#tickets.delete(hash);
+          this.#tickets.set(tokenHash(ticket), { id: mine.file.id, until: now + TICKET_MS });
+          return channel.send({ t: 'ok', ticket });
         }
         case 'usage': {
           const { used, quota, over } = this.measure(mine.file.id);
