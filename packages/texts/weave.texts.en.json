@@ -453,6 +453,8 @@
     "web.tab.title": "Open in another tab",
     "web.tab.intro": "Weave is open in another tab of this browser, and one tab at a time can have it. Use it here, and the other tab lets go.",
     "web.tab.take": "Use it here",
+    "web.link.hint": "Already using Weave on a computer? Bring your account here instead of making a new one: on the computer, open Keys & devices → Browsers → Link a browser, and scan the code with this device.",
+    "web.restore.intro": "Your recovery words bring back an account that was made in a browser. An account from a computer comes here by a link from that computer (above).",
     "web.link.title": "Connect to your Weave",
     "web.link.intro": "Your computer made this link. This browser becomes you, with a key of its own and a passkey that opens it here. Your recovery words aren't needed, and they don't come here.",
     "web.link.button": "Connect",

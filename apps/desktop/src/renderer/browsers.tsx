@@ -45,7 +45,6 @@ export function LinkedBrowsers({ keys }: { keys: KeyInfo[] }) {
         <div className="field-row-stacked">
           <p className="small">{t('browser.scan')}</p>
           <div className="qr" style={{ maxWidth: 220 }} dangerouslySetInnerHTML={{ __html: made.svg }} />
-          <input className="wide" readOnly value={made.link} onFocus={(e) => e.currentTarget.select()} />
           <p className="small muted">{t('browser.once')}</p>
           <div className="buttons">
             <button onClick={() => void navigator.clipboard.writeText(made.link)}>{t('button.copy')}</button>

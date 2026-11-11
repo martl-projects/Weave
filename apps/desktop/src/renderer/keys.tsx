@@ -174,7 +174,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           if (ok) onDone();
         }}
       >
-        <p className="small">{t('onboard.restore.intro')}</p>
+        {bridge.web && <p className="notice">{t('web.link.hint')}</p>}
+        <p className="small">{t(bridge.web ? 'web.restore.intro' : 'onboard.restore.intro')}</p>
         <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
         {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
         {!bridge.web && <div className="field-row-stacked">
@@ -263,6 +264,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <WeaveMark size={48} />
         <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
       </div>
+      {/* Someone with Weave on a computer brings their account here from there, rather than making a second one. */}
+      {bridge.web && <p className="notice">{t('web.link.hint')}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
