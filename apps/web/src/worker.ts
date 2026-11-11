@@ -1,6 +1,6 @@
 import './host/globals.ts';
-import { errorToWire } from '@weave/core';
-import type { WeaveNode } from '@weave/node';
+import { b64u, errorToWire } from '@weave/core';
+import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
 import { handOnAgain, useStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
@@ -92,6 +92,22 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const data = await account.findBox(url, way.opening);
     if (!data) throw new Error("the storage node doesn't know this: no account comes with it");
     await ready(await account.arriveAccount(HOME, way, data));
+  },
+
+  /** Link this browser with a link from one of the person's computers: what it left at the storage node, opened here. */
+  async link(url: string, secret: string, passkey: { id: string; secret: Uint8Array }) {
+    const { linkToken, openLink } = await import('@weave/node');
+    const key = b64u.decode(secret);
+    const res = await fetch(`${url}/link/${linkToken(key)}`);
+    if (res.status === 404) throw new Error('this link was opened already, or is older than 15 minutes: make a new one on your computer');
+    if (!res.ok) throw new Error(`the storage node didn't answer (${res.status})`);
+    let handover: BrowserHandover;
+    try {
+      handover = openLink<BrowserHandover>(key, await res.text());
+    } catch {
+      throw new Error("that link doesn't open what's there: make a new one on your computer");
+    }
+    await ready(await account.linkAccount(HOME, wayIn(passkey), handover));
   },
 
   ways() {

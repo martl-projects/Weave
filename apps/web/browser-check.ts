@@ -148,6 +148,33 @@ try {
   await send('Emulation.clearDeviceMetricsOverride');
   passed('on a phone, Me has the hub, keys and the look');
 
+  // Lena links a browser from her computer. A browser of its own (a context with nothing in it) opens the link, makes a
+  // passkey, and is Lena there: no words asked.
+  const { link: browserLink } = (await (await fetch(`${ORIGIN}/dev/link-browser?name=chrome&origin=${encodeURIComponent(ORIGIN)}`)).json()) as { link: string };
+  const chromeItself = await devtools(((await (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl);
+  const { browserContextId } = (await chromeItself.send('Target.createBrowserContext')) as { browserContextId: string };
+  const { targetId } = (await chromeItself.send('Target.createTarget', { url: 'about:blank', browserContextId })) as { targetId: string };
+  const linkedTab = await devtools(`ws://127.0.0.1:${DEBUG}/devtools/page/${targetId}`);
+  await linkedTab.send('Page.enable');
+  await linkedTab.send('Runtime.enable');
+  await linkedTab.send('WebAuthn.enable');
+  await linkedTab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
+  await linkedTab.send('Page.navigate', { url: browserLink });
+  await until('the link screen', () => linkedTab.run<boolean>(`!!document.querySelector('#link-browser')`));
+  if (await linkedTab.run<boolean>(`location.hash !== ''`)) throw new Error("the link's secret stayed in the address bar");
+  await linkedTab.run(`document.querySelector('#link-browser').click()`);
+  await until('the linked app', () => linkedTab.run<boolean>(`!!document.querySelector('.app-window')`), 30_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; it shows: ${await linkedTab.run<string>(`document.body.innerText.slice(0, 400)`)}`);
+  });
+  const linkedCall = <T>(method: string, ...args: unknown[]) => linkedTab.run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
+  const linkedAs = (await linkedCall<{ name?: string }>('profile')).result?.name;
+  if (linkedAs !== 'Lena') throw new Error(`the linked browser is ${linkedAs}, not Lena`);
+  await until("Lena's group, in the linked browser", async () => ((await linkedCall<Array<{ text: string }>>('messages', 'Climb')).result ?? []).some((m) => m.text === 'the rope is in the van'));
+  linkedTab.close();
+  await chromeItself.send('Target.disposeBrowserContext', { browserContextId });
+  chromeItself.close();
+  passed("a browser linked from Lena's computer is Lena, without her words");
+
   // Leaving this browser, and coming back with nothing but the passkey.
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;
   await sleep(600);

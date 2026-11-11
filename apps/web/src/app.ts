@@ -90,6 +90,15 @@ if (arrived) {
   history.replaceState(null, '', location.pathname + location.hash);
 }
 
+// A link from one of the person's computers (linkBrowser): its secret is after the #, which no server sees. It stays in
+// this tab only, out of the address bar.
+const LINK_KEY = 'weave.link';
+const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
+if (linkSecret) {
+  sessionStorage.setItem(LINK_KEY, linkSecret);
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
 tabs.onmessage = async ({ data }: MessageEvent<string>) => {
   if (data !== 'take' || !holding) return;
   holding = false;
@@ -132,6 +141,18 @@ const takeOver = async (): Promise<void> => {
 const web: Bridge['web'] = {
   passkey: () => passkey,
   takeOver,
+  linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
+  link: async () => {
+    const invite = given || invitation();
+    if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
+    // A passkey opens this browser; with no words here, it's the way in.
+    const made = await makePasskey('Weave');
+    // The handover waits next to this page (/link/…); the storage node is reached over its socket after.
+    await own('link', location.origin, sessionStorage.getItem(LINK_KEY), made);
+    sessionStorage.removeItem(LINK_KEY);
+    passkey = true;
+    await goOnline(invite);
+  },
   needsInvite: () => !invitation(),
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),

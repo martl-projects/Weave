@@ -15,7 +15,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
-import { keepReconciling, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
+import { keepReconciling, linkHandovers, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
 import { buildServices, buildWeb } from './build.ts';
 
 const port = Number(process.env.PORT ?? 8790);
@@ -52,6 +52,7 @@ keepReconciling(person);
 if (onDht) await person.goOnline();
 console.log(onDht ? 'on the real DHT' : 'with a stand-in for the DHT (DHT=1 for the real one)');
 
+const handovers = linkHandovers(false);
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   const json = (value: unknown) => {
@@ -59,6 +60,9 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify(value));
   };
   if (url.pathname === '/dev/invite') return json({ invite: storage.invite(), link: await person.invite('Climb') });
+  // Lena links a browser, as from her computer: the link opens this page, and the handover waits here (/link/…).
+  if (url.pathname === '/dev/link-browser') return json(await person.linkBrowser({ url: url.searchParams.get('origin') ?? `http://127.0.0.1:${port}`, name: url.searchParams.get('name') ?? 'test' }));
+  if (url.pathname.startsWith('/link/')) return handovers(req, res, url.pathname.slice('/link/'.length));
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
   // A link to the group, to paste into "Open link"; what's said there, from the address bar too.
   if (url.pathname === '/dev/link') return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(await person.invite('Climb'));

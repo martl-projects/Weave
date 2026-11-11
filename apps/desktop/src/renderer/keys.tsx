@@ -6,6 +6,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
 import { PhonesBox } from './phones.tsx';
+import { LinkedBrowsers } from './browsers.tsx';
 import { LinkedAccountsBox } from './accounts.tsx';
 import { KeyvaultsBox } from './keyvaults.tsx';
 import { AgentAppsBox } from './agents.tsx';
@@ -208,6 +209,38 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           )}
           <button className="default" disabled={busy}>
             {t(busy ? 'onboard.restore.looking' : 'onboard.restore')}
+          </button>
+        </div>
+      </form>,
+    );
+
+  // Weave Web, opened with a link from one of the person's computers: this browser becomes theirs, no words asked.
+  if (bridge.web?.linking())
+    return window(
+      t('web.link.title'),
+      <form
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          setBusy(true);
+          const ok = await attempt(() => bridge.web!.link().then(() => true));
+          setBusy(false);
+          if (ok) onDone();
+        }}
+      >
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          <p>{t('web.link.intro')}</p>
+        </div>
+        {bridge.web.needsInvite() && (
+          <div className="field-row-stacked">
+            <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
+            <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+            <p className="small muted">{t('web.invite.why')}</p>
+          </div>
+        )}
+        <div className="buttons">
+          <button id="link-browser" className="default" disabled={busy}>
+            {t(busy ? 'web.link.busy' : 'web.link.button')}
           </button>
         </div>
       </form>,
@@ -907,6 +940,7 @@ export function KeysView() {
       {/* What needs a computer that stays on, or its programs: not in a browser. */}
       {!web && (
         <>
+          <LinkedBrowsers keys={keys} />
           <AlwaysOnNodes keys={keys} />
           <ServicesBox keys={keys} />
           <KeyvaultsBox />

@@ -162,6 +162,18 @@ import { Verifiers } from './verifiers.ts';
 import type { Grant as ServiceGrant } from './servicesettings.ts';
 import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
+import { BROWSER_PREFIX, browserLinkUrl, linkToken, sealLink } from './browserlink.ts';
+
+/** What a linked browser gets (linkBrowser), sealed for it. */
+export interface BrowserHandover {
+  person: Did;
+  name: string | null;
+  secretKey: string;
+  publicKey: string;
+  encryption: Array<{ did: Did; publicKey: string; secretKey: string }>;
+  events: unknown[];
+  spaces: StoredSpace[];
+}
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
 import { Marks } from './marks.ts';
@@ -1139,6 +1151,71 @@ export class WeaveNode implements Backend {
     return node;
   }
 
+  /**
+   * Link a browser (docs/web-stage2.md), on one of your computers: it gets a key of its own that may sign everything a
+   * person does day to day (an agent's role, so it can't add devices, delegate or rotate: that takes your recovery words),
+   * your encryption keys and your spaces. That goes sealed to the storage node at `url`, and the link it gives back opens
+   * it there, once, within 15 minutes. Revoke it like an always-on node, in Keys & devices.
+   */
+  async linkBrowser(input: { url: string; name?: string }): Promise<{ link: string; name: string; key: Did }> {
+    const me = this.identity.author;
+    const mine = this.replica.authority.grant(this.identity.did);
+    if (this.identity.did !== me && mine?.role !== 'device') throw new Error('link browsers from one of your own computers');
+    const url = new URL(input.url);
+    if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('a storage node is reached over https');
+    const name = (input.name ?? '').trim().replace(/\s+/g, '-').slice(0, 32) || 'web';
+    const keys = generateKeyPair();
+    const key = didFromPublicKey(keys.publicKey);
+    const secret = randomBytes(32);
+    // The key first, then everything a node of yours needs, as an always-on node gets it (linkNode).
+    this.replica.write(this.identity, delegation(key, 'agent', ['*'], `${BROWSER_PREFIX}${name}`));
+    this.#writeNodeIndex(true);
+    const handover = {
+      person: me,
+      name: this.nameOf(me) ?? null,
+      secretKey: b64u.encode(keys.secretKey),
+      publicKey: b64u.encode(keys.publicKey),
+      encryption: this.#encryption.map((k) => ({ did: k.did, publicKey: b64u.encode(k.keys.publicKey), secretKey: b64u.encode(k.keys.secretKey) })),
+      events: [
+        ...Object.keys(this.replica.heads())
+          .filter((signer) => this.replica.authority.personOf(signer as Did) === me)
+          .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
+        ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
+      ] as unknown as Json[],
+      spaces: this.#nodeSpaces() as unknown as Json[],
+    };
+    const base = url.origin;
+    const res = await fetch(`${base}/link/${linkToken(secret)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: sealLink(secret, handover as unknown as Json) });
+    if (!res.ok) {
+      // Nothing reached the browser: its key goes again.
+      this.replica.write(this.identity, revocation(key, 0));
+      throw new Error(res.status === 429 ? 'too many browser links from here this hour: try again later' : `the storage node didn't take it (${res.status})`);
+    }
+    return { link: browserLinkUrl(base, secret), name, key };
+  }
+
+  /** Set up a browser's home from a link's handover (linkBrowser): the person, with the key it was given. */
+  static async fromBrowserLink(handover: BrowserHandover, dir: string): Promise<WeaveNode> {
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const keys = { publicKey: b64u.decode(handover.publicKey), secretKey: b64u.decode(handover.secretKey) };
+    saveEncryptionKeys(home, handover.encryption.map((k) => ({ did: k.did, keys: { publicKey: b64u.decode(k.publicKey), secretKey: b64u.decode(k.secretKey) } })));
+    saveDevice(home, { author: handover.person, did: didFromPublicKey(keys.publicKey), keys });
+    const node = WeaveNode.open(home.dir);
+    for (const event of handover.events) node.replica.ingest(event);
+    if (node.replica.authority.grant(node.identity.did)?.author !== handover.person) {
+      await node.close();
+      throw new Error("the link doesn't vouch for this browser's key: link it again");
+    }
+    for (const space of handover.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#kernel.addSpace({ ...space, entry: { topics: [handover.person], bootstrap: [] } });
+    return node;
+  }
+
+  /** This node is a browser linked to its person's computers: it signs with the key one of them gave it. */
+  get #isLinkedBrowser(): boolean {
+    return this.replica.authority.grant(this.identity.did)?.name?.startsWith(BROWSER_PREFIX) === true;
+  }
+
   /** This node is someone's always-on node (stage 18): it signs with a node key, not a device's. */
   get #isLinkedNode(): boolean {
     return this.replica.authority.grant(this.identity.did)?.name?.startsWith(NODE_PREFIX) === true;
@@ -1153,9 +1230,9 @@ export class WeaveNode implements Backend {
 
   /** Written by our devices while we have always-on nodes: every space of ours they should keep and host. When it changes. */
   #writeNodeIndex(force = false): number {
-    if (this.#isLinkedNode) return 0;
+    if (this.#isLinkedNode || this.#isLinkedBrowser) return 0;
     const me = this.identity.author;
-    const linked = this.replica.authority.grantsOf(me).some((g) => g.role === 'agent' && g.name?.startsWith(NODE_PREFIX) && g.revokedAfter === undefined);
+    const linked = this.replica.authority.grantsOf(me).some((g) => g.role === 'agent' && (g.name?.startsWith(NODE_PREFIX) || g.name?.startsWith(BROWSER_PREFIX)) && g.revokedAfter === undefined);
     if (!linked) return 0;
     const body = { spaces: this.#nodeSpaces() };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
@@ -2469,7 +2546,8 @@ export class WeaveNode implements Backend {
     if (signer === author) return undefined;
     const grant = this.replica.authority.grant(signer);
     // A service shows by its own name ("martl · files"), like any agent.
-    return grant?.role === 'agent' ? grant.name?.replace(SERVICE_PREFIX, '') : undefined;
+    // A linked browser is the person themselves, on the web.
+    return grant?.role === 'agent' && !grant.name?.startsWith(BROWSER_PREFIX) ? grant.name?.replace(SERVICE_PREFIX, '') : undefined;
   }
 
   /** Bodies of your own self-sealed events of one kind. */
@@ -3253,6 +3331,9 @@ export class WeaveNode implements Backend {
       resolve: (who) => n.resolve(who),
       get isLinkedNode() {
         return n.#isLinkedNode;
+      },
+      get readsNodeIndex() {
+        return n.#isLinkedNode || n.#isLinkedBrowser;
       },
       keysOnly: n.#kernel.keysOnly.bind(n.#kernel),
       get managed() {

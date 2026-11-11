@@ -129,6 +129,20 @@ describe('a storage node on the internet', { timeout: 20_000 }, () => {
     expect((await fetch(`http://127.0.0.1:${port}/`, { headers: { 'if-modified-since': modified } })).status).toBe(304);
   });
 
+  it("holds a browser link's handover until it's taken, once", async () => {
+    const { port } = await start();
+    const at = (token: string) => `http://127.0.0.1:${port}/link/${token}`;
+    const token = 'a'.repeat(43);
+    expect((await fetch(at(token))).status).toBe(404);
+    expect((await fetch(at(token), { method: 'POST', body: '{"sealed":1}' })).status).toBe(201);
+    expect((await fetch(at(token), { method: 'POST', body: 'again' })).status).toBe(409);
+    const taken = await fetch(at(token));
+    expect(taken.status).toBe(200);
+    expect(await taken.text()).toBe('{"sealed":1}');
+    expect((await fetch(at(token))).status).toBe(404);
+    expect((await fetch(at('short'), { method: 'POST', body: 'x' })).status).toBe(404);
+  });
+
   it('serves no files when it has none, and a closed door is still up', async () => {
     const { port } = await start({ web: undefined });
     expect((await get(port, '/')).status).toBe(404);

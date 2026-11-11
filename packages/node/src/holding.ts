@@ -90,6 +90,8 @@ export interface HoldingCore {
   friends(): Did[];
   held(state: SpaceState): boolean;
   readonly isLinkedNode: boolean;
+  /** An always-on node or a linked browser: it takes its spaces from the node index its person's computers write. */
+  readonly readsNodeIndex: boolean;
   keysOnly(space: StoredSpace): SpaceKeys;
   readonly managed: ManagedKeys;
   managers(state: SpaceState): Set<Did>;
@@ -353,7 +355,7 @@ export class Holding {
 
   /** Spaces our latest keep index (and, on an always-on node, node index) lists that this node doesn't have. */
   recoverSpaces(): void {
-    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.core.isLinkedNode ? [this.core.selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
+    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.core.readsNodeIndex ? [this.core.selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
     for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
   }
 

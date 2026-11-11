@@ -1,7 +1,8 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import type { Duplex } from 'node:stream';
+import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
 import { textSocket } from './websocket.ts';
 
@@ -77,11 +78,61 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
   };
 }
 
-/** The HTTP side: the page's files, if it has them, and whether it's up. */
+/** A browser link's handover (browserlink.ts): this big at most, this many at once, this many an hour from one address. */
+const MAX_LINK_BYTES = 8 * 1024 * 1024;
+const MAX_LINKS = 100;
+const LINKS_PER_HOUR = 10;
+const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Handovers to linked browsers: one of a person's computers leaves one (POST /link/<token>), sealed, and the browser
+ * with the link takes it (GET), once, within LINK_MS. Held in memory: a restart loses them, and the link is made again.
+ */
+export function linkHandovers(behindProxy: boolean | undefined) {
+  const waiting = new Map<string, { data: Buffer; until: number }>();
+  const posted = new Map<string, number[]>();
+  return (req: IncomingMessage, res: ServerResponse, token: string): void => {
+    const now = Date.now();
+    for (const [t, w] of waiting) if (w.until <= now) waiting.delete(t);
+    const done = (status: number, body = '') => void res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body);
+    if (!TOKEN.test(token)) return done(404);
+    if (req.method === 'GET') {
+      const w = waiting.get(token);
+      if (!w) return done(404);
+      waiting.delete(token);
+      return done(200, w.data.toString('utf8'));
+    }
+    if (req.method !== 'POST') return done(405);
+    const address = addressOf(req, behindProxy);
+    const recent = (posted.get(address) ?? []).filter((at) => now - at < 3600_000);
+    if (recent.length >= LINKS_PER_HOUR) return done(429);
+    if (waiting.size >= MAX_LINKS) return done(503);
+    if (waiting.has(token)) return done(409);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_LINK_BYTES) {
+        done(413);
+        req.destroy();
+      } else chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (size > MAX_LINK_BYTES || res.headersSent) return;
+      posted.set(address, [...recent, now]);
+      waiting.set(token, { data: Buffer.concat(chunks), until: now + LINK_MS });
+      done(201);
+    });
+  };
+}
+
+/** The HTTP side: the page's files, if it has them, handovers to linked browsers, and whether it's up. */
 export function storageServer(node: StorageNode, options: StorageServerOptions): Server {
+  const handover = linkHandovers(options.behindProxy);
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');
+    if (url.pathname.startsWith('/link/')) return handover(req, res, url.pathname.slice('/link/'.length));
     if (!options.web || (req.method !== 'GET' && req.method !== 'HEAD')) return res.writeHead(404).end();
     const wanted = normalize(decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     const file = join(options.web, wanted);

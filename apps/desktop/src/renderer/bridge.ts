@@ -92,6 +92,10 @@ export interface Bridge {
     unlock(words?: string): Promise<void>;
     /** Bring an account to this browser from the storage node, the same way. */
     arrive(words?: string): Promise<void>;
+    /** Whether this page was opened with a link from one of the person's computers (linkBrowser). */
+    linking(): boolean;
+    /** Link this browser with that link: a passkey of its own, then the person's account here. */
+    link(): Promise<void>;
     /** Whether a new account here still needs an invitation to the storage node. */
     needsInvite(): boolean;
     /** The invitation, as a link or as its code. */
