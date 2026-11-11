@@ -32,15 +32,30 @@ async function throughTheTab(request: Request): Promise<Response> {
   const answer = new Promise<{ error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer }>((resolve) => (channel.port1.onmessage = ({ data }) => resolve(data)));
   tab.postMessage({ type: 'weave-ask', method: request.method, url: url.pathname + url.search, headers: [...request.headers], body }, [channel.port2, ...(body ? [body] : [])]);
   const got = await answer;
-  if (got.error) return new Response(got.error, { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  if (got.error) return said(got.error);
   const empty = request.method === 'HEAD' || got.status === 204 || got.status === 304;
-  return new Response(empty ? null : got.body, { status: got.status, statusText: got.statusText, headers: got.headers });
+  // Headers the browser refuses in an answer made here are left out, one by one, rather than the whole answer.
+  const headers = new Headers();
+  for (const [name, value] of got.headers) {
+    try {
+      headers.append(name, value);
+    } catch {
+      // a header this browser doesn't take
+    }
+  }
+  const status = got.status >= 200 && got.status <= 599 ? got.status : 502;
+  return new Response(empty ? null : got.body, { status, statusText: /^[\t\x20-\x7e]*$/.test(got.statusText) ? got.statusText : '', headers });
 }
+
+/** What went wrong, as the page says it: never a browser's bare error page. */
+const said = (text: string, status = 502) => new Response(`Weave: ${text}`, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+
+const answerSafely = (request: Request) => throughTheTab(request).catch((error: Error) => said(error?.message ?? String(error)));
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== location.origin || url.pathname.startsWith('/__weave/')) return;
   // The tab itself, opened anew (a reload, a link from outside): its page, which opens the website in its frame.
   if (event.request.mode === 'navigate' && event.request.destination === 'document') return event.respondWith(fetch('/__weave/shell.html'));
-  event.respondWith(throughTheTab(event.request));
+  event.respondWith(answerSafely(event.request));
 });
