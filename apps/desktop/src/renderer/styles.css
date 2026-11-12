@@ -591,6 +591,10 @@ menu[role='tablist'] { margin-bottom: 0; }
 .space[data-pattern='glow'] { background-image: radial-gradient(800px 400px at 85% -10%, color-mix(in srgb, var(--accent) 35%, transparent), transparent 65%); }
 .space-box { margin-bottom: 12px; padding: 10px 12px; background: var(--surface); color: var(--text); border: 2px solid var(--accent); box-shadow: 3px 3px 0 #0005; }
 .space-box h3 { padding: 2px 6px; margin: -10px -12px 8px; background: var(--accent); color: var(--surface); font-size: 12px; }
+.tabs-row { justify-content: flex-start; margin: 0 0 10px; }
+.onboard-made { display: flex; gap: 10px; align-items: center; margin: 8px 0; }
+.onboard-made .qr svg { width: 120px; height: 120px; display: block; }
+.onboard-made input { flex: 1; min-width: 0; }
 /* Inside a hub, links and quiet text follow the hub's theme, so they stay readable on any colors. */
 .space:not(.app-boxes) a:not(.button-link), .space:not(.app-boxes) .post-title { color: var(--accent); }
 .space:not(.app-boxes) :is(.muted, .post-meta, .post-meta a) { color: color-mix(in srgb, var(--text) 65%, transparent); }

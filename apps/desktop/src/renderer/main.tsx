@@ -8,6 +8,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
+import { ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink } from './onboardlinks.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
@@ -473,6 +474,7 @@ function openLink(link: string): void {
     return;
   }
   if (isInviteHref(link)) return openInviteLink(link);
+  if (ONBOARD_IN_TEXT.test(link)) return openOnboardLink(ONBOARD_IN_TEXT.exec(link)![0]);
   if (!ref) return toast(t('link.paste'));
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
@@ -490,6 +492,11 @@ function OpenLinkDialog({ onClose }: { onClose(): void }) {
   const { t } = useTexts();
   const [text, setText] = useState('');
   const open = async () => {
+    const onboard = ONBOARD_IN_TEXT.exec(text)?.[0];
+    if (onboard) {
+      onClose();
+      return openOnboardLink(onboard);
+    }
     const invite = INVITE_IN_TEXT.exec(text)?.[0];
     if (invite) {
       onClose();
@@ -909,7 +916,7 @@ function Shell() {
         </p>
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
-      {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} onClose={close} />}
+      {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} spaces={spaces ?? []} onClose={close} />}
       {dialog?.kind === 'link' && <OpenLinkDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
       {dialog?.kind === 'notify' && <NotificationSettings onClose={close} />}
@@ -954,6 +961,7 @@ function App() {
         <>
           <Shell />
           <InviteLinkDialog />
+          <OnboardLinkDialog />
           {/* Connecting agents is about the computer they run on, not this phone. */}
           {!bridge.phone && <AgentsOffer />}
           <AgentAsks />

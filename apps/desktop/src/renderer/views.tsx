@@ -10,6 +10,7 @@ import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx'
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
+import { OnboardLinks } from './onboardlinks.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubAccounts } from './accounts.tsx';
 import { ImprintButton } from './imprint.tsx';
@@ -1474,8 +1475,10 @@ export function NewDialog({ onClose }: { onClose(): void }) {
   );
 }
 
-export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): void }) {
+export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo; spaces?: SpaceInfo[]; onClose(): void }) {
   const { t } = useTexts();
+  // A project's own: a link to play (onboardlinks.tsx), one short link that makes the account and the friendship too.
+  const [toPlay, setToPlay] = useState(space.kind === 'project');
   const [accept, setAccept] = useState(false);
   const [days, setDays] = useState(7);
   const [rights, setRights] = useState<Record<string, 'none' | 'read' | 'write'>>({});
@@ -1488,8 +1491,26 @@ export function InviteDialog({ space, onClose }: { space: SpaceInfo; onClose(): 
       .map(([board, r]) => ({ board, read: true, ...(r === 'write' ? { write: true } : {}) }));
     setLink(await attempt(() => api<string>('invite', space.id, days * 24, { accept, access })));
   };
+  const tabs = space.kind === 'project' && !link && (
+    <div className="buttons tabs-row">
+      <button className={toPlay ? 'default' : ''} onClick={() => setToPlay(true)}>
+        {t('onboard.tab')}
+      </button>
+      <button className={toPlay ? '' : 'default'} onClick={() => setToPlay(false)}>
+        {t('onboard.tab.plain')}
+      </button>
+    </div>
+  );
+  if (toPlay && space.kind === 'project')
+    return (
+      <Modal title={t('invite.title', { space: spaceLabel(space) })} onClose={onClose}>
+        {tabs}
+        <OnboardLinks space={space} spaces={spaces} onClose={onClose} />
+      </Modal>
+    );
   return (
     <Modal title={t('invite.title', { space: spaceLabel(space) })} onClose={onClose}>
+      {tabs}
       {link ? (
         <>
           <p className="small">
