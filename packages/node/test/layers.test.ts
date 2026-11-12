@@ -77,6 +77,8 @@ const MAY_USE_NODE = [
   'spacestore.ts',
   'sqlitestore.ts',
   'storagenode.ts',
+  // Onboarding links' plans on a storage node: files of its own, like the node's invitations.
+  'storageplans.ts',
   'storageserver.ts',
   'untar.ts',
   'update.ts',
