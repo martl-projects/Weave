@@ -115,16 +115,31 @@ export function parseAnswer(bytes: Uint8Array, method: string, ended: boolean): 
 }
 
 /** Ask a website one thing over a tunnel just opened (its first line written already). */
+/** An answer's head: what comes before its body. */
+export interface Head {
+  status: number;
+  statusText: string;
+  headers: Array<[string, string]>;
+  /** The website closes the connection after this answer (Connection: close). */
+  closes?: boolean;
+}
+
 /**
- * Ask a website one thing over a tunnel (its first line written already, maybe asked before). `reusable`: the answer
- * came whole on a connection the website keeps open, so the next request can go over it; otherwise it's closed here.
+ * Ask a website one thing over a tunnel (its first line written already, maybe asked before), its answer as it comes:
+ * the head, then the body piece by piece (Content-Length, chunks taken apart, or to the end of the connection), so a
+ * stream (Server-Sent Events, a long download) reaches the page as it's sent. Resolves at the answer's end; `reusable`:
+ * it came whole on a connection the website keeps open, so the next request can go over it, otherwise it's closed here.
+ * The wait for the head is limited; a body may take as long as it takes.
  */
-export function ask(tunnel: Tunnel, asked: Asked, host: string, timeoutMs = 60_000): Promise<{ answer: Answered; reusable: boolean }> {
+export function stream(tunnel: Tunnel, asked: Asked, host: string, on: { head(head: Head): void; data(bytes: Uint8Array): void }, timeoutMs = 60_000): Promise<{ reusable: boolean }> {
   return new Promise((resolve, reject) => {
     let bytes = new Uint8Array(0);
+    let head: Head | undefined;
+    let mode: 'none' | 'length' | 'chunked' | 'close' = 'close';
+    let left = 0;
     let settled = false;
     const timer = setTimeout(() => finish(new Error('the website took too long')), timeoutMs);
-    const finish = (error?: Error, answer?: Answered, ended = true) => {
+    const finish = (error?: Error, reusable = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -132,29 +147,89 @@ export function ask(tunnel: Tunnel, asked: Asked, host: string, timeoutMs = 60_0
       tunnel.off('end', onEnd);
       tunnel.off('close', onEnd);
       tunnel.off('error', onError);
-      const reusable = !!answer && !ended && !answer.closes;
       if (!reusable) tunnel.destroy();
-      if (answer) resolve({ answer, reusable });
-      else reject(error);
+      if (error) reject(error);
+      else resolve({ reusable });
     };
-    const check = (ended: boolean) => {
-      try {
-        const answer = parseAnswer(bytes, asked.method, ended);
-        if (answer) finish(undefined, answer, ended);
-        else if (ended) finish(new Error('the website closed before answering'));
-      } catch (error) {
-        finish(error as Error);
+    const done = () => finish(undefined, !head?.closes && bytes.length === 0);
+    const body = () => {
+      if (mode === 'none') return done();
+      if (mode === 'close') {
+        if (bytes.length) on.data(bytes);
+        bytes = new Uint8Array(0);
+        return;
+      }
+      if (mode === 'length') {
+        const piece = bytes.subarray(0, left);
+        if (piece.length) on.data(piece.slice());
+        left -= piece.length;
+        bytes = bytes.slice(piece.length);
+        if (left === 0) done();
+        return;
+      }
+      // Chunked: as many whole chunks as are here; the rest waits for more.
+      for (;;) {
+        const line = indexOf(bytes, CRLF);
+        if (line < 0) return;
+        const size = parseInt(decoder.decode(bytes.subarray(0, line)).split(';')[0], 16);
+        if (Number.isNaN(size)) return finish(new Error('the website sent broken chunks'));
+        if (size === 0) {
+          // The last chunk, and its empty trailer if it's here: then the connection is clean for the next request.
+          const trailerEnd = indexOf(bytes, CRLFCRLF, line);
+          bytes = trailerEnd === line ? bytes.slice(line + 4) : bytes.slice(line + 2);
+          return finish(undefined, trailerEnd === line && bytes.length === 0 && !head?.closes);
+        }
+        if (bytes.length < line + 2 + size + 2) return;
+        on.data(bytes.slice(line + 2, line + 2 + size));
+        bytes = bytes.slice(line + 2 + size + 2);
       }
     };
-    const onData = (chunk: Uint8Array) => ((bytes = concat(bytes, chunk)), check(false));
-    const onEnd = () => check(true);
-    const onError = (error: Error) => (bytes.length ? check(true) : finish(error));
+    const onData = (chunk: Uint8Array) => {
+      bytes = concat(bytes, chunk);
+      if (!head) {
+        const headEnd = indexOf(bytes, CRLFCRLF);
+        if (headEnd < 0) return;
+        const [statusLine, ...lines] = decoder.decode(bytes.subarray(0, headEnd)).split('\r\n');
+        const status = /^HTTP\/1\.[01] (\d{3}) ?(.*)$/.exec(statusLine);
+        if (!status) return finish(new Error('the website answered with no HTTP'));
+        const headers: Array<[string, string]> = lines.flatMap((line) => {
+          const at = line.indexOf(':');
+          return at > 0 ? [[line.slice(0, at).trim(), line.slice(at + 1).trim()] as [string, string]] : [];
+        });
+        const header = (name: string) => headers.find(([n]) => n.toLowerCase() === name)?.[1];
+        const code = Number(status[1]);
+        clearTimeout(timer);
+        head = { status: code, statusText: status[2], headers: headers.filter(([n]) => !OWN.has(n.toLowerCase())), ...(/close/i.test(header('connection') ?? '') ? { closes: true } : {}) };
+        bytes = bytes.slice(headEnd + 4);
+        if (asked.method === 'HEAD' || code === 204 || code === 304 || (code >= 100 && code < 200)) mode = 'none';
+        else if (/chunked/i.test(header('transfer-encoding') ?? '')) mode = 'chunked';
+        else if (header('content-length') !== undefined) (mode = 'length'), (left = Number(header('content-length')));
+        else mode = 'close';
+        on.head(head);
+      }
+      body();
+    };
+    const onEnd = () => (head ? finish(undefined, false) : finish(new Error('the website closed before answering')));
+    const onError = (error: Error) => (head ? finish(undefined, false) : finish(error));
     tunnel.on('data', onData);
     tunnel.on('end', onEnd);
     tunnel.on('close', onEnd);
     tunnel.on('error', onError);
     tunnel.write(requestBytes(asked, host));
   });
+}
+
+/**
+ * Ask a website one thing, and its whole answer (built on stream): `reusable` as there.
+ */
+export async function ask(tunnel: Tunnel, asked: Asked, host: string, timeoutMs = 60_000): Promise<{ answer: Answered; reusable: boolean }> {
+  let head: Head | undefined;
+  const parts: Uint8Array[] = [];
+  const { reusable } = await stream(tunnel, asked, host, { head: (h) => (head = h), data: (bytes) => parts.push(bytes) }, timeoutMs);
+  const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) (body.set(p, at), (at += p.length));
+  return { answer: { ...head!, body: body.buffer }, reusable };
 }
 
 /**

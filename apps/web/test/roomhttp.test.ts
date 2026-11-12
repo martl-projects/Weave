@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { ask, CookieJar, parseAnswer, requestBytes } from '../src/rooms/http.ts';
+import { ask, CookieJar, parseAnswer, requestBytes, stream } from '../src/rooms/http.ts';
 
 /* HTTP/1.1 as a website's tab speaks it over a tunnel (src/rooms/http.ts). */
 
@@ -49,6 +49,22 @@ describe("a website's tab, speaking HTTP over a tunnel", () => {
     expect(second.reusable).toBe(false);
     expect(tunnel.destroyed).toBe(true);
     expect(tunnel.written.map((w) => w.split('\r\n')[0])).toEqual(['GET /a HTTP/1.1', 'GET /b HTTP/1.1']);
+  });
+
+  it('hands an event stream on as it comes, chunk by chunk, before it ends', async () => {
+    const tunnel = Object.assign(new EventEmitter(), { write() {}, end() {}, destroy() {} });
+    const seen: string[] = [];
+    let head: { status: number } | undefined;
+    const done = stream(tunnel as never, { method: 'GET', url: '/events', headers: [] }, 'site', { head: (h) => (head = h), data: (b) => seen.push(text(b.slice().buffer)) });
+    tunnel.emit('data', bytes('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n'));
+    tunnel.emit('data', bytes('d\r\ndata: tick1\n\n\r\n'));
+    expect(head?.status).toBe(200);
+    expect(seen).toEqual(['data: tick1\n\n']);
+    tunnel.emit('data', bytes('d\r\ndata: t'));
+    expect(seen).toHaveLength(1);
+    tunnel.emit('data', bytes('ick2\n\n\r\n0\r\n\r\n'));
+    expect(seen).toEqual(['data: tick1\n\n', 'data: tick2\n\n']);
+    expect((await done).reusable).toBe(true);
   });
 
   it('keeps the cookies a website sets, and forgets expired ones', () => {

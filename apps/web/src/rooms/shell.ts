@@ -3,7 +3,7 @@ import RelayedDHT from '@hyperswarm/dht-relay';
 import RelayStream from '@hyperswarm/dht-relay/ws';
 import b4a from 'b4a';
 import sodium from 'sodium-universal';
-import { ask, CookieJar, type Asked, type Tunnel } from './http.ts';
+import { CookieJar, stream, type Asked, type Head, type Tunnel } from './http.ts';
 import { closeFrame, frame as wsFrame, FrameReader, OP, textOf, upgradeAnswer, upgradeRequest } from './wsframes.ts';
 
 /*
@@ -121,26 +121,63 @@ async function start(): Promise<void> {
 
   // Each request once, by its id: it comes on the channel and from the service worker straight, and either may not.
   const taken = new Set<string>();
-  const take = async (data: { type?: string; id?: string } & Asked, reply: (answer: Record<string, unknown>) => void) => {
+  /** Streams being sent, by request: the service worker says when the page let one go. */
+  const streaming = new Map<string, Tunnel>();
+  const take = async (data: { type?: string; id?: string } & Asked, send: (type: string, payload: Record<string, unknown>) => void) => {
+    if (data?.type === 'weave-cancel' && data.id) return void (streaming.get(data.id)?.destroy(), streaming.delete(data.id));
     if (data?.type !== 'weave-ask' || !data.id || taken.has(data.id)) return;
-    taken.add(data.id);
+    const id = data.id;
+    taken.add(id);
     log(`→ ${data.method} ${data.url}`);
     try {
       const tunnel = await aTunnel();
       const cookie = jar.header();
       const asked: Asked = { ...data, headers: [...data.headers.filter(([n]) => n.toLowerCase() !== 'cookie'), ...(cookie ? [['Cookie', cookie] as [string, string]] : [])] };
-      const { answer, reusable } = await ask(tunnel, asked, location.host);
+      // An event stream goes on as it comes (Server-Sent Events: a game's live updates); anything else, whole.
+      let head: Head | undefined;
+      let live = false;
+      const parts: Uint8Array[] = [];
+      let size = 0;
+      const { reusable } = await stream(tunnel, asked, location.host, {
+        head: (h) => {
+          head = h;
+          jar.take(h.headers);
+          const headers = h.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie');
+          live = /text\/event-stream/i.test(h.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? '');
+          if (!live) return;
+          streaming.set(id, tunnel);
+          log(`← ${h.status} ${data.url} stream`);
+          send('weave-answer', { status: h.status, statusText: h.statusText, headers, stream: true });
+        },
+        data: (bytes) => {
+          size += bytes.length;
+          if (live) send('weave-chunk', { data: bytes });
+          else parts.push(bytes);
+        },
+      });
+      streaming.delete(id);
+      if (live) return send('weave-end', {});
       if (reusable && !gone.has(tunnel)) idle.push(tunnel);
-      jar.take(answer.headers);
-      log(`← ${answer.status} ${data.url} ${answer.body.byteLength}B ${answer.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? ''}`);
-      reply({ ...answer, headers: answer.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie') });
+      const body = new Uint8Array(size);
+      let at = 0;
+      for (const p of parts) (body.set(p, at), (at += p.length));
+      log(`← ${head!.status} ${data.url} ${size}B ${head!.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? ''}`);
+      send('weave-answer', { status: head!.status, statusText: head!.statusText, headers: head!.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie'), body: body.buffer });
     } catch (error) {
+      streaming.delete(id);
       log(`✗ ${data.url}: ${(error as Error).message}`);
-      reply({ error: (error as Error).message });
+      send('weave-answer', { error: (error as Error).message });
     }
   };
-  channel.onmessage = ({ data }: MessageEvent<{ type?: string; id?: string } & Asked>) => void take(data, (answer) => channel.postMessage({ type: 'weave-answer', id: data.id, ...answer }));
-  navigator.serviceWorker.addEventListener('message', ({ data, ports }: MessageEvent<{ type?: string; id?: string } & Asked>) => void (ports[0] && take(data, (answer) => ports[0].postMessage({ type: 'weave-answer', id: data.id, ...answer }))));
+  channel.onmessage = ({ data }: MessageEvent<{ type?: string; id?: string } & Asked>) => void take(data, (type, payload) => channel.postMessage({ type, id: data.id, ...payload }));
+  navigator.serviceWorker.addEventListener('message', ({ data, ports }: MessageEvent<{ type?: string; id?: string } & Asked>) => {
+    const port = ports[0];
+    if (!port) return;
+    const send = (type: string, payload: Record<string, unknown>) => port.postMessage({ type, id: data.id, ...payload });
+    // The page letting a stream go comes back on the same port.
+    port.onmessage = ({ data: more }: MessageEvent<{ type?: string; id?: string } & Asked>) => void take({ ...more, id: data.id }, send);
+    void take(data, send);
+  });
   // Messages from the service worker wait until asked for (Safari, with addEventListener).
   navigator.serviceWorker.startMessages();
 

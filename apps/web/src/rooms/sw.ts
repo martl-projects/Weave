@@ -27,17 +27,35 @@ declare const self: { addEventListener(type: string, listener: (event: WorkerEve
 self.addEventListener('install', (event) => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
-type Got = { error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer };
+type Got = { error?: string; status: number; statusText: string; headers: Array<[string, string]>; body: ArrayBuffer; stream?: boolean };
 
 /** The website's tabs, and their answers by request (the first one counts). */
 const tabs = new BroadcastChannel('weave-website');
 const waiting = new Map<string, (answer: Got) => void>();
-tabs.onmessage = ({ data }: MessageEvent<Got & { type?: string; id?: string }>) => {
-  if (data?.type !== 'weave-answer' || !data.id) return;
-  const answer = waiting.get(data.id);
-  waiting.delete(data.id);
-  answer?.(data);
+/** Answers that come as a stream (an event stream): their pieces, by request, into the page's stream. */
+const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+/** How the tab answered a request, to tell it when the page let a stream go. */
+const via = new Map<string, (message: unknown) => void>();
+const fromTab = (data: Got & { type?: string; id?: string; data?: Uint8Array }) => {
+  if (!data?.id) return;
+  if (data.type === 'weave-answer') {
+    const answer = waiting.get(data.id);
+    waiting.delete(data.id);
+    return answer?.(data);
+  }
+  const stream = streams.get(data.id);
+  if (data.type === 'weave-chunk' && data.data) stream?.enqueue(new Uint8Array(data.data));
+  if (data.type === 'weave-end') {
+    streams.delete(data.id);
+    via.delete(data.id);
+    try {
+      stream?.close();
+    } catch {
+      // the page let it go already
+    }
+  }
 };
+tabs.onmessage = ({ data }) => fromTab(data);
 
 async function throughTheTab(request: Request): Promise<Response> {
   // Asked on the website's channel, which its tab listens on (shell.ts), and of every window a browser lists: either may
@@ -48,22 +66,39 @@ async function throughTheTab(request: Request): Promise<Response> {
   const got = await new Promise<Got>((resolve) => {
     const timer = setTimeout(() => (waiting.delete(id), resolve({ error: 'no tab of this website answered: open it from Weave again' } as Got)), 90_000);
     waiting.set(id, (answer) => (clearTimeout(timer), resolve(answer)));
+    via.set(id, (message) => tabs.postMessage(message));
     const asked = { type: 'weave-ask', id, method: request.method, url: url.pathname + url.search, headers: [...request.headers], body };
     tabs.postMessage(asked);
     // And to each window of the website, as a browser lists them: the tab takes a request once, by its id, however it came.
     void self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
       for (const window of windows) {
         const channel = new MessageChannel();
-        channel.port1.onmessage = ({ data }: MessageEvent<Got>) => {
-          const answer = waiting.get(id);
-          waiting.delete(id);
-          answer?.(data);
+        channel.port1.onmessage = ({ data }: MessageEvent<Got & { type?: string; id?: string }>) => {
+          if (data?.type === 'weave-answer' && waiting.has(id)) via.set(id, (message) => channel.port1.postMessage(message));
+          fromTab({ ...data, id });
         };
         window.postMessage(asked, [channel.port2]);
       }
     });
   });
   if (got.error) return said(got.error);
+  if (got.stream) {
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => void streams.set(id, controller as ReadableStreamDefaultController<Uint8Array>),
+      // The page let it go (an EventSource closed): the tab closes its tunnel.
+      cancel: () => void (via.get(id)?.({ type: 'weave-cancel', id }), streams.delete(id), via.delete(id)),
+    });
+    const headers = new Headers();
+    for (const [name, value] of got.headers) {
+      try {
+        headers.append(name, value);
+      } catch {
+        // a header this browser doesn't take
+      }
+    }
+    return new Response(body, { status: got.status, headers });
+  }
+  via.delete(id);
   const empty = request.method === 'HEAD' || got.status === 204 || got.status === 304;
   // Headers the browser refuses in an answer made here are left out, one by one, rather than the whole answer.
   const headers = new Headers();

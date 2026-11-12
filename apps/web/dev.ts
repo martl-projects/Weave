@@ -61,8 +61,17 @@ const standIn: StorageOptions['network'] = (replica, access, blobs) => {
 const relayDht = onDht ? undefined : new HyperDHT();
 const app = createServer((req, res) => {
   if (req.url === '/api') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
+  // An event stream that stays open, as a game's live updates do: a tick every half second.
+  if (req.url === '/events') {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    let n = 0;
+    const tick = setInterval(() => res.write(`data: tick ${++n}
+
+`), 500);
+    return void req.on('close', () => clearInterval(tick));
+  }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'visit=1; Path=/' });
-  res.end(`<!doctype html><title>Party</title><h1>Hello from Lena's website</h1><p id="ws">…</p><p id="api">…</p><script>const ws = new WebSocket('ws://' + location.host + '/echo'); ws.onopen = () => ws.send('hello'); ws.onmessage = (e) => (document.getElementById('ws').textContent = 'ws: ' + e.data); fetch('/api').then((r) => r.json()).then((j) => (document.getElementById('api').textContent = 'api: ' + JSON.stringify(j)))</script>`);
+  res.end(`<!doctype html><title>Party</title><h1>Hello from Lena's website</h1><p id="ws">…</p><p id="sse">…</p><p id="api">…</p><script>const ws = new WebSocket('ws://' + location.host + '/echo'); ws.onopen = () => ws.send('hello'); ws.onmessage = (e) => (document.getElementById('ws').textContent = 'ws: ' + e.data); new EventSource('/events').onmessage = (e) => (document.getElementById('sse').textContent = 'sse: ' + e.data); fetch('/api').then((r) => r.json()).then((j) => (document.getElementById('api').textContent = 'api: ' + JSON.stringify(j)))</script>`);
 });
 // And a WebSocket, which says back what it's told.
 const echo = new WebSocketServer({ noServer: true });
