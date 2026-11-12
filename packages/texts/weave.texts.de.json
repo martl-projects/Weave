@@ -502,6 +502,8 @@
     "onboard.words.why.web": "Sie sind deine Identität: Mit ihnen richtest du ein weiteres Gerät ein, ersetzt einen gestohlenen Schlüssel und rotierst deine Schlüssel. Sie liegen auch versiegelt bei deinem Speicher-Node, damit dein Passkey dein Konto in einen neuen Browser bringen kann. Halte sie fern von Chats und von KI-Agenten: Wer sie hat, ist du.",
     "onboard.words.backup.web": "Verlierst du deinen Passkey, sind diese Wörter der einzige Weg zurück.",
     "onboard.words.wrote": "Ich habe sie aufgeschrieben und sicher verwahrt",
+    "onboard.words.copy": "Alle 24 Wörter kopieren",
+    "onboard.words.copied": "Die 24 Wörter sind kopiert. Leg sie an einen sicheren Ort und lösch sie danach aus der Zwischenablage.",
     "onboard.company.ready": "Dein Firmenkonto ist bereit",
     "onboard.company.welcome": "Willkommen, {name}. Dein Konto gehört {company}: sie bewahrt es sicher auf und kann es auf einem neuen Computer einrichten, es gibt also keine Wörter zum Aufschreiben.",
     "onboard.company.signed": "Du bleibst mit deinem Firmenkonto angemeldet; Weave erneuert es von selbst. Die Projekte und Gruppen deiner Firma erscheinen, sobald die Firma dich hereingelassen hat.",

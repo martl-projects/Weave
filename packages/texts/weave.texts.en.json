@@ -502,6 +502,8 @@
     "onboard.words.why.web": "They are your identity: with them you set up another device, replace a stolen key and rotate your keys. They also lie sealed at your storage node, so your passkey can bring your account to a new browser. Keep them away from chats and from AI agents: whoever has them is you.",
     "onboard.words.backup.web": "If you lose your passkey, these words are the only way back.",
     "onboard.words.wrote": "I wrote them down and put them somewhere safe",
+    "onboard.words.copy": "Copy all 24 words",
+    "onboard.words.copied": "The 24 words are copied. Put them somewhere safe, then clear them from the clipboard.",
     "onboard.company.ready": "Your company account is ready",
     "onboard.company.welcome": "Welcome, {name}. Your account belongs to {company}: it keeps it safe and can set it up on a new computer, so there are no words to write down.",
     "onboard.company.signed": "You stay signed in with your company account; Weave renews it by itself. Your company's projects and groups appear as soon as the company has let you in.",

@@ -112,6 +112,14 @@ try {
   await until('the words', () => run<boolean>(`!!document.querySelector('#wrote')`));
   if (await run<boolean>(`!!document.querySelector('.notice.alarm')`)) throw new Error('no passkey was made');
   passed('a passkey with PRF makes an account');
+  // All 24 words to the clipboard at once, numbered: the way a restore takes them back.
+  await run(`navigator.clipboard.writeText = async (text) => void (window.__copied = text)`);
+  await run(`document.querySelector('#copy-words').click()`);
+  const copied = await until('the words copied', () => run<string>(`window.__copied`));
+  const listed = await run<string[]>(`[...document.querySelectorAll('.words li')].map((li) => li.textContent.replace(/^\\s*\\d+\\.\\s*/, ''))`);
+  if (copied !== listed.map((w, i) => `${i + 1}. ${w}`).join('\n')) throw new Error(`copied ${JSON.stringify(copied)}`);
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'words.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  passed('the 24 words copy at once');
   // Weave's own contacts for newcomers, as `weave init` adds them: martl, through the front door.
   for (const link of bundle.contacts) {
     const { did } = decodeContact(link);
