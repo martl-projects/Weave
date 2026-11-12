@@ -281,7 +281,15 @@ async function start(): Promise<void> {
   frame.addEventListener('load', () => document.querySelector('#say')?.remove(), { once: true });
   // The website's own errors, in its frame (same origin): its scripts, and what it couldn't load.
   frame.addEventListener('load', () => {
-    log(`frame loaded ${frame.contentWindow?.location.pathname ?? ''}`);
+    // The website came through the tunnel only if its frame is this origin's: where the service worker didn't take it
+    // (Safari, this tab in a frame of Weave's), the network answered, and the browser blanked what it may not frame.
+    let path: string;
+    try {
+      path = frame.contentWindow!.location.pathname;
+    } catch {
+      return cantRunHere("This browser doesn't let the website run inside Weave here.");
+    }
+    log(`frame loaded ${path}`);
     const inside = frame.contentWindow;
     if (!inside) return;
     inside.addEventListener('error', (event) => {
