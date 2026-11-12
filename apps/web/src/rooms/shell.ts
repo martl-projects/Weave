@@ -84,9 +84,11 @@ async function start(): Promise<void> {
   // What the website asks, from the service worker: through a tunnel of its own each time.
   // On the website's channel (sw.ts): its service worker asks, this tab answers.
   const channel = new BroadcastChannel('weave-website');
-  channel.onmessage = async ({ data }: MessageEvent<{ type?: string; id?: string } & Asked>) => {
-    if (data?.type !== 'weave-ask' || !data.id) return;
-    const reply = (answer: Record<string, unknown>) => channel.postMessage({ type: 'weave-answer', id: data.id, ...answer });
+  // Each request once, by its id: it comes on the channel and from the service worker straight, and either may not.
+  const taken = new Set<string>();
+  const take = async (data: { type?: string; id?: string } & Asked, reply: (answer: Record<string, unknown>) => void) => {
+    if (data?.type !== 'weave-ask' || !data.id || taken.has(data.id)) return;
+    taken.add(data.id);
     try {
       const tunnel = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
       tunnel.write(pass.tunnel);
@@ -99,6 +101,10 @@ async function start(): Promise<void> {
       reply({ error: (error as Error).message });
     }
   };
+  channel.onmessage = ({ data }: MessageEvent<{ type?: string; id?: string } & Asked>) => void take(data, (answer) => channel.postMessage({ type: 'weave-answer', id: data.id, ...answer }));
+  navigator.serviceWorker.addEventListener('message', ({ data, ports }: MessageEvent<{ type?: string; id?: string } & Asked>) => void (ports[0] && take(data, (answer) => ports[0].postMessage({ type: 'weave-answer', id: data.id, ...answer }))));
+  // Messages from the service worker wait until asked for (Safari, with addEventListener).
+  navigator.serviceWorker.startMessages();
 
   // The website's WebSockets, from its frame (ws.ts): each through a tunnel of its own, opened with an upgrade.
   (window as unknown as { __weaveWebSocket: unknown }).__weaveWebSocket = (
