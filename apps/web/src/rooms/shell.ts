@@ -29,6 +29,28 @@ interface Pass {
 
 const say = (text: string) => void (document.querySelector('#say')!.textContent = text);
 
+/**
+ * What the website asked and what went wrong, kept here: Weave's menu shows it (Details), where a browser's own tools
+ * aren't at hand (a phone).
+ */
+const lines: string[] = [];
+let panel: HTMLPreElement | undefined;
+const log = (line: string) => {
+  lines.push(`${new Date().toISOString().slice(11, 19)} ${line}`);
+  if (lines.length > 120) lines.shift();
+  if (panel) panel.textContent = lines.join('\n');
+};
+addEventListener('message', ({ origin, data }: MessageEvent<{ type?: string }>) => {
+  if (origin !== WEB_ORIGIN || data?.type !== 'weave-website-details') return;
+  if (panel) return void ((panel.remove(), (panel = undefined)));
+  panel = document.createElement('pre');
+  panel.style.cssText = 'position:fixed;inset:auto 0 0 0;max-height:60%;overflow:auto;margin:0;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:rgba(0,0,0,.85);color:#9fe;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:9';
+  panel.textContent = lines.join('\n') || '(nothing yet)';
+  document.body.append(panel);
+});
+addEventListener('error', (event) => log(`tab error: ${event.message}`));
+addEventListener('unhandledrejection', (event) => log(`tab rejection: ${String((event.reason as Error)?.message ?? event.reason)}`));
+
 /** Weave, which opened this website: the tab's opener, or the page around it when it's a frame of Weave's (a phone). */
 const weave: Window | null = window.opener ?? (window.parent !== window ? window.parent : null);
 
@@ -89,6 +111,7 @@ async function start(): Promise<void> {
   const take = async (data: { type?: string; id?: string } & Asked, reply: (answer: Record<string, unknown>) => void) => {
     if (data?.type !== 'weave-ask' || !data.id || taken.has(data.id)) return;
     taken.add(data.id);
+    log(`→ ${data.method} ${data.url}`);
     try {
       const tunnel = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
       tunnel.write(pass.tunnel);
@@ -96,8 +119,10 @@ async function start(): Promise<void> {
       const asked: Asked = { ...data, headers: [...data.headers.filter(([n]) => n.toLowerCase() !== 'cookie'), ...(cookie ? [['Cookie', cookie] as [string, string]] : [])] };
       const answer = await ask(tunnel, asked, location.host);
       jar.take(answer.headers);
+      log(`← ${answer.status} ${data.url} ${answer.body.byteLength}B ${answer.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? ''}`);
       reply({ ...answer, headers: answer.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie') });
     } catch (error) {
+      log(`✗ ${data.url}: ${(error as Error).message}`);
       reply({ error: (error as Error).message });
     }
   };
@@ -122,7 +147,9 @@ async function start(): Promise<void> {
       tunnel?.destroy();
       events.close(code, reason, clean);
     };
+    log(`ws → ${path}`);
     const failed = () => {
+      log(`ws failed ${path}`);
       if (!closed) events.error();
       finish(1006, '', false);
     };
@@ -146,6 +173,7 @@ async function start(): Promise<void> {
           head = undefined;
           jar.take(answer.headers);
           open = true;
+          log(`ws open ${path}`);
           events.open(answer.protocol);
           for (const f of waiting.splice(0)) t.write(f);
           chunk = answer.rest;
@@ -201,6 +229,17 @@ async function start(): Promise<void> {
   frame.allow = 'fullscreen; autoplay; clipboard-write';
   document.body.append(frame);
   frame.addEventListener('load', () => document.querySelector('#say')?.remove(), { once: true });
+  // The website's own errors, in its frame (same origin): its scripts, and what it couldn't load.
+  frame.addEventListener('load', () => {
+    log(`frame loaded ${frame.contentWindow?.location.pathname ?? ''}`);
+    const inside = frame.contentWindow;
+    if (!inside) return;
+    inside.addEventListener('error', (event) => {
+      const target = event.target as { src?: string; href?: string } | null;
+      log(event instanceof ErrorEvent ? `site error: ${event.message} ${event.filename ?? ''}:${event.lineno ?? ''}` : `site couldn't load: ${target?.src ?? target?.href ?? '?'}`);
+    }, true);
+    inside.addEventListener('unhandledrejection', (event) => log(`site rejection: ${String((event.reason as Error)?.message ?? event.reason)}`));
+  });
 }
 
 start().catch((error: Error) => say(error.message));

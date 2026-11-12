@@ -456,6 +456,7 @@
     "web.link.hint": "Du nutzt Weave schon auf einem Computer? Dann hol dein Konto hierher, statt ein neues anzulegen: Öffne auf dem Computer Schlüssel & Geräte → Browser → Browser verbinden und scanne den Code mit diesem Gerät.",
     "web.restore.intro": "Deine Wiederherstellungswörter holen ein Konto zurück, das in einem Browser angelegt wurde. Ein Konto von einem Computer kommt per Link von diesem Computer hierher (siehe oben).",
     "web.website.in.browser": "Im Browser öffnen",
+    "web.website.details": "Details",
     "web.link.title": "Mit deinem Weave verbinden",
     "web.link.intro": "Dein Computer hat diesen Link gemacht. Dieser Browser wird zu dir, mit einem eigenen Schlüssel und einem Passkey, der ihn hier öffnet. Deine Wiederherstellungswörter braucht es nicht, und sie kommen auch nicht hierher.",
     "web.link.button": "Verbinden",
