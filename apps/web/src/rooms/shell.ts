@@ -106,6 +106,19 @@ async function start(): Promise<void> {
   // What the website asks, from the service worker: through a tunnel of its own each time.
   // On the website's channel (sw.ts): its service worker asks, this tab answers.
   const channel = new BroadcastChannel('weave-website');
+  // Tunnels kept open between requests, as a browser keeps its connections: a new one through the DHT takes seconds.
+  const idle: Tunnel[] = [];
+  const gone = new WeakSet<Tunnel>();
+  const aTunnel = async (): Promise<Tunnel> => {
+    for (let kept = idle.pop(); kept; kept = idle.pop()) if (!gone.has(kept)) return kept;
+    const made = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
+    made.on('close', () => gone.add(made));
+    made.on('error', () => gone.add(made));
+    made.write(pass.tunnel);
+    log('tunnel opened');
+    return made;
+  };
+
   // Each request once, by its id: it comes on the channel and from the service worker straight, and either may not.
   const taken = new Set<string>();
   const take = async (data: { type?: string; id?: string } & Asked, reply: (answer: Record<string, unknown>) => void) => {
@@ -113,11 +126,11 @@ async function start(): Promise<void> {
     taken.add(data.id);
     log(`→ ${data.method} ${data.url}`);
     try {
-      const tunnel = (await relayed(pass)).connect(b4a.from(pass.key, 'hex')) as unknown as Tunnel;
-      tunnel.write(pass.tunnel);
+      const tunnel = await aTunnel();
       const cookie = jar.header();
       const asked: Asked = { ...data, headers: [...data.headers.filter(([n]) => n.toLowerCase() !== 'cookie'), ...(cookie ? [['Cookie', cookie] as [string, string]] : [])] };
-      const answer = await ask(tunnel, asked, location.host);
+      const { answer, reusable } = await ask(tunnel, asked, location.host);
+      if (reusable && !gone.has(tunnel)) idle.push(tunnel);
       jar.take(answer.headers);
       log(`← ${answer.status} ${data.url} ${answer.body.byteLength}B ${answer.headers.find(([n]) => n.toLowerCase() === 'content-type')?.[1] ?? ''}`);
       reply({ ...answer, headers: answer.headers.filter(([n]) => n.toLowerCase() !== 'set-cookie') });

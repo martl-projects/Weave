@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CookieJar, parseAnswer, requestBytes } from '../src/rooms/http.ts';
+import { EventEmitter } from 'node:events';
+import { ask, CookieJar, parseAnswer, requestBytes } from '../src/rooms/http.ts';
 
 /* HTTP/1.1 as a website's tab speaks it over a tunnel (src/rooms/http.ts). */
 
@@ -32,6 +33,22 @@ describe("a website's tab, speaking HTTP over a tunnel", () => {
     expect(text(parseAnswer(bytes('HTTP/1.1 200 OK\r\n\r\nuntil the end'), 'GET', true)!.body)).toBe('until the end');
     expect(parseAnswer(bytes('HTTP/1.1 304 Not Modified\r\nETag: x\r\n\r\n'), 'GET', false)!.status).toBe(304);
     expect(() => parseAnswer(bytes('garbage\r\n\r\n'), 'GET', true)).toThrow(/no HTTP/);
+  });
+
+  it('keeps a tunnel for the next request when the website keeps it open, and closes it when the website says close', async () => {
+    const tunnel = Object.assign(new EventEmitter(), { written: [] as string[], destroyed: false, write(data: Uint8Array) { this.written.push(new TextDecoder().decode(data)); }, end() {}, destroy() { this.destroyed = true; } });
+    const answerWith = (text: string) => setTimeout(() => tunnel.emit('data', bytes(text)), 5);
+    answerWith('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok');
+    const first = await ask(tunnel as never, { method: 'GET', url: '/a', headers: [] }, 'site');
+    expect(first.reusable).toBe(true);
+    expect(tunnel.destroyed).toBe(false);
+    expect(tunnel.listenerCount('data')).toBe(0);
+    answerWith('HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nno');
+    const second = await ask(tunnel as never, { method: 'GET', url: '/b', headers: [] }, 'site');
+    expect(text(second.answer.body)).toBe('no');
+    expect(second.reusable).toBe(false);
+    expect(tunnel.destroyed).toBe(true);
+    expect(tunnel.written.map((w) => w.split('\r\n')[0])).toEqual(['GET /a HTTP/1.1', 'GET /b HTTP/1.1']);
   });
 
   it('keeps the cookies a website sets, and forgets expired ones', () => {
