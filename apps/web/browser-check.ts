@@ -123,6 +123,17 @@ try {
   if (attached.error) throw new Error(`no file attached: ${attached.error}`);
   passed('it attaches a file');
 
+  // On a computer's width: the logo in the title bar, and a hint that the desktop app does more, until it's hidden.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await run(`location.hash = '#/saved'`);
+  await run(`location.hash = '#/'`);
+  await until('the desktop hint', () => run<boolean>(`!!document.querySelector('.desktop-hint a[href*="releases"]')`));
+  if (!(await run<boolean>(`[...document.querySelectorAll('img.weave-mark')].some((img) => img.complete && img.naturalWidth > 0)`))) throw new Error('no Weave logo in the page');
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'desktop-hint.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  await run(`document.querySelector('.desktop-hint button').click()`);
+  await until('the hint hidden', () => run<boolean>(`!document.querySelector('.desktop-hint') && localStorage.getItem('weave.desktopHint.hidden') === '1'`));
+  passed('on a computer, the logo shows and a hint to get the desktop app, which hides for good');
+
   const id = (await call<Array<{ id: string }>>('spaces')).result![0].id;
   const hints = () => call<Array<{ hints: Array<{ tooltip?: string }> }>>('hints', { slot: 'place', subjects: [{ space: id }] });
   await hints();

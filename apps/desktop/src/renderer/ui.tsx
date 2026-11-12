@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import markPng from './mark.png';
 import type { PostInfo } from '@weave/node/client';
 import { ago, api, blobUrl, hue, loadBlobImages, onItem, plain, renderMarkdown, shortDid, useBlobUrl } from './lib.ts';
 import { FigureHead, picture, postScene, useFigure, useSeen, type Figure } from './avatar.tsx';
@@ -73,17 +74,9 @@ export function Avatar({ did, size = 32, status }: { did: string; name?: string;
   );
 }
 
+/** Weave's logo (from art/logo1.png, as the app icon), small enough to inline. */
 export function WeaveMark({ size = 26 }: { size?: number }) {
-  return (
-    <svg className="mark" width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" aria-hidden="true">
-      <rect x="4" y="1" width="2" height="14" fill="#000080" />
-      <rect x="10" y="1" width="2" height="14" fill="#008080" />
-      <rect x="1" y="4" width="14" height="2" fill="#c00000" />
-      <rect x="4" y="4" width="2" height="2" fill="#000080" />
-      <rect x="1" y="10" width="14" height="2" fill="#d4a000" />
-      <rect x="10" y="10" width="2" height="2" fill="#008080" />
-    </svg>
-  );
+  return <img className="mark weave-mark" src={markPng} width={size} height={size} alt="" aria-hidden="true" draggable={false} />;
 }
 
 // ---------------------------------------------------------------- post embeds

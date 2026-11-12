@@ -772,6 +772,7 @@ function Shell() {
     );
     body = (
       <div className="center">
+        <DesktopHint />
         {unprotected}
         {shippedMissing}
         {backupDue}
@@ -976,3 +977,39 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </TextsProvider>,
 );
+
+const DESKTOP_DOWNLOAD = 'https://github.com/martl-projects/Weave/releases/latest';
+const DESKTOP_HINT_KEY = 'weave.desktopHint.hidden';
+
+/** In Weave Web on a computer (not a phone): the desktop app does more; say so until it is hidden. */
+function DesktopHint() {
+  const { t } = useTexts();
+  const onComputer = typeof matchMedia === 'function' && matchMedia('(min-width: 900px) and (pointer: fine)').matches;
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(DESKTOP_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  if (!bridge.web || !onComputer || hidden) return null;
+  const hide = () => {
+    setHidden(true);
+    try {
+      localStorage.setItem(DESKTOP_HINT_KEY, '1');
+    } catch {
+      // Not kept: it shows again next time.
+    }
+  };
+  return (
+    <div className="notice desktop-hint">
+      <Icon name="download" /> <span className="desktop-hint-text">{t('web.desktop.hint')}</span>
+      <a className="desktop-hint-get" href={DESKTOP_DOWNLOAD} target="_blank" rel="noopener noreferrer">
+        {t('web.desktop.get')}
+      </a>
+      <button className="link" title={t('web.desktop.dismiss')} aria-label={t('web.desktop.dismiss')} onClick={hide}>
+        ✕
+      </button>
+    </div>
+  );
+}

@@ -208,6 +208,7 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .badge-mark-text { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 /* Marks (stage 19): a check (bare only for Weave's own), a label or a count; who says so on hover. */
 .mark { display: inline-flex; align-items: center; justify-content: center; line-height: 1; cursor: help; white-space: nowrap; }
+.weave-mark { display: inline-block; cursor: inherit; border-radius: 18%; vertical-align: middle; object-fit: cover; }
 .mark-check { padding: 0 2px; border-radius: 3px; font: bold 10px var(--content-font); color: var(--cl-accent, #3a5dff); border: 1px solid currentColor; }
 .mark-check.is-weave { border-radius: 50%; background: var(--cl-accent, #3a5dff); color: #fff; border-color: transparent; }
 .mark-label { padding: 0 4px; border-radius: 3px; font: 10px var(--content-font); background: var(--cl-line, #ddd); color: var(--cl-text, #222); height: 14px; }
@@ -635,6 +636,8 @@ menu[role='tablist'] { margin-bottom: 0; }
 .keys-table td { padding: 4px 6px; border-bottom: 1px solid #d4d4d4; vertical-align: middle; }
 .keys-table td:last-child { text-align: right; }
 .keys-table tr.revoked { opacity: 0.55; }
+.desktop-hint-text { flex: 1; min-width: 0; }
+.desktop-hint-get { font-weight: bold; white-space: nowrap; color: var(--accent); }
 .notice.alarm { background: #ffe0e0; border-color: #a00; }
 a.button-link { display: inline-flex; align-items: center; gap: 4px; color: var(--text); font-size: 12px; }
 
