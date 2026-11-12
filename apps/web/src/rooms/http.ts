@@ -17,6 +17,8 @@ export interface Answered {
   statusText: string;
   headers: Array<[string, string]>;
   body: ArrayBuffer;
+  /** The website closes the connection after this answer (Connection: close). */
+  closes?: boolean;
 }
 
 /** What a Duplex of the relay's is, as far as this uses it. */
@@ -27,10 +29,13 @@ export interface Tunnel {
   on(event: 'data', listener: (chunk: Uint8Array) => void): unknown;
   on(event: 'end' | 'close', listener: () => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
+  off(event: string, listener: (...args: never[]) => void): unknown;
 }
 
 /** Headers that are about this hop, or that the tab sets itself. */
-const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'accept-encoding']);
+const HOP = new Set(['keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length', 'accept-encoding']);
+/** Not handed on from the page, set here: this hop's own. */
+const OWN = new Set([...HOP, 'connection']);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -38,7 +43,7 @@ const decoder = new TextDecoder();
 export function requestBytes(asked: Asked, host: string): Uint8Array {
   const body = asked.body ? new Uint8Array(asked.body) : undefined;
   const lines = [`${asked.method} ${asked.url} HTTP/1.1`, `Host: ${host}`, 'Connection: keep-alive', 'Accept-Encoding: identity'];
-  for (const [name, value] of asked.headers) if (!HOP.has(name.toLowerCase()) && !/[\r\n]/.test(name + value)) lines.push(`${name}: ${value}`);
+  for (const [name, value] of asked.headers) if (!OWN.has(name.toLowerCase()) && !/[\r\n]/.test(name + value)) lines.push(`${name}: ${value}`);
   if (body || !['GET', 'HEAD'].includes(asked.method)) lines.push(`Content-Length: ${body?.length ?? 0}`);
   const head = encoder.encode(`${lines.join('\r\n')}\r\n\r\n`);
   if (!body) return head;
@@ -85,7 +90,7 @@ export function parseAnswer(bytes: Uint8Array, method: string, ended: boolean): 
   const header = (name: string) => headers.find(([n]) => n.toLowerCase() === name)?.[1];
   const code = Number(status[1]);
   const rest = bytes.subarray(headEnd + 4);
-  const done = (body: Uint8Array): Answered => ({ status: code, statusText: status[2], headers: headers.filter(([n]) => !HOP.has(n.toLowerCase())), body: body.slice().buffer });
+  const done = (body: Uint8Array): Answered => ({ status: code, statusText: status[2], headers: headers.filter(([n]) => !OWN.has(n.toLowerCase())), body: body.slice().buffer, ...(/close/i.test(header('connection') ?? '') ? { closes: true } : {}) });
   if (method === 'HEAD' || code === 204 || code === 304 || (code >= 100 && code < 200)) return done(new Uint8Array(0));
   if (/chunked/i.test(header('transfer-encoding') ?? '')) {
     let at = 0;
@@ -110,32 +115,44 @@ export function parseAnswer(bytes: Uint8Array, method: string, ended: boolean): 
 }
 
 /** Ask a website one thing over a tunnel just opened (its first line written already). */
-export function ask(tunnel: Tunnel, asked: Asked, host: string, timeoutMs = 60_000): Promise<Answered> {
+/**
+ * Ask a website one thing over a tunnel (its first line written already, maybe asked before). `reusable`: the answer
+ * came whole on a connection the website keeps open, so the next request can go over it; otherwise it's closed here.
+ */
+export function ask(tunnel: Tunnel, asked: Asked, host: string, timeoutMs = 60_000): Promise<{ answer: Answered; reusable: boolean }> {
   return new Promise((resolve, reject) => {
     let bytes = new Uint8Array(0);
     let settled = false;
     const timer = setTimeout(() => finish(new Error('the website took too long')), timeoutMs);
-    const finish = (error?: Error, answer?: Answered) => {
+    const finish = (error?: Error, answer?: Answered, ended = true) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      tunnel.destroy();
-      if (answer) resolve(answer);
+      tunnel.off('data', onData);
+      tunnel.off('end', onEnd);
+      tunnel.off('close', onEnd);
+      tunnel.off('error', onError);
+      const reusable = !!answer && !ended && !answer.closes;
+      if (!reusable) tunnel.destroy();
+      if (answer) resolve({ answer, reusable });
       else reject(error);
     };
     const check = (ended: boolean) => {
       try {
         const answer = parseAnswer(bytes, asked.method, ended);
-        if (answer) finish(undefined, answer);
+        if (answer) finish(undefined, answer, ended);
         else if (ended) finish(new Error('the website closed before answering'));
       } catch (error) {
         finish(error as Error);
       }
     };
-    tunnel.on('data', (chunk) => ((bytes = concat(bytes, chunk)), check(false)));
-    tunnel.on('end', () => check(true));
-    tunnel.on('close', () => check(true));
-    tunnel.on('error', (error) => (bytes.length ? check(true) : finish(error)));
+    const onData = (chunk: Uint8Array) => ((bytes = concat(bytes, chunk)), check(false));
+    const onEnd = () => check(true);
+    const onError = (error: Error) => (bytes.length ? check(true) : finish(error));
+    tunnel.on('data', onData);
+    tunnel.on('end', onEnd);
+    tunnel.on('close', onEnd);
+    tunnel.on('error', onError);
     tunnel.write(requestBytes(asked, host));
   });
 }

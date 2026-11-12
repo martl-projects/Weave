@@ -40,15 +40,28 @@ tabs.onmessage = ({ data }: MessageEvent<Got & { type?: string; id?: string }>) 
 };
 
 async function throughTheTab(request: Request): Promise<Response> {
-  // Asked on the website's channel, which its tab listens on (shell.ts): not through clients, which a browser may not
-  // show the tab among (Safari, the tab in a frame of Weave's page).
+  // Asked on the website's channel, which its tab listens on (shell.ts), and of every window a browser lists: either may
+  // miss the tab (Safari didn't list the tab in a frame of Weave's page; a channel may not reach it either).
   const url = new URL(request.url);
   const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
   const id = crypto.randomUUID();
   const got = await new Promise<Got>((resolve) => {
     const timer = setTimeout(() => (waiting.delete(id), resolve({ error: 'no tab of this website answered: open it from Weave again' } as Got)), 90_000);
     waiting.set(id, (answer) => (clearTimeout(timer), resolve(answer)));
-    tabs.postMessage({ type: 'weave-ask', id, method: request.method, url: url.pathname + url.search, headers: [...request.headers], body });
+    const asked = { type: 'weave-ask', id, method: request.method, url: url.pathname + url.search, headers: [...request.headers], body };
+    tabs.postMessage(asked);
+    // And to each window of the website, as a browser lists them: the tab takes a request once, by its id, however it came.
+    void self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      for (const window of windows) {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = ({ data }: MessageEvent<Got>) => {
+          const answer = waiting.get(id);
+          waiting.delete(id);
+          answer?.(data);
+        };
+        window.postMessage(asked, [channel.port2]);
+      }
+    });
   });
   if (got.error) return said(got.error);
   const empty = request.method === 'HEAD' || got.status === 204 || got.status === 304;

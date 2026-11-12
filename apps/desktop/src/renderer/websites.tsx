@@ -73,6 +73,9 @@ function WebsiteFrame({ room, onClose }: { room: WebsiteInfo; onClose(): void })
           <button role="menuitem" onClick={inBrowser}>
             {t('web.website.in.browser')}
           </button>
+          <button role="menuitem" onClick={() => (frame.current?.contentWindow?.postMessage({ type: 'weave-website-details' }, new URL(link.url).origin), setMenu(false))}>
+            {t('web.website.details')}
+          </button>
           <button role="menuitem" className="website-frame-close" onClick={onClose}>
             {t('button.close')}
           </button>
