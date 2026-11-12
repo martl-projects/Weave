@@ -55,9 +55,11 @@ writeFileSync(
 );
 
 // Onboarding links' pages (/j/<code>, idea bZFDCQNT): a Pages Function that puts the link's open preview into the page's
-// head. It's deployed from dist/ (wrangler takes functions/ next to the folder it uploads), with this CSP, since a
+// head. It's built into apps/web/functions/ (ignored by git): wrangler takes its project root by the nearest
+// package.json, apps/web, and its Functions from functions/ there (web-18 had them in dist/ and took none). With this CSP, since a
 // Function's response doesn't get _headers. Not in pages-hashes.json: it serves the same page, with tags as text only.
-rmSync(join(dist, 'functions'), { recursive: true, force: true });
+const functions = join(import.meta.dirname, 'functions');
+rmSync(functions, { recursive: true, force: true });
 await build({
   // Routes by place: /j/<code>, /play/<code> (a game's own app) and /play/<code>/manifest.
   entryPoints: {
@@ -65,7 +67,7 @@ await build({
     'play/[code]': join(import.meta.dirname, 'src', 'functions', 'play.ts'),
     'play/[code]/manifest': join(import.meta.dirname, 'src', 'functions', 'play-manifest.ts'),
   },
-  outdir: join(dist, 'functions'),
+  outdir: functions,
   bundle: true,
   format: 'esm',
   platform: 'neutral',

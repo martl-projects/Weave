@@ -221,7 +221,14 @@ export function checkTexts(root: string, options: { writeAllowlist?: boolean } =
   for (const lang of LANGUAGES) {
     const file = join(root, 'packages/texts', `weave.texts.${lang}.json`);
     try {
-      packages.set(lang, JSON.parse(readFileSync(file, 'utf8')) as TextPackage);
+      const source = readFileSync(file, 'utf8');
+      packages.set(lang, JSON.parse(source) as TextPackage);
+      // JSON keeps the last of a name given twice, silently: the first text is lost (as playlink.play once was).
+      const seen = new Set<string>();
+      for (const [, name] of source.matchAll(/^\s*"([^"]+)":/gm)) {
+        if (seen.has(name)) errors.push(`packages/texts/weave.texts.${lang}.json: ${name} is there twice, and only the last counts`);
+        seen.add(name);
+      }
     } catch (error) {
       errors.push(`packages/texts/weave.texts.${lang}.json: ${(error as Error).message}`);
     }

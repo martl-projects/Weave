@@ -295,7 +295,7 @@ export function MyGames({ route }: { route: string[] }) {
       </li>
       {links.map((l) => (
         <li key={l.code} className="tree-game">
-          <a className={`tree-link${route[0] === 'play' && route[1] === l.code ? ' on' : ''}`} href={`#/play/${l.code}`} title={t('playlink.play', { title: l.title })}>
+          <a className={`tree-link${route[0] === 'play' && route[1] === l.code ? ' on' : ''}`} href={`#/play/${l.code}`} title={t('playlink.play.title', { title: l.title })}>
             <span className="tree-label">▶ {l.title}</span>
           </a>
           <button className="tree-game-app" title={t('playlink.as.app')} onClick={() => asApp(l)}>

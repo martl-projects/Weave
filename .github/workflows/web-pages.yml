@@ -37,16 +37,28 @@ jobs:
         run: |
           # The project, the first time (it says so when it's there already).
           npx --yes wrangler@4 pages project create weave-web --production-branch=main || true
-          # From dist/, so wrangler takes functions/ (onboarding links' previews) with the page.
-          # The folder by its whole path: wrangler took a bare "pages" from apps/web, beside its package.json.
-          cd apps/web/dist && npx --yes wrangler@4 pages deploy "$PWD/pages" --project-name=weave-web --branch=main --commit-dirty=true
+          # From apps/web, wrangler's root (its package.json), so it takes functions/ there (onboarding links' previews and
+          # games' own apps, built by pages.ts) with the page; the page's folder by its whole path.
+          cd apps/web && npx --yes wrangler@4 pages deploy "$PWD/dist/pages" --project-name=weave-web --branch=main --commit-dirty=true
+          # It must say it took them: a deploy without them serves the bare page at /j/ and /play/.
       # Websites' tabs: a Worker at *.weave-rooms.net (Pages has no wildcard names), with its static files.
       - name: Upload the websites' tabs
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4 deploy --config apps/web/rooms-wrangler.toml
+      - name: Check the Functions answer
+        run: |
+          for i in $(seq 30); do
+            body=$(curl -fsS https://web.martl.io/play/AAAAAAAA/manifest || true)
+            case "$body" in *'"start_url"'*) echo "the Functions answer"; exit 0;; esac
+            sleep 10
+          done
+          echo "web.martl.io/play/.../manifest is not the Functions' answer: were functions/ uploaded?" >&2
+          exit 1
       - uses: actions/upload-artifact@v4
+        # The hashes are what the watcher compares: kept even when the check above fails.
+        if: always()
         with:
           name: web-hashes
           path: |

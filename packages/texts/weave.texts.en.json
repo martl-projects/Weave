@@ -2205,7 +2205,7 @@
     "invite.days": "{n, plural, one {# day} other {# days}}",
     "invite.create": "Create link",
     "playlink.games": "My games",
-    "playlink.play": "Play {title}",
+    "playlink.play.title": "Play {title}",
     "playlink.as.app": "Keep it as an app of its own (home screen, start menu)",
     "playlink.remove": "Not a quick start any more",
     "playlink.unknown.title": "A game",

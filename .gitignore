@@ -12,3 +12,5 @@ apps/*/release/
 
 # Weave Server settings for docker compose (secrets)
 apps/server/.env
+# Built by apps/web/pages.ts for Cloudflare Pages (its sources are apps/web/src/functions).
+apps/web/functions/
