@@ -2,6 +2,94 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.32.0 · 2026-11-12
+
+- Weave Web workflow: the Pages folder by its whole path (OVb4TP5x)
+- Websites' tabs: an event stream reaches the page as it comes (OVb4TP5x)
+- My games in one row, and the play button a quick start waits on, marked
+- Quick starts: play at once, My games, and a game's own app on the home screen
+- The Weave logo in the app, and in Weave Web on a computer a hint to get the desktop app
+- Onboarding links as quick starts: kept per person, and free for who's in already
+- Websites' tabs: tunnels kept open between requests, as a browser keeps its connections (OVb4TP5x)
+- Onboarding links: docs, and storageplans.ts on the list of files that use node:*
+- Onboarding links' previews on web.martl.io: a Pages Function for /j/<code>
+- Websites over Weave: Details in the corner menu shows what the website asked and what went wrong (OVb4TP5x)
+- Onboarding links on Weave Web: the link's welcome, its account, its steps; friends both ways
+- Websites' tabs: asked on the channel and of every window, taken once by the request's id (OVb4TP5x)
+- Onboarding links in the app: Link to play, and following one with Open link
+- Onboarding links from a creator's Weave: make, list, take back, follow, follow back
+- Onboarding plans in core: steps, sealed by the link's secret, and the short link
+- Onboarding links: the storage socket keeps refusing programs without an origin
+- Onboarding links on a storage node: sealed plans under short codes, and their previews
+- Websites' tabs: the service worker asks the tab on the website's BroadcastChannel (OVb4TP5x)
+- Weave Web: a website over Weave has the whole screen, and Weave's controls wait behind a corner button (OVb4TP5x)
+- Weave Web: on a phone a website opens over Weave, in a frame, with a way to the browser (OVb4TP5x)
+- Websites' tabs: the tab's service worker updated on purpose, and the tab found though not controlled (OVb4TP5x)
+- Websites' tabs: found without frameType, as on an iPhone (OVb4TP5x)
+- Websites' tabs: the website's WebSockets, through the tunnel too (OVb4TP5x)
+- Websites' tabs: a tab opened again comes from the Worker, and each build's service worker is a new file (OVb4TP5x)
+- Websites' tabs: the CSP lets the service worker fetch the tab's own page, for a tab opened again (OVb4TP5x)
+- Storage node setup: its settings quoted, since the script reads them back (OVb4TP5x)
+- Storage node relay: a browser's handshake a step at a time, the ways after the first one told nothing (OVb4TP5x)
+- Websites' tabs: whatever goes wrong shows as Weave's words in the frame, never a bare error page (OVb4TP5x)
+- Websites' tabs: their CSP lets the sodium compile its WebAssembly, and the dev server sends the same CSP (OVb4TP5x)
+- Storage node: a new author's public side isn't asked for once the node or the account closed (OVb4TP5x)
+- Websites' tabs: the Worker keeps no logs (OVb4TP5x)
+- Weave Web: websites' tabs built and uploaded with the page, a Worker at *.weave-rooms.net, and watched too (OVb4TP5x)
+- Weave Web: a website in a tab of its own, reaching its host through the storage node's relay, end to end (OVb4TP5x)
+- Websites: a pass for a browser's tab, signed for the tab's own DHT key (OVb4TP5x)
+- Storage node: a relay to websites' hosts for signed-in accounts (OVb4TP5x)
+- Rooms through a relay: a tunnel's last answer gets there, and a test of a website through dht-relay (OVb4TP5x)
+- Storage node: with the page elsewhere it serves no page and lets in pages from there only (OVb4TP5x)
+- Weave Web: the page from Cloudflare Pages, the storage node under its own name, and a watcher of what the page serves (OVb4TP5x)
+- Web stage 2: rooms end to end through the storage node, and the page from elsewhere with its hashes watched (OVb4TP5x)
+- Phone layout: the tab is My hub, and Settings is a button there (OVb4TP5x)
+- Weave Web: says how an account comes from a computer; the browser link shows as a QR code only (OVb4TP5x)
+- Weave Web: looking at an invitation, attachments, a space's photo, the imprint and a project's apps; the phone's tab is Settings (OVb4TP5x)
+- Weave Web: link a browser from your computer, without the recovery words (OVb4TP5x)
+- Weave Web: its icon and name on an iPhone's home screen (OVb4TP5x)
+- Weave Web: the service worker asks for a file by its address, so no 304 reaches the page (OVb4TP5x)
+- Storage node: the page's code is asked again each time, so an update is there at the next reload (OVb4TP5x)
+- Phone layout: a Me tab with the hub, Keys & devices, a link, new, notifications, marks and the look (OVb4TP5x)
+- The personal-link switch in the contact dialog looks like a link
+- Storage node: a shared invitation, one link for a number of accounts (OVb4TP5x)
+- Storage node setup: waits up to 15 seconds for the node to come up (OVb4TP5x)
+- Weave Web: a new account gets the contacts Weave ships with, as weave init does (OVb4TP5x)
+- Videos and sound play in the chat
+- Weave Web: accounts elsewhere, checked by GitHub's verifier in the browser (OVb4TP5x)
+- The Weave icon from the softer logo (art/logo1.png)
+- The Weave icon from its source (art/logo.png)
+- Storage node: Caddy without its admin API (OVb4TP5x)
+- Storage node setup: a firewall that keeps the DHT's UDP open (OVb4TP5x)
+- Storage node setup: WEAVE_FIREWALL=no next to a Weave node (OVb4TP5x)
+- Release notes: @word outside code goes into backticks, so GitHub mentions nobody
+- Weave Web: a second tab takes the account over (OVb4TP5x)
+- Web stage 2: spaces instead of accounts waits past a first version (OVb4TP5x)
+- Storage node: the accounts' swarms share one DHT node (OVb4TP5x)
+- Microsoft Store: the package's display name from the Installers workflow (store_name), since it must be a name reserved in Partner Center
+- Weave Web at the version of the rest, 0.31.0
+- Weave Web: a contact link tried against a real Weave on the public DHT (OVb4TP5x)
+- Weave Web: friends by contact link through a storage node (OVb4TP5x)
+- Weave Web: offline start, managing passkeys, and a check in a real Chrome (OVb4TP5x)
+- Weave Web: a release of a storage node, and how to set it up on a server (OVb4TP5x)
+- Weave Web stage 2: a storage node ready to host (OVb4TP5x)
+- Weave Web stage 2, step 8: the desktop's renderer in a browser (OVb4TP5x)
+- Weave Web stage 2, step 7: an account with a passkey or the words (OVb4TP5x)
+- Weave Web stage 2, step 6: Unread and Spotlight in a browser (OVb4TP5x)
+- Weave Web stage 2, step 5: the real node in a Worker (OVb4TP5x)
+- Weave Web stage 2, step 4: the log in a browser, on OPFS in a Worker (OVb4TP5x)
+- Performance (G5N4EzO0), part 5 fix: a message you just sent stays in its own channel when you switch, offers no tools until the node has it, and a failed send doesn't overwrite what you typed meanwhile
+- Weave Web stage 2, step 3: a storage node (OVb4TP5x)
+- Weave Web stage 2, step 2: sync over a WebSocket (OVb4TP5x)
+- The PRF matrix: the iPhone's secret stays the same across a reload
+- The PRF matrix: first row, iCloud Keychain on an iPhone
+- PRF check as a page of its own on martl.io: its CSP in the page, not indexed
+- Weave Web stage 2: blind holding, and the plan (OVb4TP5x)
+- Microsoft Store: Windows versions in the package, the Store build in the update docs
+- Installers workflow: a store job builds the Microsoft Store package by hand
+- Microsoft Store: npm run package -- --store builds the .appx, tiles in build/appx, and a store job in the Installers workflow
+- Weave Web spike (OVb4TP5x, milestone 1): the renderer over a WebSocket, and a passkey PRF check
+
 ## v0.31.0 · 2026-11-06
 
 Friends no longer keep copies of your chats. Save a backup file now (Keys & devices → Backup): it is yours, encrypted with your recovery words, and it is what brings your data back if your devices are lost. Copies your friends hold from before stay until you let them go (Keys & devices → Copies from before), and what you hold for friends stays until you let go of it or nobody asked about it for a year.
