@@ -102,6 +102,11 @@ export interface Bridge {
      * A website in a frame of Weave's own page instead of a tab: on a phone, so with Weave on the home screen no browser
      * bar shows. `attach` once the frame is there; `onFailed` when it can't run in a frame (then a tab, openWebsite).
      */
+    /**
+     * A website in Weave's whole window (an iPhone, where a frame of another origin gets no service worker): Weave hands
+     * the visit over in the address (after the #) and goes; the website has a way back.
+     */
+    visitWebsite(room: { id: string; name: string }): Promise<void>;
     websiteFrame(room: { id: string; name: string }): { url: string; attach(window: Window, onFailed: (why: string) => void): void; detach(): void };
     /** Whether this page was opened with a link from one of the person's computers (linkBrowser). */
     linking(): boolean;

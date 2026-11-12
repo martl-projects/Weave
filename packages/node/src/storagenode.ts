@@ -164,7 +164,7 @@ export class StorageNode {
   readonly plans: PlanStore;
   #closing = false;
   /** Tickets for the relay, by their hash: whose, and until when. */
-  readonly #tickets = new Map<string, { id: Did; until: number }>();
+  readonly #tickets = new Map<string, { id: Did; until: number; again?: boolean }>();
   /** Relayed connections open, per account. */
   readonly #relays = new Map<Did, number>();
 
@@ -361,7 +361,7 @@ export class StorageNode {
   relayFor(ticket: string): { dht: HyperDHT; done(): void } | undefined {
     const hash = tokenHash(ticket);
     const t = this.#tickets.get(hash);
-    this.#tickets.delete(hash);
+    if (!t?.again) this.#tickets.delete(hash);
     const dht = this.#options.network.dht?.();
     if (!t || t.until <= Date.now() || !dht) return undefined;
     const open = this.#relays.get(t.id) ?? 0;
@@ -491,7 +491,9 @@ export class StorageNode {
           const ticket = randomBytes(24).toString('base64url');
           const now = Date.now();
           for (const [hash, t] of this.#tickets) if (t.until <= now) this.#tickets.delete(hash);
-          this.#tickets.set(tokenHash(ticket), { id: mine.file.id, until: now + TICKET_MS });
+          // For hours (a visit Weave hands over, at most 12): good again for each connection in that time.
+          const hours = typeof m.hours === 'number' && m.hours > 0 ? Math.min(12, m.hours) : undefined;
+          this.#tickets.set(tokenHash(ticket), { id: mine.file.id, until: now + (hours ? hours * 3600_000 : TICKET_MS), ...(hours ? { again: true } : {}) });
           return channel.send({ t: 'ok', ticket });
         }
         case 'usage': {

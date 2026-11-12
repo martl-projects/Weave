@@ -2568,7 +2568,7 @@ export interface Backend {
   visitWebsite(room: string): Promise<WebsiteInfo>;
   leaveWebsite(room: string): Promise<void>;
   /** A browser tab's way to a website's host: its key, and its connections' first lines signed for the tab's key. */
-  websitePass(input: { room: string; key: string }): Promise<{ id: string; name: string; key: string; tunnel: string; control: string }>;
+  websitePass(input: { room: string; key: string; hours?: number }): Promise<{ id: string; name: string; key: string; tunnel: string; control: string }>;
   websiteChat(room: string): Promise<WebsiteChatMessage[]>;
   sayOnWebsite(input: { room: string; text: string }): Promise<void>;
 

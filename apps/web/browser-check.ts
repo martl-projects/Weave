@@ -88,12 +88,26 @@ try {
     await until('the page to answer', () => run<boolean>(`document.readyState === 'complete' && !!document.querySelector('#root')`));
   };
   const appUp = () => until('the app', () => run<boolean>(`!!document.querySelector('.app-window')`));
+  // Locked, Weave asks for the passkey at once; where that waits for a tap, the tap.
+  const unlocked = () =>
+    until(
+      'the account open',
+      async () => {
+        if (await run<boolean>(`!!document.querySelector('.app-window')`)) return true;
+        if (await run<boolean>(`!!document.querySelector('#unlock-words') && document.querySelector('.buttons button.default') && !document.querySelector('.buttons button.default').disabled`)) await run(clickDefault);
+        return false;
+      },
+      30_000,
+    );
+  const lockedOrOpen = `!!document.querySelector('#unlock-words') || !!document.querySelector('.app-window')`;
   const call = <T>(method: string, ...args: unknown[]) => run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
   const texts = async () => ((await call<Array<{ text: string }>>('messages', 'Climb')).result ?? []).map((m) => m.text);
   const clickDefault = `document.querySelector('.buttons button.default').click()`;
 
   await open(ORIGIN);
-  await until('the first screen', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
+  await until('the first screen', () => run<boolean>(`!!document.querySelector('#first-create')`));
+  await run(`document.querySelector('#first-create').click()`);
+  await until('the name', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
   await run(`(() => { const input = document.querySelector('#welcome-name'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Webby'); input.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
   await until('the words', () => run<boolean>(`!!document.querySelector('#wrote')`));
   if (await run<boolean>(`!!document.querySelector('.notice.alarm')`)) throw new Error('no passkey was made');
@@ -229,6 +243,21 @@ try {
   await send('Emulation.clearDeviceMetricsOverride');
   passed('on a phone it opens over Weave, in a frame', [framedText, framedShows.split('\n').filter((l) => l.startsWith('ws:')).join('')]);
 
+  // On an iPhone it takes Weave's whole window: Weave hands the visit over in the address and goes; the website runs
+  // without Weave beside it, and its corner leads back, where Weave is locked again.
+  await run(`window.weave.web.visitWebsite({ id: ${JSON.stringify(website)}, name: 'Party' })`).catch(() => undefined);
+  await until('the website in the whole window', async () => {
+    const text = await run<string | undefined>(`location.hash === '' && /\\.localhost:/.test(location.host) ? document.querySelector('iframe')?.contentDocument?.body?.innerText : undefined`).catch(() => undefined);
+    return text?.includes('ws: echo') && /tick [1-9]/.test(text) ? text : undefined;
+  }, 45_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; it shows: ${await run<string>(`location.href + ' ' + document.body?.innerText?.slice(0, 300)`).catch((e: Error) => e.message)}`);
+  });
+  await run(`[...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Weave').click()`);
+  await run(`[...document.querySelectorAll('button')].find((b) => /Back to Weave|Zurück zu Weave/.test(b.textContent)).click()`).catch(() => undefined);
+  await until('Weave again', () => run<boolean>(`location.origin === ${JSON.stringify(ORIGIN)} && (${lockedOrOpen})`), 30_000);
+  await unlocked();
+  passed('on an iPhone it takes the whole window, and leads back to Weave');
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
 
@@ -277,11 +306,10 @@ try {
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;
   await sleep(600);
   await run(`void window.weave.web.forget()`);
-  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
-  passed('leaving takes everything from this browser');
-  await run(`[...document.querySelectorAll('.buttons button')].find((b) => !b.classList.contains('default')).click()`);
-  await until('the way back', () => run<boolean>(`document.querySelectorAll('.buttons button').length === 3`));
-  await run(`document.querySelectorAll('.buttons button')[1].click()`);
+  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#first-passkey.default')`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'first.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  passed('leaving takes everything from this browser, and asks first for a passkey');
+  await run(`document.querySelector('#first-passkey').click()`);
   await appUp();
   const back = (await call<{ did: string; signer: string }>('whoami')).result!;
   if (back.did !== who.did || back.signer === who.signer) throw new Error(`came back as ${JSON.stringify(back)}, was ${JSON.stringify(who)}`);
@@ -289,11 +317,9 @@ try {
   passed('the passkey alone brings the account back, with a device key of its own');
 
   await open(ORIGIN);
-  await until('the lock', () => run<boolean>(`!!document.querySelector('#unlock-words')`));
-  passed('a reload locks it');
-  await run(clickDefault);
-  await appUp();
-  passed('the passkey opens it again');
+  // Locked after a reload, and the passkey asked for at once: open without a click.
+  await until('the passkey, asked at once', () => run<boolean>(`!!document.querySelector('.app-window')`), 20_000);
+  passed('a reload locks it, and asks for the passkey at once');
   if (!(await run<boolean>(`!!navigator.serviceWorker.controller`))) throw new Error('no service worker in charge');
 
   // A second tab: one tab at a time has the account, and the second takes it over.
@@ -309,21 +335,19 @@ try {
   await until('the second tab to have it', () => tab.run<boolean>(locked));
   passed('it takes the account over, and the first tab lets go');
   await run(`document.querySelector('#take-over').click()`);
-  await until('the first tab to have it again', () => run<boolean>(locked));
+  await until('the first tab to have it again', () => run<boolean>(lockedOrOpen));
   await until('the second tab to let go', () => tab.run<boolean>(takeOver));
   tab.close();
   await fetch(`http://127.0.0.1:${DEBUG}/json/close/${second.id}`);
-  await run(clickDefault);
-  await appUp();
+  await unlocked();
   passed('and the first takes it back');
 
   server.kill();
   await until('the server to go', () => fetch(`${ORIGIN}/health`).then(() => false, () => true));
   await open(ORIGIN);
-  await until('the lock, offline', () => run<boolean>(`!!document.querySelector('#unlock-words')`));
+  await until('the lock, offline', () => run<boolean>(lockedOrOpen));
   passed('without a network the page starts');
-  await run(clickDefault);
-  await appUp();
+  await unlocked();
   const offline = await texts();
   if (!offline.includes('from Chrome')) throw new Error(`read ${JSON.stringify(offline)} offline`);
   passed('and it opens and reads', offline.length);

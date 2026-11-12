@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
 import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
@@ -38,7 +38,8 @@ function Words({ words }: { words: string }) {
 /** First start: a name, then the words to write down; or restore from words you already have; or a company account. */
 export function Onboarding({ onDone }: { onDone(): void }) {
   const { t } = useTexts();
-  const [mode, setMode] = useState<'create' | 'restore' | 'company'>('create');
+  // Weave Web first asks how: most who come back have a passkey already (synced by their phone or browser).
+  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company'>(bridge.web ? 'start' : 'create');
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
   const [link, setLink] = useState('');
@@ -193,23 +194,9 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           <p className="small muted">{t('onboard.restore.backup.why')}</p>
         </div>}
         <div className="buttons">
-          <button type="button" onClick={() => setMode('create')}>
+          <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'create')}>
             {t('button.back')}
           </button>
-          {bridge.web && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                const ok = await attempt(() => bridge.web!.arrive().then(() => true));
-                setBusy(false);
-                if (ok) onDone();
-              }}
-            >
-              {t('onboard.restore.passkey')}
-            </button>
-          )}
           <button className="default" disabled={busy}>
             {t(busy ? 'onboard.restore.looking' : 'onboard.restore')}
           </button>
@@ -249,6 +236,49 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       </form>,
     );
 
+  // Weave Web, first time in this browser: sign in with a passkey, make an account, or the words.
+  if (mode === 'start') {
+    const fromGame = !!invited && 'title' in invited;
+    const passkey = async () => {
+      setBusy(true);
+      const ok = await attempt(() => bridge.web!.arrive().then(() => true));
+      setBusy(false);
+      if (ok) onDone();
+    };
+    return window(
+      t('onboard.welcome'),
+      <>
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          {fromGame ? (
+            <p>
+              <b>{t('playlink.web.invited', { by: invited.by, title: invited.title })}</b>
+              <br />
+              {t('web.first.intro.game')}
+            </p>
+          ) : (
+            <p>{t('web.first.intro')}</p>
+          )}
+        </div>
+        {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
+        {invited && 'problem' in invited && <p className="notice">{t('playlink.web.problem', { problem: invited.problem })}</p>}
+        <div className="first-ways">
+          <button id="first-passkey" className={fromGame ? '' : 'default'} disabled={busy} onClick={() => void passkey()}>
+            <Icon name="lock" /> {t('web.first.passkey')}
+          </button>
+          <p className="small muted">{t('web.first.passkey.why')}</p>
+          <button id="first-create" className={fromGame ? 'default' : ''} disabled={busy} onClick={() => setMode('create')}>
+            {t(fromGame ? 'playlink.web.create' : 'web.first.create')}
+          </button>
+          <button id="first-words" disabled={busy} onClick={() => setMode('restore')}>
+            {t('web.first.words')}
+          </button>
+        </div>
+        <p className="notice">{t('web.link.hint')}</p>
+      </>,
+    );
+  }
+
   return window(
     t('onboard.welcome'),
     <form
@@ -276,8 +306,6 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       </div>
       {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
       {invited && 'problem' in invited && <p className="notice">{t('playlink.web.problem', { problem: invited.problem })}</p>}
-      {/* Someone with Weave on a computer brings their account here from there, rather than making a second one. */}
-      {bridge.web && !(invited && 'title' in invited) && <p className="notice">{t('web.link.hint')}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
@@ -295,8 +323,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
             {t('onboard.company.button')}
           </button>
         )}
-        <button type="button" onClick={() => setMode('restore')}>
-          {t('onboard.restore.button')}
+        <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'restore')}>
+          {t(bridge.web ? 'button.back' : 'onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
           {t(invited && 'title' in invited ? 'playlink.web.create' : 'onboard.create')}
@@ -380,6 +408,15 @@ export function Unlock({ onDone }: { onDone: () => void }) {
     setBusy(false);
     if (ok) onDone();
   };
+  // With a passkey, asked for at once (back from a game, a new start): a browser that wants a tap first says no
+  // quietly, and the button is there.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current || !bridge.web!.passkey()) return;
+    asked.current = true;
+    setBusy(true);
+    bridge.web!.unlock().then(onDone, () => setBusy(false));
+  }, []);
   return (
     <div className="desktop">
       <div className="window welcome">

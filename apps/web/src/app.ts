@@ -2,6 +2,7 @@ import type { ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import { askPasskey, makePasskey } from './passkey.ts';
 import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { StorageClient } from '@weave/net/browser';
@@ -272,6 +273,23 @@ const web: Bridge['web'] = {
     const tab = window.open(`${origin}/`, '_blank');
     if (!tab) throw new Error('the browser kept the website from opening a tab: allow pop-ups for Weave');
     answerWebsite(room, origin, () => tab);
+  },
+  visitWebsite: async (room) => {
+    // A key for this visit (sodium's form: the seed, then the public key), its proofs for hours, a relay ticket for as
+    // long: all the website needs while Weave isn't there. The way back is where this page is now.
+    const seed = ed25519.utils.randomSecretKey();
+    const publicKey = ed25519.getPublicKey(seed);
+    const hex = Array.from(publicKey, (b) => b.toString(16).padStart(2, '0')).join('');
+    const HOURS = 6;
+    const pass = await ask('websitePass', { room: room.id, key: hex, hours: HOURS });
+    if ('error' in pass) throw new Error(String(pass.error));
+    const ticket = await own<string>('relayTicket', HOURS);
+    const secret = new Uint8Array(64);
+    secret.set(seed);
+    secret.set(publicKey, 32);
+    const visit = { ...(pass.result as object), ticket, secret: btoa(String.fromCharCode(...secret)), back: location.href };
+    const handed = btoa(unescape(encodeURIComponent(JSON.stringify(visit)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    location.href = `${websiteOrigin(room.id)}/#weave=${handed}`;
   },
   websiteFrame: (room) => {
     const origin = websiteOrigin(room.id);

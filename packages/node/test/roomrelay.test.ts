@@ -10,7 +10,7 @@ import RelayedDHT, { relay } from '@hyperswarm/dht-relay';
 import RelayStream from '@hyperswarm/dht-relay/ws';
 import { b64u, canonicalJson, createIdentity, randomBytes, sign, utf8, type Json, type Room } from '@weave/core';
 import { roomKeyPair } from '@weave/net';
-import { LiveRooms } from '../src/live.ts';
+import { LiveRooms, proofLine } from '../src/live.ts';
 import { loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
 
 /*
@@ -121,18 +121,25 @@ describe("a website through a relay that can't read it", () => {
     closing.push(() => dht.destroy());
     await expect(lena.websitePass({ room: seen.id, key: 'not a key' })).rejects.toThrow(/connection's key/);
     await expect(mallory.websitePass({ room: seen.id, key: keyPair.publicKey.toString('hex') })).rejects.toThrow();
-    const pass = await lena.websitePass({ room: seen.id, key: keyPair.publicKey.toString('hex') });
+    // A pass for a visit Weave isn't there for after: it holds for hours, and says so.
+    const pass = await lena.websitePass({ room: seen.id, key: keyPair.publicKey.toString('hex'), hours: 2 });
+    expect(JSON.parse(pass.tunnel).proof.until).toBeDefined();
 
-    const tunnel = dht.connect(Buffer.from(pass.key, 'hex'));
-    tunnel.write(pass.tunnel);
-    tunnel.write('GET / HTTP/1.1\r\nHost: saturday\r\nConnection: close\r\n\r\n');
-    const answer = await new Promise<string>((resolve) => {
-      let text = '';
-      tunnel.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
-      tunnel.on('close', () => resolve(text));
-      tunnel.on('error', () => resolve(text));
-    });
-    expect(answer).toContain('the party app');
+    const fetchWith = (line: string) => {
+      const tunnel = dht.connect(Buffer.from(pass.key, 'hex'));
+      tunnel.write(line);
+      tunnel.write('GET / HTTP/1.1\r\nHost: saturday\r\nConnection: close\r\n\r\n');
+      return new Promise<string>((resolve) => {
+        let text = '';
+        tunnel.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+        tunnel.on('close', () => resolve(text));
+        tunnel.on('error', () => resolve(text));
+      });
+    };
+    expect(await fetchWith(pass.tunnel)).toContain('the party app');
+    // Past its time, the host lets it in no more.
+    const expired = proofLine({ id: pass.id } as never, lena.identity, keyPair.publicKey.toString('hex'), 'tunnel', new Date(Date.now() - 60_000).toISOString());
+    expect(await fetchWith(expired)).not.toContain('the party app');
   }, 90_000);
 });
 

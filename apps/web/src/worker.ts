@@ -111,8 +111,8 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 
   /** A ticket for the relay, for a website's tab this page opened. */
-  relayTicket() {
-    return relayTicket();
+  relayTicket(hours?: number) {
+    return relayTicket(hours);
   },
 
   ways() {
