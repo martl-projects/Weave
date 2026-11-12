@@ -99,6 +99,7 @@ import {
 import { WeaveError } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type SpaceAccess } from '@weave/net';
+import { Onboarding } from './onboard.ts';
 import {
   noAgentError,
   type AgentInfo,
@@ -857,6 +858,12 @@ export class WeaveNode implements Backend {
   #content: Content = new Content(this, WeaveNode.contentCore(this));
   /** People: profiles, names, the social graph, avatars, accounts elsewhere (people.ts). */
   #people: People = new People(this, WeaveNode.peopleCore(this));
+  /** Onboarding links: making them, following them, and following back who comes in with one (onboard.ts). */
+  #onboarding: Onboarding = new Onboarding(this, {
+    sealForSelf: (kind, body) => void this.replica.write(this.identity, this.#kernel.sealForSelf({ kind, body })),
+    selfBodies: (kind) => this.#selfBodies(kind),
+  });
+  #followBackTimer: ReturnType<typeof setTimeout> | undefined;
   /** A project's app and artifacts, releases and release lines, this installation's updates (apps.ts). */
   #apps: Apps = new Apps(this, WeaveNode.appsCore(this));
   /** Membership: spaces, invites and knocks, who is in, admissions (membership.ts). */
@@ -923,6 +930,8 @@ export class WeaveNode implements Backend {
       if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#kernel.invalidateDecoded();
       if (isKeys(event)) this.#kernel.takeKeys(event);
       this.#kernel.decodedAdd(event);
+      // Someone may have come in with one of our friendly onboarding links: follow them back, after the batch.
+      if (scoped && this.#onboarding.watched().has(scoped)) this.#scheduleFollowBack();
       // A new encryption key (mine or a peer's) adds an epoch to direct chats.
       if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
@@ -1455,6 +1464,41 @@ export class WeaveNode implements Backend {
 
   invite(...args: Parameters<Membership['invite']>): ReturnType<Membership['invite']> {
     return this.#membership.invite(...args);
+  }
+
+  #scheduleFollowBack(): void {
+    clearTimeout(this.#followBackTimer);
+    this.#followBackTimer = setTimeout(() => void this.#onboarding.followBack().catch(() => {}), 200);
+    this.#followBackTimer.unref?.();
+  }
+
+  createOnboardLink(...args: Parameters<Onboarding['create']>): ReturnType<Onboarding['create']> {
+    return this.#onboarding.create(...args);
+  }
+
+  onboardLinks(): ReturnType<Onboarding['list']> {
+    return this.#onboarding.list();
+  }
+
+  revokeOnboardLink(code: string): ReturnType<Onboarding['revoke']> {
+    return this.#onboarding.revoke(code);
+  }
+
+  lookAtOnboardLink(link: string, storage?: string): ReturnType<Onboarding['look']> {
+    return this.#onboarding.look(link, storage);
+  }
+
+  followOnboardLink(link: string, storage?: string): ReturnType<Onboarding['follow']> {
+    return this.#onboarding.follow(link, storage);
+  }
+
+  /** Follow back who came in with your friendly onboarding links (also done by itself as they arrive). */
+  followBackOnboarded(): Promise<number> {
+    return this.#onboarding.followBack();
+  }
+
+  closeInvite(...args: Parameters<Membership['closeInvite']>): ReturnType<Membership['closeInvite']> {
+    return this.#membership.closeInvite(...args);
   }
 
   joinSpace(...args: Parameters<Membership['joinSpace']>): ReturnType<Membership['joinSpace']> {

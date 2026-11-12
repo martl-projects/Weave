@@ -1,4 +1,4 @@
-import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
+import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_INVITE_CLOSE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
 import { type Admission, type CommunityInfo, type InviteLook, type InviteOptions, type KnockInfo, type MemberInfo, type ProjectInfo, type SpaceInfo, noAgentError } from './backend.ts';
 import type { StoredSpace } from './spacestore.ts';
 import type { Recipient } from '@weave/core';
@@ -103,6 +103,16 @@ export class Membership {
     }
     const boardKeys = this.core.kernel.boardKeysFor(space, access);
     return encodeInvite({ v: 2, space: this.core.kernel.keysForNewcomers(space), invite, key, inviter: this.node.identity.author, expires, entry: this.core.kernel.entryPoint(), ...(boardKeys ? { boards: boardKeys } : {}) });
+  }
+
+  /**
+   * Close one of your invite (or knock) links: whoever came in with it stays, nobody new does. For an onboarding link
+   * taken back, so a forwarded copy of its plan stops too.
+   */
+  async closeInvite(ref: string, invite: string): Promise<void> {
+    const space = this.core.kernel.space(ref);
+    const joined = [...this.core.kernel.state(space).members.values()].filter((m) => m.invite === invite).map((m) => m.did);
+    this.node.replica.write(this.node.identity, sealFor(this.core.managed.cipher(space), { kind: KIND_INVITE_CLOSE, body: { invite, joined } }));
   }
 
   async joinSpace(text: string, note?: string): Promise<SpaceInfo> {
@@ -295,6 +305,7 @@ export class Membership {
       name: this.node.nameOf(m.did),
       since: m.since,
       ...(m.invitedBy ? { invitedBy: m.invitedBy, invitedByName: this.node.nameOf(m.invitedBy) } : {}),
+      ...(m.invite ? { invite: m.invite } : {}),
       ...(m.via ? { via: this.core.kernel.groupRef(m.via, state) } : {}),
       ...(space.kind === 'project' && state.maintainers.has(m.did) ? { maintainer: true as const } : {}),
       ...(lastActive.has(m.did) ? { lastActive: lastActive.get(m.did) } : {}),
