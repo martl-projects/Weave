@@ -29,9 +29,17 @@ export function newRecoveryWords(): RecoveryWords {
   return entropyToMnemonic(randomBytes(32), wordlist);
 }
 
-/** The words cleaned up, or an error saying what's wrong with them. */
+/**
+ * The words cleaned up, or an error saying what's wrong with them. A list copied with its numbers ("1. apple 2. banana",
+ * "1) apple", one per line) or with commas is the same 24 words: numbers and punctuation around them are left out.
+ */
 export function normalizeWords(words: string): RecoveryWords {
-  const clean = words.trim().toLowerCase().split(/\s+/).join(' ');
+  const clean = words
+    .toLowerCase()
+    .split(/[\s,;]+/)
+    .map((w) => w.replace(/^\d+[.):-]*/, '').replace(/[^a-z]+$/, ''))
+    .filter(Boolean)
+    .join(' ');
   if (clean.split(' ').length !== 24) throw new Error('the recovery kit is 24 words');
   if (!validateMnemonic(clean, wordlist)) throw new Error("these words aren't a valid recovery kit — check for typos");
   return clean;
