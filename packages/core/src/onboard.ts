@@ -128,3 +128,38 @@ export function previewTags(preview: { live: boolean; preview?: { title: string;
     ...(preview?.live && preview.image ? [`<meta property="og:image" content="${attr(imageUrl)}">`, '<meta name="twitter:card" content="summary_large_image">'] : ['<meta name="twitter:card" content="summary">']),
   ].join('\n');
 }
+
+/** A game's own app, kept on a home screen (/play/<code>): its name and icon as the storage node has them. */
+export interface PlayApp {
+  title: string;
+  icon?: { w: number; h: number };
+}
+
+/**
+ * The manifest of a game's own app: its name, its icon (the project's, from the storage node; Weave's as well, which every
+ * browser accepts), and /play/<code> to start at. Its id is its own, so it sits next to Weave on a home screen.
+ */
+export function playManifest(app: PlayApp | undefined, code: string, storage: string): Record<string, unknown> {
+  const title = (app?.title ?? 'Weave').slice(0, 45);
+  return {
+    id: `/play/${code}`,
+    name: title,
+    short_name: title.slice(0, 12),
+    start_url: `/play/${code}`,
+    scope: '/',
+    display: 'standalone',
+    background_color: '#008080',
+    theme_color: '#008080',
+    icons: [...(app?.icon ? [{ src: `${storage}/preview/${code}/icon.png`, sizes: `${app.icon.w}x${app.icon.h}`, type: 'image/png', purpose: 'any' }] : []), { src: '/icon.png', sizes: '512x512', type: 'image/png', purpose: 'any' }],
+  };
+}
+
+/** A game's page (/play/<code>): its manifest instead of Weave's, and its name and icon for an iPhone's home screen. */
+export function playTags(html: string, app: PlayApp | undefined, code: string, storage: string): string {
+  const title = attr((app?.title ?? 'Weave').slice(0, 45));
+  return html
+    .replace(/<link rel="manifest"[^>]*>/, `<link rel="manifest" href="/play/${code}/manifest">`)
+    .replace(/<meta name="apple-mobile-web-app-title"[^>]*>/, `<meta name="apple-mobile-web-app-title" content="${title}">`)
+    .replace(/<link rel="apple-touch-icon"[^>]*>/, app?.icon ? `<link rel="apple-touch-icon" href="${attr(`${storage}/preview/${code}/icon.png`)}">` : '<link rel="apple-touch-icon" href="/icon.png">')
+    .replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+}

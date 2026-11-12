@@ -532,4 +532,4 @@ export {
   type TextsOptions,
   type TextValues,
 } from './texts.ts';
-export { newPlanSecret, onboardLink, ONBOARD_PATH, openPlan, parseOnboardLink, parsePlan, planCheck, previewTags, sealPlan, type OnboardPlan, type OnboardStep } from './onboard.ts';
+export { newPlanSecret, onboardLink, ONBOARD_PATH, openPlan, parseOnboardLink, parsePlan, planCheck, playManifest, playTags, previewTags, sealPlan, type PlayApp, type OnboardPlan, type OnboardStep } from './onboard.ts';

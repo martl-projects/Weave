@@ -8,7 +8,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink } from './onboardlinks.tsx';
+import { MyGames, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, PlayRoute } from './onboardlinks.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
@@ -157,6 +157,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         <TreeLink href="#/people" icon="users" label={t('nav.people')} on={route[0] === 'people'} />
         <TreeLink href="#/memberships" icon="star" label={t('nav.memberships')} on={route[0] === 'memberships'} />
         {bridge.workOn && <TreeLink href="#/sessions" icon="code" label={t('nav.sessions')} on={route[0] === 'sessions'} />}
+        <MyGames route={route} />
         <li className="tree-head">
           <Icon name="message" /> {t('tree.chats')}
         </li>
@@ -756,6 +757,7 @@ function Shell() {
     else if (route[0] === 'sessions') center = <SessionsView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
+    else if (route[0] === 'play' && route[1]) center = <PlayRoute code={route[1]} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
     else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;

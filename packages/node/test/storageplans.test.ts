@@ -120,6 +120,43 @@ describe('onboarding links on a storage node', { timeout: 60_000 }, () => {
     await expect((await connect()).putPlan(martl, { sealed: 'p', check: 'c', uses: 0 })).rejects.toThrow(/whole number/);
   });
 
+  it("keeps a game's own app (name, square icon, manifest) while the link isn't taken back, used up or not", async () => {
+    const web = mkdtempSync(join(tmpdir(), 'weave-plans-web-'));
+    dirs.push(web);
+    writeFileSync(join(web, 'index.html'), '<!doctype html><html><head><title>Weave</title><link rel="manifest" href="/manifest.json"><link rel="apple-touch-icon" href="/icon.png"><meta name="apple-mobile-web-app-title" content="Weave"></head><body></body></html>');
+    const { dir, connect, http } = await start(web);
+    const martl = createIdentity();
+    PlanStore.allowIn(dir, martl.did);
+    // A 192×192 PNG, as far as its header says.
+    const icon = Buffer.alloc(40);
+    PNG.copy(icon, 0, 0, 8);
+    icon.writeUInt32BE(13, 8);
+    icon.write('IHDR', 12, 'latin1');
+    icon.writeUInt32BE(192, 16);
+    icon.writeUInt32BE(192, 20);
+    await expect((await connect()).putPlan(martl, { sealed: 'p', check: 'c', preview: { title: 'T' }, icon: Buffer.from('nope').toString('base64') })).rejects.toThrow(/app icon is a PNG/);
+    const code = await (await connect()).putPlan(martl, { sealed: 'p', check: 'c', uses: 1, preview: { title: 'Pferderennen' }, icon: icon.toString('base64') });
+    await (await connect()).takePlan(code, 'c', false);
+
+    // Used up: the link no longer brings anyone in, but the game's own app stays for who's in.
+    expect(await (await fetch(`${http}/preview/${code}`)).json()).toEqual({ live: false });
+    expect(await (await fetch(`${http}/preview/${code}/app`)).json()).toEqual({ title: 'Pferderennen', icon: { w: 192, h: 192 } });
+    expect(Buffer.from(await (await fetch(`${http}/preview/${code}/icon.png`)).arrayBuffer())).toEqual(icon);
+    const manifest = await (await fetch(`${http}/play/${code}/manifest`)).json();
+    expect(manifest).toMatchObject({ id: `/play/${code}`, name: 'Pferderennen', start_url: `/play/${code}`, display: 'standalone', icons: [{ src: `${http}/preview/${code}/icon.png`, sizes: '192x192' }, { src: '/icon.png', sizes: '512x512' }] });
+    const page = await (await fetch(`${http}/play/${code}`)).text();
+    expect(page).toContain(`<link rel="manifest" href="/play/${code}/manifest">`);
+    expect(page).toContain('<meta name="apple-mobile-web-app-title" content="Pferderennen">');
+    expect(page).toContain(`<link rel="apple-touch-icon" href="${http}/preview/${code}/icon.png">`);
+    expect(page).toContain('<title>Pferderennen</title>');
+
+    // Taken back: no app of its own any more; the page is Weave's.
+    await (await connect()).revokePlan(martl, code);
+    expect((await fetch(`${http}/preview/${code}/app`)).status).toBe(404);
+    expect((await fetch(`${http}/preview/${code}/icon.png`)).status).toBe(404);
+    expect(await (await fetch(`${http}/play/${code}/manifest`)).json()).toMatchObject({ name: 'Weave', icons: [{ src: '/icon.png' }] });
+  });
+
   it('serves the preview and its picture openly, counting no use, and says when a link no longer works', async () => {
     const web = mkdtempSync(join(tmpdir(), 'weave-plans-web-'));
     dirs.push(web);

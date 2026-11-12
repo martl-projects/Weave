@@ -30,6 +30,15 @@ const play = (room: WebsiteInfo) => {
   void bridge.openApp(room.url, room.name);
 };
 
+/**
+ * A quick start (an onboarding link's /play/<code>, My games) asks to play in a project: its Live view takes the wish once
+ * and enters its game, as ▶ would. A browser opens no tab by itself, so on the web at a computer's width the ▶ waits,
+ * in focus, for the one click; on a phone's width the game opens over Weave at once.
+ */
+const playWanted = new Set<string>();
+export const playSoon = (project: string): void => void playWanted.add(project);
+const takePlay = (project: string): boolean => playWanted.delete(project);
+
 /** On a phone's width, Weave on the web opens a website over itself rather than in a tab: no second browser bar. */
 const inAFrame = () => !!bridge.web && matchMedia('(max-width: 700px)').matches;
 
@@ -121,13 +130,40 @@ const whoFor = (room: WebsiteInfo, shows: ShowInfo[]): string[] => {
   return [...(room.show ? [t('web.ticket.holders.of', { show: show?.name ?? t('web.a.show') })] : []), ...(room.groups ?? []).map((g) => t('web.members.of', { tier: g.name ?? t('web.a.tier') }))];
 };
 
-function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) {
+function WebsiteCard({ room, shows, autoplay = false }: { room: WebsiteInfo; shows: ShowInfo[]; autoplay?: boolean }) {
   const { t } = useTexts();
   const show = room.show ? shows.find((s) => s.id === room.show) : undefined;
   const who = whoFor(room, shows);
   const label = room.service?.label ?? t(room.mine ? 'web.open' : 'web.play');
   // Open over Weave, on a phone (WebsiteFrame).
   const [framed, setFramed] = useState(false);
+  // Asked to play (a quick start): enter as ▶ would, as soon as the game can be entered; once.
+  const wants = useRef(autoplay);
+  const playButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!wants.current) return;
+    if (room.mine) {
+      if (!room.service?.ready) return;
+      wants.current = false;
+      return play(room);
+    }
+    if (bridge.web) {
+      if (!room.mayJoin) return void (wants.current = false);
+      wants.current = false;
+      if (inAFrame()) setFramed(true);
+      else playButton.current?.focus();
+      return;
+    }
+    if (!room.joined) {
+      if (!room.mayJoin) return void (wants.current = false);
+      void api('visitWebsite', room.id).then(bump, () => void (wants.current = false));
+      return;
+    }
+    if (room.url) {
+      wants.current = false;
+      play(room);
+    }
+  }, [room.joined, room.url, room.service?.ready, room.mayJoin]);
   // "Race, offered by martl · website".
   const offered = `${room.host.name ?? shortDid(room.host.did)} · ${room.offeredBy?.name ?? t('web.a.service')}`;
   let main;
@@ -145,7 +181,7 @@ function WebsiteCard({ room, shows }: { room: WebsiteInfo; shows: ShowInfo[] }) 
   else if (bridge.web)
     main = room.mayJoin ? (
       <>
-        <button className="default play" onClick={() => attempt(async () => (inAFrame() ? setFramed(true) : bridge.web!.openWebsite(room)))}>
+        <button ref={playButton} className={`default play${autoplay ? ' wanted' : ''}`} onClick={() => attempt(async () => (inAFrame() ? setFramed(true) : bridge.web!.openWebsite(room)))}>
           ▶ {label}
         </button>
         {framed && <WebsiteFrame room={room} onClose={() => setFramed(false)} />}
@@ -1322,6 +1358,8 @@ export function InstallRelease({ project, maintainer, only, onDone }: { project:
  */
 export function ProjectLiveView({ project, members, meDid }: { project: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { t } = useTexts();
+  // A quick start's wish to play here: the first game anyone may enter gets it.
+  const [autoplay] = useState(() => takePlay(project.id));
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
   const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
@@ -1343,7 +1381,7 @@ export function ProjectLiveView({ project, members, meDid }: { project: SpaceInf
       {rooms && !rooms.length && <p className="empty">{t('live.nothing.running', { project: project.name })}</p>}
       {(rooms ?? []).map((room) => (
         <div key={room.id}>
-          <WebsiteCard room={room} shows={shows ?? []} />
+          <WebsiteCard room={room} shows={shows ?? []} autoplay={autoplay && room.id === (rooms ?? []).find((r) => r.mine || r.mayJoin)?.id} />
           <HostedStatus hosted={(services ?? []).flatMap((s) => s.websites ?? []).find((r) => r.id === room.id)} />
         </div>
       ))}

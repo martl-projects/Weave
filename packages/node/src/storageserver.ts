@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import type HyperDHT from 'hyperdht';
 import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
-import { previewTags } from '@weave/core';
+import { playManifest, playTags, previewTags } from '@weave/core';
 import { PLAN_CODE } from './storageplans.ts';
 import { textSocket } from './websocket.ts';
 
@@ -252,6 +252,18 @@ export function storageServer(node: StorageNode, options: StorageServerOptions):
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');
     if (url.pathname.startsWith('/link/')) return handover(req, res, url.pathname.slice('/link/'.length));
     // An onboarding link's preview: open by design, and nothing of the sealed plan. Fetching it counts no use.
+    // A game's own app (/play/<code>): its name and icon, open like the preview, while its link isn't taken back.
+    const app = /^\/preview\/([A-Za-z0-9]+)\/(app|icon\.png)$/.exec(url.pathname);
+    if (app && PLAN_CODE.test(app[1]) && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (app[2] === 'icon.png') {
+        const icon = node.plans.icon(app[1]);
+        if (!icon) return res.writeHead(404).end();
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': icon.length, 'cache-control': 'public, max-age=3600', 'x-content-type-options': 'nosniff', 'access-control-allow-origin': '*' });
+        return res.end(req.method === 'HEAD' ? undefined : icon);
+      }
+      const info = node.plans.app(app[1]);
+      return res.writeHead(info ? 200 : 404, { 'content-type': 'application/json', 'cache-control': 'public, max-age=60', 'access-control-allow-origin': '*' }).end(JSON.stringify(info ?? {}));
+    }
     const preview = /^\/preview\/([A-Za-z0-9]+)(\.png)?$/.exec(url.pathname);
     if (preview && PLAN_CODE.test(preview[1]) && (req.method === 'GET' || req.method === 'HEAD')) {
       if (preview[2]) {
@@ -263,6 +275,17 @@ export function storageServer(node: StorageNode, options: StorageServerOptions):
       const info = node.plans.preview(preview[1]);
       if (!info) return res.writeHead(404, { 'content-type': 'application/json' }).end('{}');
       return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'public, max-age=60', 'access-control-allow-origin': '*' }).end(JSON.stringify(info));
+    }
+    // A game's own app, from a node that serves the page: the page with the game's manifest, and that manifest.
+    const playPage = /^\/play\/([A-Za-z0-9]{8})(\/manifest)?$/.exec(url.pathname);
+    if (playPage && options.web && (req.method === 'GET' || req.method === 'HEAD')) {
+      const base = `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host}`;
+      const info = node.plans.app(playPage[1]);
+      if (playPage[2]) return res.writeHead(200, { 'content-type': 'application/manifest+json', 'cache-control': 'no-cache' }).end(JSON.stringify(playManifest(info, playPage[1], base)));
+      const index = join(options.web, 'index.html');
+      if (!existsSync(index)) return res.writeHead(404).end();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+      return res.end(req.method === 'HEAD' ? undefined : playTags(readFileSync(index, 'utf8'), info, playPage[1], base));
     }
     // The page of an onboarding link, from a node that serves the page: index.html with the preview's tags.
     const join_ = /^\/j\/([A-Za-z0-9]+)$/.exec(url.pathname);

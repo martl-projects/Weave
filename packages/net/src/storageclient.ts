@@ -49,6 +49,8 @@ export interface PutPlan {
   preview?: { title: string; text?: string };
   /** The preview's picture: a PNG, base64. */
   image?: string;
+  /** The game's app icon (square, the project's icon): a PNG, base64. */
+  icon?: string;
   uses?: number;
   expires?: string;
 }

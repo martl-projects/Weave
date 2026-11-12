@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { OnboardLinkInfo, OnboardLook, SpaceInfo } from '@weave/node/client';
+import type { OnboardLinkInfo, OnboardLook, PlayLinkInfo, SpaceInfo } from '@weave/node/client';
+import { bridge } from './bridge.ts';
+import { playSoon } from './websites.tsx';
 import { Icon } from './icons.tsx';
 import { api, bump, navigate, useApi } from './lib.ts';
 import { copy, spaceHref } from './posts.tsx';
@@ -204,16 +206,21 @@ export function OnboardLinkDialog() {
     window.addEventListener('weave-onboard-link', onLink);
     return () => window.removeEventListener('weave-onboard-link', onLink);
   }, []);
-  if (!link) return null;
   const close = () => setLink(undefined);
-  const follow = async () => {
-    const done = await attempt(() => api<{ open?: SpaceInfo; welcome?: string }>('followOnboardLink', link));
+  const follow = async (quiet = false) => {
+    const done = await attempt(() => api<{ open?: SpaceInfo; welcome?: string; play?: true }>('followOnboardLink', link));
     if (!done) return;
     bump();
     close();
-    toast(done.welcome ? `${look?.by.name ?? ''}: ${done.welcome}` : t('playlink.joined', { title: look?.title ?? '' }));
-    if (done.open) navigate(spaceHref(done.open));
+    if (!quiet) toast(done.welcome ? `${look?.by.name ?? ''}: ${done.welcome}` : t('playlink.joined', { title: look?.title ?? '' }));
+    if (done.open) playIn(done.open, !!done.play);
   };
+  // Your own link, or one whose spaces you're in: a quick start, straight in.
+  const quick = !!look && (look.mine || look.spaces.every((s) => s.member));
+  useEffect(() => {
+    if (quick) void follow(true);
+  }, [quick, link]);
+  if (!link || quick) return null;
   const by = look?.by.name ?? look?.by.did.slice(0, 16) ?? '';
   const pending = look?.spaces.filter((s) => !s.member) ?? [];
   return (
@@ -222,8 +229,6 @@ export function OnboardLinkDialog() {
         <p>{t('inv.doesnt.work', { problem: error })}</p>
       ) : !look ? (
         <p>{t('inv.looking')}</p>
-      ) : look.mine ? (
-        <p>{t('playlink.join.mine')}</p>
       ) : (
         <>
           <p>{t('playlink.join.ask', { by, title: look.title })}</p>
@@ -231,12 +236,76 @@ export function OnboardLinkDialog() {
           <p className="small muted">{pending.length ? t('playlink.join.spaces', { spaces: pending.map((s) => s.name).join(', '), by }) : t('playlink.join.in.already')}</p>
           <div className="buttons">
             <button onClick={close}>{t('inv.no')}</button>
-            <AsyncButton className="default" onClick={follow}>
+            <AsyncButton className="default" onClick={() => follow()}>
               {t('inv.yes.join')}
             </AsyncButton>
           </div>
         </>
       )}
     </Modal>
+  );
+}
+
+/** Where a project's game is: its Live view, which enters the game (playSoon). */
+export function playIn(space: { id: string; kind: string }, play: boolean): void {
+  const prefix = ({ project: 'p', community: 'r', group: 'g' } as Record<string, string>)[space.kind] ?? 'p';
+  if (play && space.kind === 'project') {
+    playSoon(space.id);
+    return navigate(`#/${prefix}/${space.id}/live`);
+  }
+  navigate(`#/${prefix}/${space.id}`);
+}
+
+/** /play/<code>: a quick start, from My games or an icon on the home screen. Opens its project and enters its game. */
+export function PlayRoute({ code }: { code: string }) {
+  const { t } = useTexts();
+  const { data: links } = useApi(() => api<PlayLinkInfo[]>('playLinks'), []);
+  const link = links?.find((l) => l.code === code);
+  useEffect(() => {
+    if (link) playIn(link.space, link.play);
+  }, [link?.code]);
+  if (!links || link) return null;
+  return (
+    <div className="center">
+      <section className="pane-main">
+        <header className="pane-head">
+          <b>{t('playlink.unknown.title')}</b>
+        </header>
+        <p className="empty">{t('playlink.unknown')}</p>
+      </section>
+    </div>
+  );
+}
+
+/** Your games: quick starts in the places tree, ▶ to play; ⋯ keeps one as an app of its own, or lets it go. */
+export function MyGames({ route }: { route: string[] }) {
+  const { t } = useTexts();
+  const { data: links } = useApi(() => api<PlayLinkInfo[]>('playLinks').catch(() => [] as PlayLinkInfo[]), []);
+  if (!links?.length) return null;
+  const asApp = (l: PlayLinkInfo) => {
+    const url = `${l.page}/play/${l.code}`;
+    // In Weave Web on the link's own page: go there, where the browser offers it as an app. Elsewhere: the browser.
+    if (bridge.web && new URL(l.page).origin === location.origin) location.assign(url);
+    else window.open(url, '_blank', 'noopener');
+  };
+  return (
+    <>
+      <li className="tree-head">
+        <Icon name="globe" /> {t('playlink.games')}
+      </li>
+      {links.map((l) => (
+        <li key={l.code} className="tree-game">
+          <a className={`tree-link${route[0] === 'play' && route[1] === l.code ? ' on' : ''}`} href={`#/play/${l.code}`} title={t('playlink.play', { title: l.title })}>
+            <span className="tree-label">▶ {l.title}</span>
+          </a>
+          <button className="tree-game-app" title={t('playlink.as.app')} onClick={() => asApp(l)}>
+            <Icon name="externalLink" />
+          </button>
+          <button className="tree-game-app" title={t('playlink.remove')} onClick={() => void attempt(() => api('removePlayLink', l.code).then(bump))}>
+            <Icon name="close" />
+          </button>
+        </li>
+      ))}
+    </>
   );
 }

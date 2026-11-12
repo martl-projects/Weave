@@ -221,6 +221,7 @@ export class Onboarding {
     // The open preview: the creator's words, or a line saying who invites to what; the project's picture if it's a PNG.
     let preview: { title: string; text?: string } | undefined;
     let image: string | undefined;
+    let icon: string | undefined;
     if (input.preview !== false) {
       const p = input.preview ?? {};
       preview = { title: (p.title?.trim() || title).slice(0, 100), text: (p.text?.trim() || `${name ?? 'Someone'} invites you to ${title} on Weave`).slice(0, 300) };
@@ -231,11 +232,17 @@ export class Onboarding {
         const bytes = blob && Buffer.from(blob.data, 'base64');
         if (bytes && blob.type === 'image/png' && PNG.every((b, i) => bytes[i] === b) && bytes.length <= 300 * 1024) image = blob.data;
       }
+      // The game's own app (/play/<code>) takes the project's icon: square, where a banner isn't.
+      if (project.page.icon && parseBlobRef(project.page.icon)) {
+        const blob = await node.blob(project.page.icon).catch(() => undefined);
+        const bytes = blob && Buffer.from(blob.data, 'base64');
+        if (bytes && blob.type === 'image/png' && PNG.every((b, i) => bytes[i] === b) && bytes.length <= 300 * 1024) icon = blob.data;
+      }
     }
 
     const secret = newPlanSecret();
     const code = await withStorage(storage, page, (client) =>
-      client.putPlan(node.identity, { sealed: sealPlan(plan, secret), check: planCheck(secret), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(input.uses ? { uses: input.uses } : {}), expires }),
+      client.putPlan(node.identity, { sealed: sealPlan(plan, secret), check: planCheck(secret), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(icon ? { icon } : {}), ...(input.uses ? { uses: input.uses } : {}), expires }),
     ).catch((error: Error) => {
       // Nothing was made: the invites go again.
       for (const i of invites) void node.closeInvite(i.space, i.invite).catch(() => {});

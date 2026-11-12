@@ -59,8 +59,13 @@ writeFileSync(
 // Function's response doesn't get _headers. Not in pages-hashes.json: it serves the same page, with tags as text only.
 rmSync(join(dist, 'functions'), { recursive: true, force: true });
 await build({
-  entryPoints: [join(import.meta.dirname, 'src', 'preview-function.ts')],
-  outfile: join(dist, 'functions', 'j', '[code].js'),
+  // Routes by place: /j/<code>, /play/<code> (a game's own app) and /play/<code>/manifest.
+  entryPoints: {
+    'j/[code]': join(import.meta.dirname, 'src', 'functions', 'j.ts'),
+    'play/[code]': join(import.meta.dirname, 'src', 'functions', 'play.ts'),
+    'play/[code]/manifest': join(import.meta.dirname, 'src', 'functions', 'play-manifest.ts'),
+  },
+  outdir: join(dist, 'functions'),
   bundle: true,
   format: 'esm',
   platform: 'neutral',

@@ -19,6 +19,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
+import { playManifest, playTags } from '@weave/core';
 import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { WebSocketServer } from 'ws';
@@ -110,6 +111,16 @@ const server = createServer(async (req, res) => {
   }
   const preview = /^\/preview\/([A-Za-z0-9]{8})$/.exec(url.pathname);
   if (preview) return json(storage.plans.preview(preview[1]) ?? {});
+  // A game's own app (/play/<code>): the page with its manifest, the manifest, and its icon.
+  const base = `http://${req.headers.host}`;
+  const play = /^\/play\/([A-Za-z0-9]{8})(\/manifest)?$/.exec(url.pathname);
+  if (play && play[2]) return res.writeHead(200, { 'content-type': 'application/manifest+json' }).end(JSON.stringify(playManifest(storage.plans.app(play[1]), play[1], base)));
+  if (play) return res.writeHead(200, { 'content-type': 'text/html' }).end(playTags(readFileSync(join(dist, 'index.html'), 'utf8'), storage.plans.app(play[1]), play[1], base));
+  const appIcon = /^\/preview\/([A-Za-z0-9]{8})\/icon\.png$/.exec(url.pathname);
+  if (appIcon) {
+    const icon = storage.plans.icon(appIcon[1]);
+    return icon ? res.writeHead(200, { 'content-type': 'image/png' }).end(icon) : res.writeHead(404).end();
+  }
   // A link to the group, to paste into "Open link"; what's said there, from the address bar too.
   if (url.pathname === '/dev/link') return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(await person.invite('Climb'));
   if (url.pathname === '/dev/say') {

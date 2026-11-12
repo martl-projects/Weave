@@ -143,6 +143,13 @@ if (/^\/j\/[A-Za-z0-9]{8}$/.test(location.pathname) && location.hash.length > 1)
   history.replaceState(null, '', '/');
 }
 const onboardLink = sessionStorage.getItem(ONBOARD_KEY) ?? undefined;
+/*
+ * /play/<code>: a quick start kept as an app of its own (the home screen, the start menu). The address stays, since its
+ * manifest is the game's (name, picture, start), and the renderer goes to the game (#/play/<code>) once the account is
+ * open; nothing secret is in it.
+ */
+const playing = /^\/play\/([A-Za-z0-9]{8})$/.exec(location.pathname)?.[1];
+if (playing && !location.hash.startsWith('#/play/')) history.replaceState(null, '', `${location.pathname}#/play/${playing}`);
 /** A storage node over a socket of this page (its origin is the page's). */
 async function storageClient(): Promise<StorageClient> {
   const ws = new WebSocket(STORAGE);
@@ -197,8 +204,9 @@ async function followOnboard(counted: boolean): Promise<void> {
     return;
   }
   const done = await own<{ open?: { kind: string; id: string } }>('followOnboardLink', onboardLink, STORAGE_AT, { counted: true });
-  const prefix: Record<string, string> = { community: 'r', project: 'p', group: 'g' };
-  if (done.open && prefix[done.open.kind]) location.hash = `#/${prefix[done.open.kind]}/${done.open.id}`;
+  // Kept as a quick start: its route opens the project and enters the game.
+  const code = parseOnboardLink(onboardLink)?.code;
+  if (done.open && code) location.hash = `#/play/${code}`;
 }
 
 // An invitation stays out of the address bar, the history and whatever is shared from it.

@@ -39,11 +39,19 @@ interface PlanFile {
   check: string;
   preview?: PlanPreview;
   image?: true;
+  /** The game's app icon (plans/<code>.icon.png): the project's icon, its size as its PNG says. */
+  icon?: { w: number; h: number };
   uses?: number;
   used: number;
   expires?: string;
   revoked?: true;
   created: string;
+}
+
+/** What a game's own app is called and looks like (/play/<code>): for members, so it stays when the link is used up. */
+export interface PlanAppInfo {
+  title: string;
+  icon?: { w: number; h: number };
 }
 
 /** What a creator sees of one of their links. */
@@ -153,11 +161,19 @@ export class PlanStore {
       image = Buffer.from(input.image, 'base64');
       if (image.length > MAX_PREVIEW_IMAGE || !PNG.every((b, i) => image![i] === b)) throw new Error(`a preview picture is a PNG of at most ${MAX_PREVIEW_IMAGE / 1024} KB`);
     }
+    let icon: { data: Buffer; w: number; h: number } | undefined;
+    if (input.icon !== undefined && input.icon !== null) {
+      const data = typeof input.icon === 'string' ? Buffer.from(input.icon, 'base64') : Buffer.alloc(0);
+      if (data.length > MAX_PREVIEW_IMAGE || data.length < 24 || !PNG.every((b, i) => data[i] === b)) throw new Error(`an app icon is a PNG of at most ${MAX_PREVIEW_IMAGE / 1024} KB`);
+      // The size, from its IHDR (width and height right after the signature and the chunk's header).
+      icon = { data, w: data.readUInt32BE(16), h: data.readUInt32BE(20) };
+    }
     const preview = previewOf(input.preview);
     let code = newCode();
     while (existsSync(this.#path(code))) code = newCode();
-    const plan: PlanFile = { code, by, sealed: input.sealed, check: hashOf(input.check), ...(preview ? { preview } : {}), ...(image && preview ? { image: true as const } : {}), ...(uses ? { uses } : {}), used: 0, ...(expires ? { expires } : {}), created: new Date().toISOString() };
+    const plan: PlanFile = { code, by, sealed: input.sealed, check: hashOf(input.check), ...(preview ? { preview } : {}), ...(image && preview ? { image: true as const } : {}), ...(icon && preview ? { icon: { w: icon.w, h: icon.h } } : {}), ...(uses ? { uses } : {}), used: 0, ...(expires ? { expires } : {}), created: new Date().toISOString() };
     if (image && preview) writeFileSync(join(this.#dir, `${code}.png`), image);
+    if (icon && preview) writeFileSync(join(this.#dir, `${code}.icon.png`), icon.data);
     writeJson(this.#path(code), plan);
     return code;
   }
@@ -211,9 +227,25 @@ export class PlanStore {
     return existsSync(path) ? readFileSync(path) : undefined;
   }
 
+  /** A game's own app (its name and icon), while its link isn't taken back: used up or expired, members still play. */
+  app(code: unknown): PlanAppInfo | undefined {
+    const plan = this.#read(code);
+    if (!plan || plan.revoked || !plan.preview) return undefined;
+    return { title: plan.preview.title, ...(plan.icon ? { icon: plan.icon } : {}) };
+  }
+
+  /** That app's icon. */
+  icon(code: unknown): Buffer | undefined {
+    const plan = this.#read(code);
+    if (!plan || plan.revoked || !plan.icon) return undefined;
+    const path = join(this.#dir, `${plan.code}.icon.png`);
+    return existsSync(path) ? readFileSync(path) : undefined;
+  }
+
   /** Forget a link entirely (tests, or an operator cleaning up). */
   remove(code: string): void {
     rmSync(this.#path(code), { force: true });
     rmSync(join(this.#dir, `${code}.png`), { force: true });
+    rmSync(join(this.#dir, `${code}.icon.png`), { force: true });
   }
 }

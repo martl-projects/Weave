@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { linkPage } from '../src/preview-function.ts';
+import { linkPage, playManifestResponse, playPage } from '../src/preview-function.ts';
 
 /*
  * The Pages Function behind web.martl.io/j/<code> (idea bZFDCQNT): the page as Pages has it, with the open preview's tags
@@ -39,5 +39,35 @@ describe("an onboarding link's page on Pages", () => {
     const down = await linkPage(request, assets, 'Pf3kQ9xz', { ...options({}), fetch: (async () => { throw new Error('down'); }) as unknown as typeof fetch });
     expect(down.status).toBe(200);
     expect(await linkPage(request, assets, 'bad!code', { ...options({}), fetch: (async () => { throw new Error('not asked'); }) as unknown as typeof fetch }).then((r) => r.status)).toBe(200);
+  });
+});
+
+describe("a game's own app on Pages", () => {
+  const page = '<!doctype html><html><head><title>Weave</title><link rel="manifest" href="/manifest.json"><link rel="apple-touch-icon" href="/icon.png"><meta name="apple-mobile-web-app-title" content="Weave"></head><body></body></html>';
+  const pages = { fetch: async () => new Response(page, { headers: { 'content-type': 'text/html' } }) };
+  const storageSays = (answer: unknown, status = 200) => ({
+    storage: 'https://storage.martl.io',
+    csp: "default-src 'none'",
+    fetch: (async (url: string) => {
+      expect(url).toBe('https://storage.martl.io/preview/Pf3kQ9xz/app');
+      return new Response(JSON.stringify(answer), { status });
+    }) as unknown as typeof fetch,
+  });
+
+  it('names the page and its manifest after the game, with its icon, escaped', async () => {
+    const res = await playPage(new Request('https://web.martl.io/play/Pf3kQ9xz'), pages, 'Pf3kQ9xz', storageSays({ title: 'Pferde"rennen', icon: { w: 256, h: 256 } }));
+    const html = await res.text();
+    expect(html).toContain('<link rel="manifest" href="/play/Pf3kQ9xz/manifest">');
+    expect(html).toContain('<meta name="apple-mobile-web-app-title" content="Pferde&quot;rennen">');
+    expect(html).toContain('<link rel="apple-touch-icon" href="https://storage.martl.io/preview/Pf3kQ9xz/icon.png">');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'");
+    const manifest = await (await playManifestResponse('Pf3kQ9xz', storageSays({ title: 'Pferderennen', icon: { w: 256, h: 256 } }))).json();
+    expect(manifest).toMatchObject({ id: '/play/Pf3kQ9xz', name: 'Pferderennen', short_name: 'Pferderennen', start_url: '/play/Pf3kQ9xz', icons: [{ sizes: '256x256' }, { src: '/icon.png' }] });
+  });
+
+  it("is Weave's own when the storage node has no app for it", async () => {
+    const manifest = await (await playManifestResponse('Pf3kQ9xz', storageSays({}, 404))).json();
+    expect(manifest).toMatchObject({ name: 'Weave', icons: [{ src: '/icon.png' }] });
+    expect(await (await playPage(new Request('https://web.martl.io/play/Pf3kQ9xz'), pages, 'Pf3kQ9xz', storageSays({ title: 'x', icon: { w: 'huge' } }))).text()).toContain('<link rel="apple-touch-icon" href="/icon.png">');
   });
 });
