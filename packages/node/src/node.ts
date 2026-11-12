@@ -1510,6 +1510,15 @@ export class WeaveNode implements Backend {
     return this.#onboarding.follow(link, storage, options);
   }
 
+  /** Your quick starts: links you followed or made, to their project and game. */
+  async playLinks(): Promise<ReturnType<Onboarding['playLinks']>> {
+    return this.#onboarding.playLinks();
+  }
+
+  async removePlayLink(code: string): Promise<void> {
+    this.#onboarding.removePlayLink(code);
+  }
+
   /** Follow back who came in with your friendly onboarding links (also done by itself as they arrive). */
   followBackOnboarded(): Promise<number> {
     return this.#onboarding.followBack();

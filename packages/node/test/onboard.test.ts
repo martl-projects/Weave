@@ -72,6 +72,11 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     expect((await lena.profile(martl.identity.author)).following).toBe(true);
     expect((await lena.spaces()).map((s) => s.name)).toContain('Pferderennen');
     expect((await martl.onboardLinks())[0].used).toBe(1);
+    // Kept as her quick start; following it again (she's in) opens it and uses nothing up.
+    expect(await lena.playLinks()).toMatchObject([{ code: made.code, title: 'Pferderennen', space: { name: 'Pferderennen', kind: 'project' }, play: true }]);
+    expect(await lena.followOnboardLink(made.link)).toMatchObject({ open: { name: 'Pferderennen' }, play: true });
+    expect((await martl.onboardLinks())[0].used).toBe(1);
+    expect((await lena.playLinks()).length).toBe(1);
 
     // martl's node hears of her joining and follows her back: friends.
     sync(lena, martl);
@@ -109,7 +114,11 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     PlanStore.allowIn(dir, martl.identity.did);
     const made = await martl.createOnboardLink({ project: 'Snake Flight', page, friends: false, preview: false });
     expect((await martl.lookAtOnboardLink(made.link)).mine).toBe(true);
-    await expect(martl.followOnboardLink(made.link)).rejects.toThrow(/your own link/);
+    // One's own link is a quick start: it opens the project, and it's kept as one.
+    expect(await martl.followOnboardLink(made.link)).toMatchObject({ open: { name: 'Snake Flight' }, joined: [] });
+    expect((await martl.playLinks()).map((p) => [p.code, p.space.name, p.play])).toEqual([[made.code, 'Snake Flight', false]]);
+    await martl.removePlayLink(made.code);
+    expect(await martl.playLinks()).toEqual([]);
     const lena = person('Lena');
     await expect(lena.lookAtOnboardLink(made.link.replace(/#.*/, '#AAAAAAAAAAAAAAAAAAAAAA'))).rejects.toThrow(/is the link whole/);
     await expect(lena.lookAtOnboardLink(`${page}/j/${made.code}`)).rejects.toThrow(/not an onboarding link/);

@@ -21,6 +21,21 @@ export const KIND_ONBOARD_LINK = 'weave.onboard.link';
  * at their meeting point), so the follow both ways arrives.
  */
 export const KIND_ONBOARD_HELLO = 'weave.onboard.hello';
+/**
+ * A link kept as a quick start, sealed to oneself (it follows you to your devices): its code, what it opens, and whether
+ * to play there. Saved when you follow a link or make one; /play/<code> and My games open it without asking anyone.
+ */
+export const KIND_PLAY_LINK = 'weave.onboard.play';
+
+/** A quick start: a link's project, and its game, one click (or one icon on the home screen) away. */
+export interface PlayLinkInfo {
+  code: string;
+  /** The link's page, where /play/<code> is (an app of its own on a home screen). */
+  page: string;
+  title: string;
+  space: { id: string; kind: string; name: string };
+  play: boolean;
+}
 
 /** Where the link's page is, and the storage node it uses: Weave Web's own, unless said otherwise. */
 export const WEB_PAGE = 'https://web.martl.io';
@@ -228,6 +243,7 @@ export class Onboarding {
     });
     const record: LinkRecord = { code, link: onboardLink(page, code, secret), page, storage, title, invites, friends, created: new Date().toISOString(), expires, ...(input.uses ? { uses: input.uses } : {}) };
     this.#core.sealForSelf(KIND_ONBOARD_LINK, record as unknown as Json);
+    this.#savePlay(page, code, title, project, input.play === true);
     return this.#info(record);
   }
 
@@ -289,9 +305,18 @@ export class Onboarding {
    */
   async follow(text: string, storage?: string, options: { counted?: boolean } = {}): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }> {
     const { plan, parts, storage: at } = await this.#open(text, storage);
-    if (plan.by.did === this.#node.identity.author) throw new Error("that's your own link");
+    const own = plan.by.did === this.#node.identity.author;
+    const mySpaces = await this.#node.spaces();
+    // In all its spaces already (or it's yours): it's a quick start now, no use of it is taken.
+    const inAll = own || plan.steps.every((s) => s.do !== 'join' || mySpaces.some((x) => x.id === s.space.id));
     // Weave Web took its use already, with the account it made (counted).
-    if (!options.counted) await withStorage(at, parts.page, (client) => client.takePlan(parts.code, planCheck(parts.secret), false));
+    if (!options.counted && !inAll) await withStorage(at, parts.page, (client) => client.takePlan(parts.code, planCheck(parts.secret), false));
+    if (own) {
+      const openStep = plan.steps.find((s): s is Extract<OnboardStep, { do: 'open' }> => s.do === 'open');
+      const open = openStep && mySpaces.find((s) => s.id === openStep.space);
+      if (open) this.#savePlay(parts.page, parts.code, plan.title, open, !!openStep.play);
+      return { ...(open ? { open } : {}), joined: [], ...(openStep?.play ? { play: true as const } : {}) };
+    }
     const joined: SpaceInfo[] = [];
     let openStep: Extract<OnboardStep, { do: 'open' }> | undefined;
     let welcome: string | undefined;
@@ -312,7 +337,30 @@ export class Onboarding {
       else if (step.do === 'welcome') welcome = step.text;
     }
     const open = openStep && (joined.find((s) => s.id === openStep.space) ?? (await this.#node.spaces()).find((s) => s.id === openStep.space));
+    if (open) this.#savePlay(parts.page, parts.code, plan.title, open, !!openStep?.play);
     return { ...(open ? { open } : {}), joined, ...(welcome ? { welcome } : {}), ...(openStep?.play ? { play: true as const } : {}) };
+  }
+
+  #savePlay(page: string, code: string, title: string, space: SpaceInfo, play: boolean): void {
+    if (this.playLinks().some((p) => p.code === code)) return;
+    this.#core.sealForSelf(KIND_PLAY_LINK, { code, page, title, space: { id: space.id, kind: space.kind, name: space.name }, play });
+  }
+
+  /** Your quick starts, the newest first: links you followed or made, each to its project and game. */
+  playLinks(): PlayLinkInfo[] {
+    const byCode = new Map<string, PlayLinkInfo | null>();
+    for (const b of this.#core.selfBodies(KIND_PLAY_LINK)) {
+      if (typeof b.code !== 'string') continue;
+      const space = b.space as PlayLinkInfo['space'] | undefined;
+      if (b.removed === true) byCode.set(b.code, null);
+      else if (typeof b.page === 'string' && typeof b.title === 'string' && space && typeof space.id === 'string') byCode.set(b.code, { code: b.code, page: b.page, title: b.title, space, play: b.play === true });
+    }
+    return [...byCode.values()].filter((p): p is PlayLinkInfo => !!p).reverse();
+  }
+
+  /** No longer a quick start (the link and your memberships stay). */
+  removePlayLink(code: string): void {
+    this.#core.sealForSelf(KIND_PLAY_LINK, { code, removed: true });
   }
 
   /** Follow back whoever came into a watched space with one of your friendly links (once, as you'd do by hand). */
