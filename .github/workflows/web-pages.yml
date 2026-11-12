@@ -38,7 +38,8 @@ jobs:
           # The project, the first time (it says so when it's there already).
           npx --yes wrangler@4 pages project create weave-web --production-branch=main || true
           # From dist/, so wrangler takes functions/ (onboarding links' previews) with the page.
-          cd apps/web/dist && npx --yes wrangler@4 pages deploy pages --project-name=weave-web --branch=main --commit-dirty=true
+          # The folder by its whole path: wrangler took a bare "pages" from apps/web, beside its package.json.
+          cd apps/web/dist && npx --yes wrangler@4 pages deploy "$PWD/pages" --project-name=weave-web --branch=main --commit-dirty=true
       # Websites' tabs: a Worker at *.weave-rooms.net (Pages has no wildcard names), with its static files.
       - name: Upload the websites' tabs
         env:
