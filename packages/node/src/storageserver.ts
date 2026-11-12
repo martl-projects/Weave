@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import type HyperDHT from 'hyperdht';
 import { LINK_MS } from './browserlink.ts';
 import type { StorageNode } from './storagenode.ts';
+import { previewTags } from '@weave/core';
 import { PLAN_CODE } from './storageplans.ts';
 import { textSocket } from './websocket.ts';
 
@@ -241,25 +242,6 @@ export function linkHandovers(behindProxy: boolean | undefined, origins: Iterabl
       done(201);
     });
   };
-}
-
-/** Text for an HTML attribute. */
-const attr = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-/**
- * The page for an onboarding link, with what its link preview shows (og:title, og:description, og:image): for a
- * node that serves the page itself. web.martl.io does the same in a Pages Function (apps/web/functions/j).
- */
-export function previewTags(preview: { live: boolean; preview?: { title: string; text?: string }; image?: true } | undefined, imageUrl: string): string {
-  const title = !preview ? 'Weave' : !preview.live ? 'This invite link no longer works' : (preview.preview?.title ?? 'An invitation to Weave');
-  const text = !preview?.live ? 'Ask whoever sent it for a new one.' : (preview.preview?.text ?? 'Join on Weave: a place to build things together.');
-  return [
-    `<meta property="og:title" content="${attr(title)}">`,
-    `<meta property="og:description" content="${attr(text)}">`,
-    '<meta property="og:type" content="website">',
-    '<meta property="og:site_name" content="Weave">',
-    ...(preview?.live && preview.image ? [`<meta property="og:image" content="${attr(imageUrl)}">`, '<meta name="twitter:card" content="summary_large_image">'] : ['<meta name="twitter:card" content="summary">']),
-  ].join('\n');
 }
 
 /** The HTTP side: the page's files, if it has them, handovers to linked browsers, onboarding links' previews, and whether it's up. */

@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { build } from 'esbuild';
 import { buildRooms, buildServices, buildWeb, connectSrc, framesFrom } from './build.ts';
 
 const storage = new URL(process.argv[2] ?? 'https://storage.martl.io').origin;
@@ -52,6 +53,22 @@ writeFileSync(
     '',
   ].join('\n'),
 );
+
+// Onboarding links' pages (/j/<code>, idea bZFDCQNT): a Pages Function that puts the link's open preview into the page's
+// head. It's deployed from dist/ (wrangler takes functions/ next to the folder it uploads), with this CSP, since a
+// Function's response doesn't get _headers. Not in pages-hashes.json: it serves the same page, with tags as text only.
+rmSync(join(dist, 'functions'), { recursive: true, force: true });
+await build({
+  entryPoints: [join(import.meta.dirname, 'src', 'preview-function.ts')],
+  outfile: join(dist, 'functions', 'j', '[code].js'),
+  bundle: true,
+  format: 'esm',
+  platform: 'neutral',
+  target: 'es2022',
+  minify: true,
+  logLevel: 'warning',
+  define: { STORAGE: JSON.stringify(storage), CSP: JSON.stringify(csp) },
+});
 
 const files = (dir: string): string[] => readdirSync(dir).flatMap((name) => (statSync(join(dir, name)).isDirectory() ? files(join(dir, name)) : [join(dir, name)]));
 const hashes: Record<string, string> = {};
