@@ -55,44 +55,44 @@ export function OnboardLinks({ space, spaces, onClose }: { space: SpaceInfo; spa
   };
 
   const revoke = async (l: OnboardLinkInfo) => {
-    if (!(await ask(t('onboard.revoke.ask', { link: l.code }), t('onboard.revoke')))) return;
-    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('onboard.revoked'));
+    if (!(await ask(t('playlink.revoke.ask', { link: l.code }), t('playlink.revoke')))) return;
+    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('playlink.revoked'));
   };
 
   return (
     <div className="form">
       {made ? (
         <>
-          <p className="small">{t('onboard.made', { space: space.name })}</p>
+          <p className="small">{t('playlink.made', { space: space.name })}</p>
           <div className="onboard-made">
             <span className="qr" dangerouslySetInnerHTML={{ __html: made.svg }} />
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
           </div>
           <div className="buttons">
-            <button onClick={() => setMade(undefined)}>{t('onboard.another')}</button>
-            <button className="default" onClick={() => copy(made.link, t('copy.what.copied', { what: t('onboard.link') }))}>
+            <button onClick={() => setMade(undefined)}>{t('playlink.another')}</button>
+            <button className="default" onClick={() => copy(made.link, t('copy.what.copied', { what: t('playlink.link') }))}>
               <Icon name="copy" /> {t('button.copy')}
             </button>
           </div>
         </>
       ) : (
         <>
-          <p className="small">{t('onboard.intro')}</p>
+          <p className="small">{t('playlink.intro')}</p>
           <div className="field-row">
             <input type="checkbox" id="onboard-friends" checked={friends} onChange={(e) => setFriends(e.target.checked)} />
-            <label htmlFor="onboard-friends">{t('onboard.friends')}</label>
+            <label htmlFor="onboard-friends">{t('playlink.friends')}</label>
           </div>
           <div className="field-row">
             <input type="checkbox" id="onboard-play" checked={play} onChange={(e) => setPlay(e.target.checked)} />
-            <label htmlFor="onboard-play">{t('onboard.play')}</label>
+            <label htmlFor="onboard-play">{t('playlink.play')}</label>
           </div>
           <div className="field-row">
             <input type="checkbox" id="onboard-ask" checked={askFirst} onChange={(e) => setAskFirst(e.target.checked)} />
-            <label htmlFor="onboard-ask">{t('onboard.ask')}</label>
+            <label htmlFor="onboard-ask">{t('playlink.ask')}</label>
           </div>
           {groups.length > 0 && (
             <fieldset>
-              <legend>{t('onboard.also')}</legend>
+              <legend>{t('playlink.also')}</legend>
               {groups.map((g) => (
                 <div className="field-row" key={g.id}>
                   <input type="checkbox" id={`onboard-also-${g.id}`} checked={also.includes(g.id)} onChange={(e) => setAlso((a) => (e.target.checked ? [...a, g.id] : a.filter((x) => x !== g.id)))} />
@@ -102,15 +102,15 @@ export function OnboardLinks({ space, spaces, onClose }: { space: SpaceInfo; spa
             </fieldset>
           )}
           <div className="field-row-stacked">
-            <label htmlFor="onboard-welcome">{t('onboard.welcome')}</label>
-            <input id="onboard-welcome" maxLength={300} placeholder={t('onboard.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
+            <label htmlFor="onboard-welcome">{t('playlink.welcome')}</label>
+            <input id="onboard-welcome" maxLength={300} placeholder={t('playlink.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
           </div>
           <div className="field-row">
-            <label htmlFor="onboard-uses">{t('onboard.uses')}</label>
+            <label htmlFor="onboard-uses">{t('playlink.uses')}</label>
             <select id="onboard-uses" value={uses} onChange={(e) => setUses(Number(e.target.value))}>
               {USES.map((n) => (
                 <option key={n} value={n}>
-                  {n ? t('onboard.uses.n', { n }) : t('onboard.uses.any')}
+                  {n ? t('playlink.uses.n', { n }) : t('playlink.uses.any')}
                 </option>
               ))}
             </select>
@@ -124,55 +124,55 @@ export function OnboardLinks({ space, spaces, onClose }: { space: SpaceInfo; spa
             </select>
           </div>
           <fieldset>
-            <legend>{t('onboard.preview')}</legend>
+            <legend>{t('playlink.preview')}</legend>
             <div className="field-row">
               <input type="checkbox" id="onboard-preview" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
-              <label htmlFor="onboard-preview">{t('onboard.preview.on')}</label>
+              <label htmlFor="onboard-preview">{t('playlink.preview.on')}</label>
             </div>
             {preview && (
               <>
                 <div className="field-row-stacked">
-                  <label htmlFor="onboard-preview-text">{t('onboard.preview.text')}</label>
-                  <input id="onboard-preview-text" maxLength={300} placeholder={t('onboard.preview.text.placeholder', { space: space.name })} value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
+                  <label htmlFor="onboard-preview-text">{t('playlink.preview.text')}</label>
+                  <input id="onboard-preview-text" maxLength={300} placeholder={t('playlink.preview.text.placeholder', { space: space.name })} value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
                 </div>
                 <div className="field-row">
-                  <label htmlFor="onboard-image">{t('onboard.preview.image')}</label>
+                  <label htmlFor="onboard-image">{t('playlink.preview.image')}</label>
                   <select id="onboard-image" value={image} onChange={(e) => setImage(e.target.value as typeof image)}>
-                    <option value="banner">{t('onboard.image.banner')}</option>
-                    <option value="icon">{t('onboard.image.icon')}</option>
-                    <option value="none">{t('onboard.image.none')}</option>
+                    <option value="banner">{t('playlink.image.banner')}</option>
+                    <option value="icon">{t('playlink.image.icon')}</option>
+                    <option value="none">{t('playlink.image.none')}</option>
                   </select>
                 </div>
-                <p className="small muted">{t('onboard.preview.open')}</p>
+                <p className="small muted">{t('playlink.preview.open')}</p>
               </>
             )}
           </fieldset>
           <div className="buttons">
             <button onClick={onClose}>{t('button.cancel')}</button>
             <AsyncButton className="default" onClick={create}>
-              {t('onboard.create')}
+              {t('playlink.create')}
             </AsyncButton>
           </div>
         </>
       )}
       {mine.length > 0 && (
         <fieldset>
-          <legend>{t('onboard.yours')}</legend>
+          <legend>{t('playlink.yours')}</legend>
           {mine.map((l) => (
             <div className="field-row" key={l.code}>
               <span className="grow">
                 <code>{l.code}</code>{' '}
                 <span className="small muted">
-                  {l.revoked ? t('onboard.state.revoked') : l.used === undefined ? t('onboard.state.unknown') : l.uses ? t('onboard.state.used.of', { n: l.used, uses: l.uses }) : t('onboard.state.used', { n: l.used })}
-                  {l.expires && !l.revoked ? ` · ${t('onboard.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
+                  {l.revoked ? t('playlink.state.revoked') : l.used === undefined ? t('playlink.state.unknown') : l.uses ? t('playlink.state.used.of', { n: l.used, uses: l.uses }) : t('playlink.state.used', { n: l.used })}
+                  {l.expires && !l.revoked ? ` · ${t('playlink.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
                 </span>
               </span>
               {!l.revoked && (
                 <>
-                  <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('onboard.link') }))} title={t('button.copy')}>
+                  <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('playlink.link') }))} title={t('button.copy')}>
                     <Icon name="copy" />
                   </button>
-                  <AsyncButton onClick={() => revoke(l)}>{t('onboard.revoke')}</AsyncButton>
+                  <AsyncButton onClick={() => revoke(l)}>{t('playlink.revoke')}</AsyncButton>
                 </>
               )}
             </div>
@@ -211,24 +211,24 @@ export function OnboardLinkDialog() {
     if (!done) return;
     bump();
     close();
-    toast(done.welcome ? `${look?.by.name ?? ''}: ${done.welcome}` : t('onboard.joined', { title: look?.title ?? '' }));
+    toast(done.welcome ? `${look?.by.name ?? ''}: ${done.welcome}` : t('playlink.joined', { title: look?.title ?? '' }));
     if (done.open) navigate(spaceHref(done.open));
   };
   const by = look?.by.name ?? look?.by.did.slice(0, 16) ?? '';
   const pending = look?.spaces.filter((s) => !s.member) ?? [];
   return (
-    <Modal title={t('onboard.join.title')} onClose={close}>
+    <Modal title={t('playlink.join.title')} onClose={close}>
       {error ? (
         <p>{t('inv.doesnt.work', { problem: error })}</p>
       ) : !look ? (
         <p>{t('inv.looking')}</p>
       ) : look.mine ? (
-        <p>{t('onboard.join.mine')}</p>
+        <p>{t('playlink.join.mine')}</p>
       ) : (
         <>
-          <p>{t('onboard.join.ask', { by, title: look.title })}</p>
+          <p>{t('playlink.join.ask', { by, title: look.title })}</p>
           {look.welcome && <p className="small">“{look.welcome}”</p>}
-          <p className="small muted">{pending.length ? t('onboard.join.spaces', { spaces: pending.map((s) => s.name).join(', '), by }) : t('onboard.join.in.already')}</p>
+          <p className="small muted">{pending.length ? t('playlink.join.spaces', { spaces: pending.map((s) => s.name).join(', '), by }) : t('playlink.join.in.already')}</p>
           <div className="buttons">
             <button onClick={close}>{t('inv.no')}</button>
             <AsyncButton className="default" onClick={follow}>

@@ -67,6 +67,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
   // A backup file to restore from, with the words: then nobody else has to be online.
   const [backupFile, setBackupFile] = useState('');
   const [busy, setBusy] = useState(false);
+  // Weave Web opened with an onboarding link: who invites to what.
+  const invited = bridge.web?.onboarding?.();
 
   const window = (title: string, body: React.ReactNode) => (
     <div className="desktop">
@@ -262,10 +264,20 @@ export function Onboarding({ onDone }: { onDone(): void }) {
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
+        {invited && 'title' in invited ? (
+          <p>
+            <b>{t('playlink.web.invited', { by: invited.by, title: invited.title })}</b>
+            <br />
+            {t('playlink.web.invited.how')}
+          </p>
+        ) : (
+          <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
+        )}
       </div>
+      {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
+      {invited && 'problem' in invited && <p className="notice">{t('playlink.web.problem', { problem: invited.problem })}</p>}
       {/* Someone with Weave on a computer brings their account here from there, rather than making a second one. */}
-      {bridge.web && <p className="notice">{t('web.link.hint')}</p>}
+      {bridge.web && !(invited && 'title' in invited) && <p className="notice">{t('web.link.hint')}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
@@ -287,7 +299,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           {t('onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
-          {t('onboard.create')}
+          {t(invited && 'title' in invited ? 'playlink.web.create' : 'onboard.create')}
         </button>
       </div>
     </form>,

@@ -109,6 +109,8 @@ export interface Bridge {
     link(): Promise<void>;
     /** Whether a new account here still needs an invitation to the storage node. */
     needsInvite(): boolean;
+    /** Opened with an onboarding link: who invites to what (the welcome says so), or why the link doesn't work. */
+    onboarding?(): { by: string; title: string; welcome?: string } | { problem: string } | undefined;
     /** The invitation, as a link or as its code. */
     invite(given: string): void;
     /** The ways into this account: the passkeys' ids, and `words`. */

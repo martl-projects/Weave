@@ -15,6 +15,12 @@ import type { WeaveNode } from './node.ts';
  */
 
 export const KIND_ONBOARD_LINK = 'weave.onboard.link';
+/**
+ * In a space someone joined with a friendly link: their contact link, boxed to the link's creator alone. The creator adds
+ * them by it, as one adds a friend back: that's what lets the creator's node reach their node (a browser's storage node
+ * at their meeting point), so the follow both ways arrives.
+ */
+export const KIND_ONBOARD_HELLO = 'weave.onboard.hello';
 
 /** Where the link's page is, and the storage node it uses: Weave Web's own, unless said otherwise. */
 export const WEB_PAGE = 'https://web.martl.io';
@@ -25,6 +31,8 @@ export const storageFor = (page: string): string => STORAGE_OF[new URL(page).ori
 /** How long a link and its invites last when the creator names no end. */
 const DEFAULT_DAYS = 365;
 const PNG = [0x89, 0x50, 0x4e, 0x47];
+/** How long a newcomer's contact link may take to arrive before they're followed without it. */
+const HELLO_WAIT_MS = 120_000;
 
 /** What the creator's node keeps of a link, sealed to itself. */
 interface LinkRecord {
@@ -96,7 +104,9 @@ export interface OnboardLook {
 /** A storage node over a WebSocket, as the page would reach it (its origin, which the node checks). */
 export async function connectStorage(storage: string, page: string): Promise<StorageClient> {
   const url = new URL('/storage', storage.replace(/^http/, 'ws'));
-  const ws = new WebSocket(url, { headers: { origin: new URL(page).origin } } as unknown as string[]);
+  // A browser says its page's origin by itself, and takes no headers; a program says the page's, as the page would.
+  const program = typeof navigator === 'undefined' || navigator.userAgent.startsWith('Node.js');
+  const ws = program ? new WebSocket(url, { headers: { origin: new URL(page).origin } } as unknown as string[]) : new WebSocket(url);
   await new Promise<void>((resolve, reject) => {
     ws.addEventListener('open', () => resolve());
     ws.addEventListener('error', () => reject(new Error(`the storage node at ${new URL(storage).host} can't be reached`)));
@@ -122,12 +132,24 @@ async function withStorage<T>(storage: string, page: string, run: (client: Stora
 export interface OnboardCore {
   sealForSelf(kind: string, body: Json): void;
   selfBodies(kind: string): Array<Record<string, unknown>>;
+  /** Write a sealed event into a space this node is in. */
+  writeIn(space: string, kind: string, body: Json): void;
+  /** The bodies of a kind in a space, with their authors. */
+  bodiesIn(space: string, kind: string): Array<{ author: Did; body: Record<string, unknown> }>;
+  /** A box only the holder of this encryption key opens. */
+  boxFor(key: Did, value: Json): Json;
+  /** Our own encryption key, for boxes to us. */
+  encryptionKey(): Did;
+  /** A box opened, if it's ours. */
+  openBox(box: unknown): Json | undefined;
 }
 
 export class Onboarding {
   readonly #node: WeaveNode;
   readonly #core: OnboardCore;
   #following = false;
+  /** Now, for tests. */
+  #clock: () => number = () => Date.now();
 
   constructor(node: WeaveNode, core: OnboardCore) {
     this.#node = node;
@@ -167,7 +189,7 @@ export class Onboarding {
     const name = node.nameOf(me);
 
     // The steps: their contact link, the invites, open it, a welcome.
-    const steps: OnboardStep[] = [{ do: 'account' }, { do: 'contact', link: await node.contactLink(), ...(friends ? { friends: true as const } : {}) }];
+    const steps: OnboardStep[] = [{ do: 'account' }, { do: 'contact', link: await node.contactLink(), ...(friends ? { friends: true as const, enc: this.#core.encryptionKey() } : {}) }];
     const invites: LinkRecord['invites'] = [];
     for (const ref of [project.id, ...(input.also ?? [])]) {
       const link = await node.invite(ref, days * 24, { accept: input.ask === true });
@@ -265,18 +287,27 @@ export class Onboarding {
    * Follow a link with the Weave you have: one use is counted, then its steps run in order (the creator as a contact,
    * the spaces joined). Returns the space to open and the welcome. Steps already done (a space you're in) are skipped.
    */
-  async follow(text: string, storage?: string): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }> {
+  async follow(text: string, storage?: string, options: { counted?: boolean } = {}): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }> {
     const { plan, parts, storage: at } = await this.#open(text, storage);
     if (plan.by.did === this.#node.identity.author) throw new Error("that's your own link");
-    await withStorage(at, parts.page, (client) => client.takePlan(parts.code, planCheck(parts.secret), false));
+    // Weave Web took its use already, with the account it made (counted).
+    if (!options.counted) await withStorage(at, parts.page, (client) => client.takePlan(parts.code, planCheck(parts.secret), false));
     const joined: SpaceInfo[] = [];
     let openStep: Extract<OnboardStep, { do: 'open' }> | undefined;
     let welcome: string | undefined;
+    const contactStep = plan.steps.find((s): s is Extract<OnboardStep, { do: 'contact' }> => s.do === 'contact' && !!s.friends);
+    const friends = !!contactStep;
     for (const step of plan.steps) {
       if (step.do === 'contact') await this.#node.addContact(step.link).catch(() => {});
       else if (step.do === 'join') {
         const mine = (await this.#node.spaces()).find((s) => s.id === step.space.id);
-        joined.push(mine ?? (await this.#node.joinSpace(step.link)));
+        const space = mine ?? (await this.#node.joinSpace(step.link));
+        joined.push(space);
+        // Friends: our contact link, for the creator alone, where they'll look for it.
+        if (friends && !mine && step.link.startsWith('weave:invite:')) {
+          const contact = await this.#node.contactLink();
+          this.#core.writeIn(space.id, KIND_ONBOARD_HELLO, { to: plan.by.did, box: this.#core.boxFor(contactStep.enc ?? plan.by.did, { contact }) });
+        }
       } else if (step.do === 'open') openStep = step;
       else if (step.do === 'welcome') welcome = step.text;
     }
@@ -295,8 +326,19 @@ export class Onboarding {
         for (const { space, invite } of record.invites) {
           const members = await this.#node.members(space).catch(() => []);
           // Only who came in with this link's invite: the members' list names the invite each came in with.
+          const hellos = this.#core.bodiesIn(space, KIND_ONBOARD_HELLO).filter((h) => h.body.to === me);
           for (const m of members.filter((x) => x.did !== me && x.invite === invite)) {
-            if ((await this.#node.profile(m.did)).following) continue;
+            const profile = await this.#node.profile(m.did);
+            // Added back by their contact link, as a friend adds a friend: then our node reaches theirs.
+            const opened = hellos.filter((h) => h.author === m.did).map((h) => this.#core.openBox(h.body.box) as { contact?: unknown } | undefined).find((o) => typeof o?.contact === 'string');
+            if (opened && typeof opened.contact === 'string') {
+              if (profile.contact) continue;
+              await this.#node.addContact(opened.contact).catch(() => this.#node.setEdge({ edge: 'follow', who: m.did, on: true, private: true }));
+              n++;
+              continue;
+            }
+            // No contact link (yet): it may still be on its way; from an older Weave there is none, and a follow alone does.
+            if (profile.following || this.#clock() - Date.parse(m.since) < HELLO_WAIT_MS) continue;
             await this.#node.setEdge({ edge: 'follow', who: m.did, on: true, private: true });
             n++;
           }

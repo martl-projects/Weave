@@ -78,6 +78,14 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     expect(await martl.followBackOnboarded()).toBe(1);
     expect((await martl.profile(lena.identity.author)).following).toBe(true);
     expect(await martl.followBackOnboarded()).toBe(0);
+    // He added her back by the contact link she boxed to him: both see a friend, as when two add each other.
+    expect((await martl.profile(lena.identity.author)).contact).toBe(true);
+    sync(martl, lena);
+    expect((await lena.social()).friends.map((p) => p.name)).toContain('martl');
+    // Her follow reaches him in their chat once his keys are with her, as their daemons do it as they go.
+    await lena.reconcile();
+    sync(lena, martl);
+    expect((await martl.social()).friends.map((p) => p.name)).toContain('Lena');
 
     // Taken back: the link stops, and its invite closes, so a copy of the plan's invite lets nobody new in.
     const plan = await ada.lookAtOnboardLink(made.link);

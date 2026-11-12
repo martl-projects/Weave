@@ -3,6 +3,8 @@ import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { askPasskey, makePasskey } from './passkey.ts';
+import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
+import { StorageClient } from '@weave/net/browser';
 
 declare const ROOMS_BASE: string;
 
@@ -129,6 +131,76 @@ function invitation(): string | undefined {
   return sessionStorage.getItem(INVITE_KEY) ?? document.querySelector<HTMLMetaElement>('meta[name="weave-invite"]')?.content;
 }
 
+/*
+ * An onboarding link (idea bZFDCQNT): /j/<code>#<secret>. It leaves the address bar at once, like an invitation; its plan
+ * is fetched and opened here, so the welcome can say who invites to what. Making the account takes a use of the link,
+ * which brings the storage node's invitation with it; then the plan's steps run (followOnboardLink, counted).
+ * Someone with an account here gets the renderer's Join? dialog, once the account is open.
+ */
+const ONBOARD_KEY = 'weave.onboard';
+if (/^\/j\/[A-Za-z0-9]{8}$/.test(location.pathname) && location.hash.length > 1) {
+  sessionStorage.setItem(ONBOARD_KEY, `${location.origin}${location.pathname}${location.hash}`);
+  history.replaceState(null, '', '/');
+}
+const onboardLink = sessionStorage.getItem(ONBOARD_KEY) ?? undefined;
+/** A storage node over a socket of this page (its origin is the page's). */
+async function storageClient(): Promise<StorageClient> {
+  const ws = new WebSocket(STORAGE);
+  await new Promise<void>((resolve, reject) => {
+    ws.addEventListener('open', () => resolve());
+    ws.addEventListener('error', () => reject(new Error("the storage node can't be reached")));
+  });
+  return StorageClient.connect({
+    send: (text) => ws.send(text),
+    close: () => ws.close(),
+    onMessage: (handle) => ws.addEventListener('message', (e) => handle(String(e.data))),
+    onClose: (handle) => ws.addEventListener('close', () => handle()),
+  });
+}
+/** The link's plan, opened here; nothing when it no longer works (the welcome says so). */
+const onboardPlan: { plan?: OnboardPlan; problem?: string } = {};
+if (onboardLink) {
+  const parts = parseOnboardLink(onboardLink);
+  await Promise.race([
+    (async () => {
+      if (!parts) throw new Error('this link is not whole: ask for it again');
+      const client = await storageClient();
+      try {
+        onboardPlan.plan = openPlan((await client.getPlan(parts.code)).sealed, parts.secret);
+      } finally {
+        client.close();
+      }
+    })().catch((error: Error) => void (onboardPlan.problem = error.message)),
+    new Promise((resolve) => setTimeout(resolve, 8000)),
+  ]);
+}
+/** Take a use of the link with a new account: the storage node's invitation comes back with it. */
+async function takeOnboardInvite(): Promise<string> {
+  const parts = parseOnboardLink(onboardLink!)!;
+  const client = await storageClient();
+  try {
+    const { invite } = await client.takePlan(parts.code, planCheck(parts.secret), true);
+    if (!invite) throw new Error('the storage node gave no invitation with this link');
+    return invite;
+  } finally {
+    client.close();
+  }
+}
+/** Run the link's steps with the account that's open now, and open what it says. */
+let linkListener: ((link: string) => void) | undefined;
+async function followOnboard(counted: boolean): Promise<void> {
+  if (!onboardLink) return;
+  sessionStorage.removeItem(ONBOARD_KEY);
+  if (!counted) {
+    // An account that was here already: the renderer asks first (its Join? dialog).
+    linkListener?.(onboardLink);
+    return;
+  }
+  const done = await own<{ open?: { kind: string; id: string } }>('followOnboardLink', onboardLink, STORAGE_AT, { counted: true });
+  const prefix: Record<string, string> = { community: 'r', project: 'p', group: 'g' };
+  if (done.open && prefix[done.open.kind]) location.hash = `#/${prefix[done.open.kind]}/${done.open.id}`;
+}
+
 // An invitation stays out of the address bar, the history and whatever is shared from it.
 const arrived = new URLSearchParams(location.search).get('invite');
 if (arrived) {
@@ -216,7 +288,8 @@ const web: Bridge['web'] = {
     passkey = true;
     await goOnline(invite);
   },
-  needsInvite: () => !invitation(),
+  needsInvite: () => !invitation() && !onboardPlan.plan,
+  onboarding: () => (onboardPlan.plan ? { by: onboardPlan.plan.by.name ?? 'Someone', title: onboardPlan.plan.title, welcome: (onboardPlan.plan.steps.find((s) => s.do === 'welcome') as { text?: string } | undefined)?.text } : onboardPlan.problem ? { problem: onboardPlan.problem } : undefined),
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
   addPasskey: async () => {
@@ -234,10 +307,12 @@ const web: Bridge['web'] = {
   unlock: async (words) => {
     await own('unlock', words ? { words } : await askPasskey());
     await goOnline();
+    void followOnboard(false);
   },
   arrive: async (words) => {
     await own('arrive', STORAGE, words ? { words } : await askPasskey());
     await goOnline();
+    void followOnboard(false);
   },
 };
 
@@ -246,12 +321,15 @@ window.weave = {
   state: async (): Promise<AppState> => (lock ? { home: 'Weave', hasIdentity: lock.exists || open, connected: open, locked: lock.exists && !open } : { home: 'Weave', hasIdentity: true, connected: false, elsewhere: true }),
   /** A new person, with a passkey where the browser has one; where it hasn't, the words alone open the account. */
   init: async (name) => {
-    const invite = given || invitation();
+    // With an onboarding link, its use brings the invitation; the plan runs once the account is online.
+    const viaLink = !given && !!onboardPlan.plan;
+    const invite = viaLink ? await takeOnboardInvite() : given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
     const made = await makePasskey(name).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
     passkey = !!made;
     const { words } = await own<{ words: string }>('create', name, made);
     await goOnline(invite);
+    if (viaLink) await followOnboard(true).catch((error: Error) => console.warn('the link\'s steps:', error.message));
     return words;
   },
   restore: (words) => web.arrive(words),
@@ -266,7 +344,7 @@ window.weave = {
   // As the desktop's preload answers: {result}, or the error as it came, which the renderer throws.
   call: (method, ...args) => ask(method, ...args),
   onEvent: (listener) => void listeners.push(listener),
-  onLink: () => {},
+  onLink: (listener) => void (linkListener = listener),
 };
 
 await import('../../desktop/src/renderer/main.tsx');

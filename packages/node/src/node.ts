@@ -862,6 +862,24 @@ export class WeaveNode implements Backend {
   #onboarding: Onboarding = new Onboarding(this, {
     sealForSelf: (kind, body) => void this.replica.write(this.identity, this.#kernel.sealForSelf({ kind, body })),
     selfBodies: (kind) => this.#selfBodies(kind),
+    writeIn: (space, kind, body) => {
+      const stored = this.#kernel.space(space);
+      this.replica.write(this.identity, sealFor(this.#managed.cipher(stored), { kind, body }));
+    },
+    bodiesIn: (space, kind) => {
+      const stored = this.#spaces.get(space);
+      return stored ? this.#kernel.decodedIn(stored.id).filter((d) => d.inner.kind === kind && d.inner.body && typeof d.inner.body === 'object').map((d) => ({ author: d.event.author, body: d.inner.body as Record<string, unknown> })) : [];
+    },
+    boxFor: (key, value) => boxTo(key, value) as unknown as Json,
+    encryptionKey: () => this.#encryptionKeyOf(this.identity.author),
+    openBox: (box) =>
+      this.#tryOpen((me) => {
+        try {
+          return openBox(me.keys.secretKey, me.keys.publicKey, box as unknown as Parameters<typeof openBox>[2]);
+        } catch {
+          return undefined;
+        }
+      }),
   });
   #followBackTimer: ReturnType<typeof setTimeout> | undefined;
   /** A project's app and artifacts, releases and release lines, this installation's updates (apps.ts). */
@@ -1488,8 +1506,8 @@ export class WeaveNode implements Backend {
     return this.#onboarding.look(link, storage);
   }
 
-  followOnboardLink(link: string, storage?: string): ReturnType<Onboarding['follow']> {
-    return this.#onboarding.follow(link, storage);
+  followOnboardLink(link: string, storage?: string, options?: { counted?: boolean }): ReturnType<Onboarding['follow']> {
+    return this.#onboarding.follow(link, storage, options);
   }
 
   /** Follow back who came in with your friendly onboarding links (also done by itself as they arrive). */

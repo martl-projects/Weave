@@ -10,7 +10,8 @@ import { isDid, type Did } from './keys.ts';
  * ones it knows in order and skips the rest, so plans can grow without breaking older clients.
  *
  *   account    make an account on the storage node (the web; someone with Weave already skips it)
- *   contact    add the creator as a contact (their contact link); `friends`: the creator follows back
+ *   contact    add the creator as a contact (their contact link); `friends`: the creator adds them back, by the contact
+ *              link they box to `enc` (the creator's encryption key) in the space they joined
  *   join       join a space with its invite (or knock) link
  *   open       open a space when done; `play`: with its app's Play
  *   welcome    a line from the creator, shown at the end
@@ -23,7 +24,7 @@ const MAX_STEPS = 12;
 
 export type OnboardStep =
   | { do: 'account' }
-  | { do: 'contact'; link: string; friends?: true }
+  | { do: 'contact'; link: string; friends?: true; enc?: Did }
   | { do: 'join'; link: string; space: { id: string; kind: string; name: string } }
   | { do: 'open'; space: string; play?: true }
   | { do: 'welcome'; text: string };
@@ -46,7 +47,7 @@ function stepOf(value: unknown): OnboardStep | undefined {
     case 'account':
       return { do: 'account' };
     case 'contact':
-      return isText(s.link, 4000) && s.link.startsWith('weave:contact:') ? { do: 'contact', link: s.link, ...(s.friends === true ? { friends: true as const } : {}) } : undefined;
+      return isText(s.link, 4000) && s.link.startsWith('weave:contact:') ? { do: 'contact', link: s.link, ...(s.friends === true ? { friends: true as const } : {}), ...(isDid(s.enc) ? { enc: s.enc } : {}) } : undefined;
     case 'join': {
       const space = s.space as Record<string, unknown> | undefined;
       if (!isText(s.link, 20_000) || !/^weave:(invite|knock):/.test(s.link) || !space || !isText(space.id, 200) || !isText(space.kind, 20) || !isText(space.name, 200)) return undefined;

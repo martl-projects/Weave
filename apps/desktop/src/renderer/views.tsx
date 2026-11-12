@@ -1494,10 +1494,10 @@ export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo
   const tabs = space.kind === 'project' && !link && (
     <div className="buttons tabs-row">
       <button className={toPlay ? 'default' : ''} onClick={() => setToPlay(true)}>
-        {t('onboard.tab')}
+        {t('playlink.tab')}
       </button>
       <button className={toPlay ? '' : 'default'} onClick={() => setToPlay(false)}>
-        {t('onboard.tab.plain')}
+        {t('playlink.tab.plain')}
       </button>
     </div>
   );

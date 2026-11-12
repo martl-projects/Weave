@@ -2031,7 +2031,7 @@ export interface Backend {
   /** What an onboarding link holds, before following it: who invites, to what, and what's done already. */
   lookAtOnboardLink(link: string, storage?: string): Promise<OnboardLook>;
   /** Follow an onboarding link with the Weave you have: the creator as a contact, its spaces joined; the space to open comes back. */
-  followOnboardLink(link: string, storage?: string): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }>;
+  followOnboardLink(link: string, storage?: string, options?: { counted?: boolean }): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }>;
   /** People asking to join with your links that need your OK. */
   knocks(): Promise<KnockInfo[]>;
   /** Let someone in (or turn them away) who asked with your link. */

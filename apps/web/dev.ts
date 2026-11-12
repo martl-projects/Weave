@@ -19,7 +19,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
-import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
+import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { WebSocketServer } from 'ws';
 import { buildRooms, buildServices, buildWeb } from './build.ts';
@@ -94,6 +94,22 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/dev/link-browser') return json(await person.linkBrowser({ url: url.searchParams.get('origin') ?? `http://127.0.0.1:${port}`, name: url.searchParams.get('name') ?? 'test' }));
   if (url.pathname.startsWith('/link/')) return handovers(req, res, url.pathname.slice('/link/'.length));
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
+  // An onboarding link to Party, as Lena makes one in her app (idea bZFDCQNT): this storage node lets her.
+  if (url.pathname === '/dev/onboard') {
+    PlanStore.allowIn(join(scratch, 'storage'), person.identity.did);
+    const page = `http://127.0.0.1:${port}`;
+    return json(await person.createOnboardLink({ project: 'Party', page, storage: page, welcome: 'Schön, dass du da bist!', play: true }));
+  }
+  if (url.pathname === '/dev/members') return json((await person.members('Party')).map((m) => m.name));
+  if (url.pathname === '/dev/friends') return json(await Promise.all((await person.members('Party')).map(async (m) => [m.name, (await person.profile(m.did)).following])));
+  // An onboarding link's page: the page, with what a link card shows (no invitation of its own: the link brings one).
+  const onboard = /^\/j\/([A-Za-z0-9]{8})$/.exec(url.pathname);
+  if (onboard) {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end(readFileSync(join(dist, 'index.html'), 'utf8').replace('</head>', `${previewTags(storage.plans.preview(onboard[1]), `http://127.0.0.1:${port}/preview/${onboard[1]}.png`)}\n</head>`));
+  }
+  const preview = /^\/preview\/([A-Za-z0-9]{8})$/.exec(url.pathname);
+  if (preview) return json(storage.plans.preview(preview[1]) ?? {});
   // A link to the group, to paste into "Open link"; what's said there, from the address bar too.
   if (url.pathname === '/dev/link') return res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(await person.invite('Climb'));
   if (url.pathname === '/dev/say') {
