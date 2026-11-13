@@ -38,7 +38,7 @@ await buildRooms(dist, { web: `http://localhost:${port}`, storage: `http://local
 console.log('services:', await buildServices(dist));
 
 const scratch = mkdtempSync(join(tmpdir(), 'weave-web-dev-'));
-const person = WeaveNode.init('Lena', join(scratch, 'lena'));
+const { node: person, words: personWords } = WeaveNode.create('Lena', join(scratch, 'lena'));
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 
@@ -103,6 +103,8 @@ const server = createServer(async (req, res) => {
   // Lena links a browser, as from her computer: the link opens this page, and the handover waits here (/link/…).
   if (url.pathname === '/dev/link-browser') return json(await person.linkBrowser({ url: url.searchParams.get('origin') ?? `http://127.0.0.1:${port}`, name: url.searchParams.get('name') ?? 'test' }));
   if (url.pathname.startsWith('/link/')) return handovers(req, res, url.pathname.slice('/link/'.length));
+  // Lena's words, as she'd type them into a browser (dev only: the words never leave a real computer).
+  if (url.pathname === '/dev/words') return json({ words: personWords });
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
   // An onboarding link to Party, as Lena makes one in her app (idea bZFDCQNT): this storage node lets her.
   if (url.pathname === '/dev/onboard') {

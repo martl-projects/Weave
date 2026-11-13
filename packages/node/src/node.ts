@@ -1017,7 +1017,8 @@ export class WeaveNode implements Backend {
    * `events`, or from peers while it waits online), so it knows which root and
    * encryption key are current.
    */
-  static async restore(words: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number } = {}): Promise<WeaveNode> {
+  /** `beforeOnline`: what has to be set up for this node before it goes looking (a browser's storage node, which needs the node). */
+  static async restore(words: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number; beforeOnline?: (node: WeaveNode) => void } = {}): Promise<WeaveNode> {
     const clean = normalizeWords(words);
     const home = resolveHome(dir);
     if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
@@ -1030,6 +1031,7 @@ export class WeaveNode implements Backend {
     for (const event of options.events ?? []) node.replica.ingest(event);
     const known = () => !!node.replica.authority.keys(author).next;
     if (!known() && options.online) {
+      options.beforeOnline?.(node);
       await node.goOnline();
       await node.join(author);
       const until = Date.now() + (options.timeoutMs ?? 30_000);

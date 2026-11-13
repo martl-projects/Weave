@@ -90,14 +90,17 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   async arrive(url: string, given: GivenWay) {
     const way = wayIn(given);
     const data = await account.findBox(url, way.opening);
-    // Nothing here for this way in: say which way, and what does work.
-    if (!data)
-      throw new Error(
-        'words' in given
-          ? "these words aren't an account made on the web: if your Weave is on a computer, link this browser from there (Keys & devices → Browsers → Link a browser)"
-          : 'no Weave account goes with this passkey: it was made where its account was never stored here, or that browser was linked from a computer. Come in with your 24 words, then add a passkey under Keys & devices',
-      );
+    // Words with nothing here: an account made on a computer, which the page brings with recover().
+    if (!data && 'words' in given) return { fromComputer: true };
+    if (!data) throw new Error('no Weave account goes with this passkey: it was made where its account was never stored here, or that browser was linked from a computer. Come in with your 24 words, then add a passkey under Keys & devices');
     await ready(await account.arriveAccount(HOME, way, data));
+    return {};
+  },
+
+  /** The words of an account made on a computer: the same person here, from their devices through the storage node. */
+  async recover(url: string, words: string, invite: string, passkey?: { id: string; secret: Uint8Array }) {
+    const status = (state: string, detail?: string) => self.postMessage({ event: 'status', state, detail });
+    await ready(await account.recoverAccount(HOME, words, { url, invite, status, use: useStorage }, passkey && wayIn(passkey)));
   },
 
   /** Link this browser with a link from one of the person's computers: what it left at the storage node, opened here. */

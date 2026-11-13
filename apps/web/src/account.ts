@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { b64u, KEY_KINDS, newRecoveryWords, randomBytes, type Json, type Sealed } from '@weave/core';
+import { b64u, KEY_KINDS, newRecoveryWords, normalizeWords, randomBytes, type Json, type Sealed } from '@weave/core';
 import { readSecretJson, resolveHome, saveSpace, useHomeKey, vaultOf, WeaveNode, writeSecretJson, loadSpaces, type BrowserHandover, type StoredSpace } from '@weave/node';
 import { accountOf, accountRecord, socketTo, StorageClient, type StorageLink } from './host/net.ts';
 import { openBox, openHomeKey, openingFromWords, sealBox, sealHomeKey, type Opening } from './lock.ts';
@@ -84,6 +84,32 @@ export function createAccount(dir: string, name: string, passkey?: WayIn): { nod
   writeSecretJson(home, keepingFile(dir), { words, account: null, ways: ways.map(wayOf) });
   lockHome(dir, homeKey, ways);
   return { node, words };
+}
+
+/**
+ * A browser with nothing, and the words of an account made elsewhere (on a computer, so no box waits for it): the same
+ * person from the words alone, as `weave restore` does. Its key events come from the person's other devices through the
+ * storage node, so one of them has to be online; its spaces come after, as they reach this browser. It gets a box from
+ * then on, so the next browser finds it with the words or a passkey.
+ */
+export async function recoverAccount(dir: string, words: string, link: { url: string; invite: string; status?: StorageLink['status']; use(link: StorageLink): void }, passkey?: WayIn, timeoutMs = 60_000): Promise<WeaveNode> {
+  if (lockState(dir).exists) throw new Error('this browser has an account already');
+  const clean = normalizeWords(words);
+  const ways = [{ id: WORDS, opening: openingFromWords(clean) }, ...(passkey ? [passkey] : [])];
+  const home = resolveHome(dir);
+  const homeKey = randomBytes(32);
+  useHomeKey(home, homeKey);
+  writeSecretJson(home, keepingFile(dir), { words: clean, account: null, ways: ways.map(wayOf) });
+  let node: WeaveNode;
+  try {
+    node = await WeaveNode.restore(clean, dir, { online: true, timeoutMs, beforeOnline: (n) => link.use(storageLink(dir, n, link.url, { invite: link.invite, status: link.status })) });
+  } catch (error) {
+    // Nobody of theirs online, or the words don't fit: the browser stays empty, and it can be tried again.
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  lockHome(dir, homeKey, ways);
+  return node;
 }
 
 /** Open this browser's account. A way in that isn't one of this account's says so, and nothing has changed. */

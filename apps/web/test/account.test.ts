@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { closeOpenStores, StorageNode, textSocket, WeaveNode, type StorageOptions } from '@weave/node';
-import { addWay, arriveAccount, createAccount, findBox, lockState, removeWay, storageLink, unlockAccount, WORDS, type WayIn } from '../src/account.ts';
+import { addWay, arriveAccount, createAccount, findBox, lockState, recoverAccount, removeWay, storageLink, unlockAccount, WORDS, type WayIn } from '../src/account.ts';
 import { handOnAgain, useStorage } from '../src/host/net.ts';
 import { openingFrom, openingFromWords } from '../src/lock.ts';
 
@@ -48,7 +48,7 @@ function allText(dir: string): string {
 }
 
 async function world() {
-  const lena = WeaveNode.init('Lena', temp('lena'));
+  const { node: lena, words: lenaWords } = WeaveNode.create('Lena', temp('lena'));
   await lena.createGroup('Climb');
   await lena.say({ space: 'Climb', text: 'the rope is in the van' });
   const lenaSessions: PeerSession2[] = [];
@@ -81,7 +81,7 @@ async function world() {
     await storage.close();
     await lena.close();
   };
-  return { lena, lenaSessions, storage, dir, url, stop };
+  return { lena, lenaWords, lenaSessions, storage, dir, url, stop };
 }
 
 const texts = async (node: WeaveNode) => (await node.messages('Climb')).map((m) => m.text);
@@ -264,6 +264,40 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
       const arrived = await arriveAccount(temp('words2'), way, (await findBox(url, way.opening))!);
       expect(arrived.identity.author).toBe(person);
       await arrived.close();
+    } finally {
+      await stop();
+    }
+  });
+
+  it('comes to a browser with the words of an account made on a computer, from that computer through the storage node', async () => {
+    const { lena, lenaWords, storage, url, stop } = await world();
+    try {
+      const dir = temp('fromdesk');
+      // Her computer keeps its list of her spaces in her own space, as its daemon does.
+      await lena.reconcile();
+      // Nothing waits at the storage node for these words: this account never had a browser.
+      expect(await findBox(url, openingFromWords(lenaWords))).toBeUndefined();
+      const node = await recoverAccount(dir, lenaWords, { url, invite: storage.invite(), use: useStorage }, passkey(7), 15_000);
+      expect(node.identity.author).toBe(lena.identity.author);
+      expect(node.identity.did).not.toBe(lena.identity.did);
+      // Her spaces come after, from her computer.
+      await until(async () => (await node.reconcile(), (await texts(node).catch((): string[] => [])).includes('the rope is in the van')), 20_000);
+      // And from now on a box: the next browser finds the account with the words, or with the passkey made here.
+      await until(async () => !!(await findBox(url, passkey(7).opening)));
+      expect(lockState(dir).ways).toEqual([WORDS, 'passkey-7']);
+      await node.close();
+    } finally {
+      await stop();
+    }
+  });
+
+  it('says so when none of the words\' devices can be reached, and leaves the browser empty', async () => {
+    const { storage, url, stop } = await world();
+    try {
+      const dir = temp('nobody');
+      const { words } = WeaveNode.create('Nobody', temp('nobodydesk'));
+      await expect(recoverAccount(dir, words, { url, invite: storage.invite(), use: useStorage }, undefined, 2_000)).rejects.toThrow(/couldn't find your identity/);
+      expect(lockState(dir).exists).toBe(false);
     } finally {
       await stop();
     }

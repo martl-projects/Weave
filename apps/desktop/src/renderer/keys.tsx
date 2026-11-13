@@ -188,7 +188,15 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       >
         {bridge.web && <p className="notice">{t('web.link.hint')}</p>}
         <p className="small">{t(bridge.web ? 'web.restore.intro' : 'onboard.restore.intro')}</p>
-        <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        <textarea id="restore-words" className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        {/* An account from a computer comes with an invitation, as a new one does; a browser's account needs none. */}
+        {bridge.web?.needsInvite() && (
+          <div className="field-row-stacked">
+            <label htmlFor="restore-invite">{t('web.restore.invite')}</label>
+            <input id="restore-invite" spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+          </div>
+        )}
+        {bridge.web && busy && <p className="small muted">{t('web.restore.waiting')}</p>}
         {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
         {!bridge.web && <div className="field-row-stacked">
           <label htmlFor="restore-backup">{t('onboard.restore.backup')}</label>

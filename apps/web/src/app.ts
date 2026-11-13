@@ -336,7 +336,18 @@ const web: Bridge['web'] = {
     void followOnboard(false);
   },
   arrive: async (words) => {
-    await own('arrive', STORAGE, words ? { words } : await askPasskey());
+    const arrived = await own<{ fromComputer?: boolean }>('arrive', STORAGE, words ? { words } : await askPasskey());
+    if (arrived.fromComputer && words) {
+      // Words of an account made on a computer: this browser comes as a device of its own, with an invitation, and a
+      // passkey from now on. Its key events come from one of the person's devices, which has to be online.
+      const invite = given || invitation();
+      if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
+      const made = await makePasskey('Weave').catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+      await own('recover', STORAGE, words, invite, made);
+      passkey = !!made;
+      open = true;
+      return;
+    }
     await goOnline();
     void followOnboard(false);
   },

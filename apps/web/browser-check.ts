@@ -310,6 +310,39 @@ try {
   chromeItself.close();
   passed("a browser linked from Lena's computer is Lena, without her words");
 
+  // Lena's words alone, in a browser that has nothing, while her computer is online: she comes as a device of her own.
+  {
+    const { words: lenaWords } = (await (await fetch(`${ORIGIN}/dev/words`)).json()) as { words: string };
+    const { invite } = (await (await fetch(`${ORIGIN}/dev/invite`)).json()) as { invite: string };
+    const browser = await devtools(((await (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl);
+    const { browserContextId: context } = (await browser.send('Target.createBrowserContext')) as { browserContextId: string };
+    const { targetId: target } = (await browser.send('Target.createTarget', { url: 'about:blank', browserContextId: context })) as { targetId: string };
+    const tab = await devtools(`ws://127.0.0.1:${DEBUG}/devtools/page/${target}`);
+    await tab.send('Page.enable');
+    await tab.send('Runtime.enable');
+    await tab.send('WebAuthn.enable');
+    await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
+    await tab.send('Page.navigate', { url: `${ORIGIN}/?invite=${invite}` });
+    await until('the first screen', () => tab.run<boolean>(`!!document.querySelector('#first-words')`));
+    await tab.run(`document.querySelector('#first-words').click()`);
+    await until('the words screen', () => tab.run<boolean>(`!!document.querySelector('#restore-words')`));
+    // Numbered, one per line, as the copy button gives them.
+    const typed = lenaWords.split(' ').map((w, i) => `${i + 1}. ${w}`).join('\n');
+    await tab.run(`(() => { const area = document.querySelector('#restore-words'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(typed)}); area.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
+    await until('Lena, from her words', () => tab.run<boolean>(`!!document.querySelector('.app-window')`), 70_000).catch(async (error: Error) => {
+      throw new Error(`${error.message}; it shows: ${await tab.run<string>(`document.body.innerText.slice(0, 400)`)}`);
+    });
+    const tabCall = <T>(method: string, ...args: unknown[]) => tab.run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
+    const as = (await tabCall<{ name?: string }>('profile')).result?.name;
+    if (as !== 'Lena') throw new Error(`the words brought ${as}, not Lena`);
+    await until("Lena's group, from her computer", async () => ((await tabCall<Array<{ text: string }>>('messages', 'Climb')).result ?? []).some((m) => m.text === 'the rope is in the van'), 40_000);
+    if (!(await tab.run<string[]>(`window.weave.web.ways()`)).some((way) => way !== 'words')) throw new Error('no passkey was made for the next time');
+    tab.close();
+    await browser.send('Target.disposeBrowserContext', { browserContextId: context });
+    browser.close();
+    passed("Lena's words from her computer bring her to an empty browser, spaces and a passkey with her");
+  }
+
   // Leaving this browser, and coming back with nothing but the passkey.
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;
   await sleep(600);
