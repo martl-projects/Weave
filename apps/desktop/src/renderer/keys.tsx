@@ -48,7 +48,8 @@ function Words({ words }: { words: string }) {
 export function Onboarding({ onDone }: { onDone(): void }) {
   const { t } = useTexts();
   // Weave Web first asks how: most who come back have a passkey already (synced by their phone or browser).
-  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company'>(bridge.web ? 'start' : 'create');
+  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company' | 'paste'>(bridge.web ? 'start' : 'create');
+  const [pasted, setPasted] = useState('');
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
   const [link, setLink] = useState('');
@@ -221,6 +222,30 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       </form>,
     );
 
+  // Weave Web: a link from the person's computer, pasted (the home-screen app on an iPhone, which no scanned code reaches).
+  if (mode === 'paste' && !bridge.web?.linking())
+    return window(
+      t('web.paste.title'),
+      <form
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          // Taken, the link screen comes next (linking()).
+          if (await attempt(async () => (bridge.web!.pasteLink(pasted), true))) setMode('start');
+        }}
+      >
+        <p>{t('web.paste.intro')}</p>
+        <textarea id="paste-link" className="wide" rows={3} required autoFocus spellCheck={false} value={pasted} onChange={(e) => setPasted(e.target.value)} />
+        <div className="buttons">
+          <button type="button" onClick={() => setMode('start')}>
+            {t('button.back')}
+          </button>
+          <button className="default" disabled={!pasted.trim()}>
+            {t('button.continue')}
+          </button>
+        </div>
+      </form>,
+    );
+
   // Weave Web, opened with a link from one of the person's computers: this browser becomes theirs, no words asked.
   if (bridge.web?.linking())
     return window(
@@ -289,6 +314,9 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           </button>
           <button id="first-words" disabled={busy} onClick={() => setMode('restore')}>
             {t('web.first.words')}
+          </button>
+          <button id="first-link" disabled={busy} onClick={() => setMode('paste')}>
+            {t('web.first.link')}
           </button>
         </div>
         <p className="notice">{t('web.link.hint')}</p>

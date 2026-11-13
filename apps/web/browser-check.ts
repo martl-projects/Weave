@@ -417,6 +417,34 @@ try {
     if (as !== 'Lena') throw new Error(`linked as ${as}, not Lena`);
     passed('a link opened where another account is: the browser is emptied, and linked');
   }
+
+  // The app on an iPhone's home screen is a browser of its own, which a scanned code never reaches: the link, pasted.
+  {
+    const { link } = (await (await fetch(`${ORIGIN}/dev/link-browser?name=homescreen&origin=${encodeURIComponent(ORIGIN)}`)).json()) as { link: string };
+    const { invite } = (await (await fetch(`${ORIGIN}/dev/invite`)).json()) as { invite: string };
+    const browser = await devtools(((await (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl);
+    const { browserContextId: context } = (await browser.send('Target.createBrowserContext')) as { browserContextId: string };
+    const { targetId: target } = (await browser.send('Target.createTarget', { url: 'about:blank', browserContextId: context })) as { targetId: string };
+    const tab = await devtools(`ws://127.0.0.1:${DEBUG}/devtools/page/${target}`);
+    await tab.send('Page.enable');
+    await tab.send('Runtime.enable');
+    await tab.send('WebAuthn.enable');
+    await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
+    await tab.send('Page.navigate', { url: `${ORIGIN}/?invite=${invite}` });
+    await until('the first screen', () => tab.run<boolean>(`!!document.querySelector('#first-link')`));
+    await tab.run(`document.querySelector('#first-link').click()`);
+    await until('the paste screen', () => tab.run<boolean>(`!!document.querySelector('#paste-link')`));
+    await tab.run(`(() => { const area = document.querySelector('#paste-link'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(`here: ${link}`)}); area.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
+    await until('the link screen', () => tab.run<boolean>(`!!document.querySelector('#link-browser')`));
+    await tab.run(`document.querySelector('#link-browser').click()`);
+    await until('Lena, linked by a pasted link', () => tab.run<boolean>(`!!document.querySelector('.app-window')`), 30_000);
+    const as = (await tab.run<{ result?: { name?: string } }>(`window.weave.call('profile')`)).result?.name;
+    if (as !== 'Lena') throw new Error(`linked as ${as}, not Lena`);
+    tab.close();
+    await browser.send('Target.disposeBrowserContext', { browserContextId: context });
+    browser.close();
+    passed('a link pasted, not scanned, links a browser too (the home-screen app on an iPhone)');
+  }
   close();
   console.log(`\n${steps.length} steps passed`);
 } finally {

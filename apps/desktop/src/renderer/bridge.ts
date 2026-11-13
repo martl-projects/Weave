@@ -112,6 +112,8 @@ export interface Bridge {
     linking(): boolean;
     /** A link from a computer came, but this browser holds an account already: it has to be emptied first. */
     linkWaiting(): boolean;
+    /** A link from a computer, pasted (the home-screen app on an iPhone, which no scanned code reaches). */
+    pasteLink(text: string): void;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */
     link(): Promise<void>;
     /** Whether a new account here still needs an invitation to the storage node. */

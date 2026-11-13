@@ -304,6 +304,13 @@ const web: Bridge['web'] = {
   },
   linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
   linkWaiting: () => !!lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
+  // A link pasted rather than opened: the app on an iPhone's home screen is a browser of its own, which a scanned code
+  // never reaches (the camera opens Safari).
+  pasteLink: (text) => {
+    const secret = /#link=([\w-]+)/.exec(text)?.[1];
+    if (!secret) throw new Error("that isn't a link from Keys & devices → Browsers on your computer");
+    sessionStorage.setItem(LINK_KEY, secret);
+  },
   link: async () => {
     const invite = given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');

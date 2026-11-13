@@ -92,7 +92,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const data = await account.findBox(url, way.opening);
     // Words with nothing here: an account made on a computer, which the page brings with recover().
     if (!data && 'words' in given) return { fromComputer: true };
-    if (!data) throw new Error('no Weave account goes with this passkey: it was made where its account was never stored here, or that browser was linked from a computer. Come in with your 24 words, then add a passkey under Keys & devices');
+    if (!data) throw new Error("no Weave account goes with this passkey: it belongs to a browser linked from a computer, or one whose account was never stored here. Each browser is linked on its own, the app on an iPhone's home screen too: paste a new link from your computer here (I have Weave on a computer), or come in with your 24 words");
     try {
       await ready(await account.arriveAccount(HOME, way, data));
     } catch (error) {
