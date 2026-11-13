@@ -114,6 +114,10 @@ export interface Bridge {
     linkWaiting(): boolean;
     /** A link from a computer, pasted (the home-screen app on an iPhone, which no scanned code reaches). */
     pasteLink(text: string): void;
+    /** Empty this browser of its account and start again: at the start, or straight at linking it with a computer. */
+    reset(then?: 'link'): Promise<void>;
+    /** After a reset: where to start (once). */
+    startWith(): 'link' | undefined;
     /** The code on the computer's screen, read with this device's camera; undefined if cancelled. */
     scanLink?(): Promise<string | undefined>;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */

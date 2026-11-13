@@ -48,7 +48,7 @@ function Words({ words }: { words: string }) {
 export function Onboarding({ onDone }: { onDone(): void }) {
   const { t } = useTexts();
   // Weave Web first asks how: most who come back have a passkey already (synced by their phone or browser).
-  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company' | 'paste'>(bridge.web ? 'start' : 'create');
+  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company' | 'paste'>(() => (bridge.web ? (bridge.web.startWith() === 'link' ? 'paste' : 'start') : 'create'));
   const [pasted, setPasted] = useState('');
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
@@ -403,6 +403,7 @@ function WebAccountBox() {
     <fieldset>
       <legend>{t('web.ways.legend')}</legend>
       <p className="small">{t('web.ways.why')}</p>
+      <p className="small muted">{t('web.ways.delete')}</p>
       <table className="keys-table">
         <tbody>
           {(ways ?? []).map((way) => (
@@ -466,23 +467,27 @@ export function Unlock({ onDone }: { onDone: () => void }) {
   // Words that don't open what's here: most likely another account's (one from a computer, say), and this browser
   // holds a different one. Then the way is to empty this browser first.
   const [other, setOther] = useState(false);
+  // What went wrong, said plainly (the node's errors are for developers).
+  const [said, setSaid] = useState<string>();
   const open = async (given?: string) => {
     setBusy(true);
+    setSaid(undefined);
     let wrong = false;
-    const ok = await attempt(() =>
-      bridge.web!.unlock(given).then(
-        () => true,
-        (error: Error) => {
-          wrong = !!given && /doesn't open|isn't a way/.test(error.message);
-          if (wrong) return false;
-          throw error;
-        },
-      ),
+    const ok = await bridge.web!.unlock(given).then(
+      () => true,
+      (error: Error) => {
+        wrong = /doesn't open|isn't a way/.test(error.message);
+        // A passkey dialog closed, or the browser said no: nothing to say.
+        if (/NotAllowed|abort|cancel/i.test(error.name + error.message)) return false;
+        setSaid(wrong ? t(given ? 'web.unlock.wrong.words' : 'web.unlock.wrong.passkey') : error.message);
+        return false;
+      },
     );
     setBusy(false);
     setOther(wrong);
     if (ok) onDone();
   };
+  const reset = async (then?: 'link') => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.reset(then))));
   // With a passkey, asked for at once (back from a game, a new start): a browser that wants a tap first says no
   // quietly, and the button is there.
   const asked = useRef(false);
@@ -510,7 +515,7 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               <p>{t('web.unlock.link')}</p>
               <div className="buttons">
                 {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
-                <button id="empty-and-link" className="default" onClick={async () => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.forget())))}>
+                <button id="empty-and-link" className="default" onClick={() => void reset()}>
                   {t('web.unlock.link.button')}
                 </button>
               </div>
@@ -533,20 +538,25 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
               <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
             </div>
-            {other && (
-              <div className="notice">
-                <p>{t('web.unlock.other')}</p>
-                <div className="buttons">
-                  <button id="empty-browser" type="button" onClick={async () => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.forget())))}>
-                    {t('web.unlock.empty')}
-                  </button>
-                </div>
-              </div>
-            )}
+            {said && <p className="notice alarm">{said}</p>}
+            {other && <p className="notice">{t('web.unlock.other')}</p>}
             <div className="buttons">
               <button disabled={busy || !words.trim()}>{t('web.unlock.open')}</button>
             </div>
           </form>
+          {/* Always a way out: another account, or this browser linked with a computer instead. */}
+          <fieldset>
+            <legend>{t('web.unlock.else')}</legend>
+            <div className="first-ways">
+              <button id="reset-and-link" type="button" disabled={busy} onClick={() => void reset('link')}>
+                {t('web.unlock.else.link')}
+              </button>
+              <button id="empty-browser" type="button" disabled={busy} onClick={() => void reset()}>
+                {t('web.unlock.empty')}
+              </button>
+              <p className="small muted">{t('web.unlock.else.why')}</p>
+            </div>
+          </fieldset>
         </div>
       </div>
     </div>

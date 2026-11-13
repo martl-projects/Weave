@@ -18,19 +18,28 @@ const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const prf = { eval: { first: PRF_SALT as BufferSource } };
 const value = (first: BufferSource): Uint8Array => (ArrayBuffer.isView(first) ? new Uint8Array(first.buffer as ArrayBuffer, first.byteOffset, first.byteLength) : new Uint8Array(first)).slice();
 
-/** Ask an existing passkey: the one with this id, or whichever the person picks. */
-export async function askPasskey(id?: string): Promise<PasskeySecret> {
+/** Ask an existing passkey: one of these (this browser's ways in), or whichever the person picks. */
+export async function askPasskey(ids?: string | string[]): Promise<PasskeySecret> {
+  const allowed = typeof ids === 'string' ? [ids] : (ids ?? []);
   const credential = (await navigator.credentials.get({
     publicKey: {
       challenge: random(32),
       userVerification: 'required',
-      ...(id ? { allowCredentials: [{ type: 'public-key' as const, id: b64u.decode(id) as BufferSource }] } : {}),
+      ...(allowed.length ? { allowCredentials: allowed.map((id) => ({ type: 'public-key' as const, id: b64u.decode(id) as BufferSource })) } : {}),
       extensions: { prf } as AuthenticationExtensionsClientInputs,
     },
   })) as PublicKeyCredential | null;
   const first = (credential?.getClientExtensionResults() as PrfResults | undefined)?.prf?.results?.first;
   if (!credential || !first) throw new Error("this passkey can't open an account here: it gives no PRF value");
   return { id: b64u.encode(new Uint8Array(credential.rawId)), secret: value(first) };
+}
+
+/** What a passkey is called in the keychain: whose, where it was made, and when, so several can be told apart. */
+export function passkeyLabel(who: string): string {
+  const ua = navigator.userAgent;
+  const where = /iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'Browser';
+  const app = matchMedia('(display-mode: standalone)').matches ? ' App' : '';
+  return `${who} · ${where}${app} · ${new Date().toLocaleDateString()}`;
 }
 
 /** A new passkey for this site. Some give the value right away, others only when asked. */

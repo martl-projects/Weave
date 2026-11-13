@@ -3,7 +3,7 @@ import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { askPasskey, makePasskey } from './passkey.ts';
+import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { StorageClient } from '@weave/net/browser';
 
@@ -220,6 +220,8 @@ if (arrived) {
 // A link from one of the person's computers (linkBrowser): its secret is after the #, which no server sees. It stays in
 // this tab only, out of the address bar.
 const LINK_KEY = 'weave.link';
+/** Where to start after this browser was emptied on purpose (reset). */
+const START_KEY = 'weave.start';
 const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
 if (linkSecret) {
   sessionStorage.setItem(LINK_KEY, linkSecret);
@@ -334,6 +336,17 @@ const web: Bridge['web'] = {
       overlay.remove();
     }
   },
+  // Empty this browser, and come back to the start (or straight to linking it with a computer).
+  reset: async (then) => {
+    if (then) sessionStorage.setItem(START_KEY, then);
+    await own('forget');
+    location.reload();
+  },
+  startWith: () => {
+    const then = sessionStorage.getItem(START_KEY) ?? undefined;
+    sessionStorage.removeItem(START_KEY);
+    return then === 'link' ? 'link' : undefined;
+  },
   pasteLink: (text) => {
     const secret = /#link=([\w-]+)/.exec(text)?.[1];
     if (!secret) throw new Error("that isn't a link from Keys & devices → Browsers on your computer");
@@ -343,7 +356,7 @@ const web: Bridge['web'] = {
     const invite = given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
     // A passkey opens this browser; with no words here, it's the way in.
-    const made = await makePasskey('Weave');
+    const made = await makePasskey(passkeyLabel('Weave'));
     // The handover waits at the storage node (/link/…), which is reached over its socket after.
     await own('link', STORAGE_AT, sessionStorage.getItem(LINK_KEY), made);
     sessionStorage.removeItem(LINK_KEY);
@@ -355,7 +368,7 @@ const web: Bridge['web'] = {
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
   addPasskey: async () => {
-    await own('addWay', await makePasskey('Weave'));
+    await own('addWay', await makePasskey(passkeyLabel(((await ask('profile')) as { result?: { name?: string } }).result?.name ?? 'Weave')));
     passkey = true;
   },
   removeWay: async (id) => {
@@ -367,7 +380,8 @@ const web: Bridge['web'] = {
     location.reload();
   },
   unlock: async (words) => {
-    await own('unlock', words ? { words } : await askPasskey());
+    // Only this browser's passkeys: another account's, or another browser's, can't be picked by mistake.
+    await own('unlock', words ? { words } : await askPasskey(lock?.ways.filter((way) => way !== 'words')));
     await goOnline();
     void followOnboard(false);
   },
@@ -378,7 +392,7 @@ const web: Bridge['web'] = {
       // passkey from now on. Its key events come from one of the person's devices, which has to be online.
       const invite = given || invitation();
       if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
-      const made = await makePasskey('Weave').catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+      const made = await makePasskey(passkeyLabel('Weave')).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
       await own('recover', STORAGE, words, invite, made);
       passkey = !!made;
       open = true;
@@ -398,7 +412,7 @@ window.weave = {
     const viaLink = !given && !!onboardPlan.plan;
     const invite = viaLink ? await takeOnboardInvite() : given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
-    const made = await makePasskey(name).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+    const made = await makePasskey(passkeyLabel(name)).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
     passkey = !!made;
     const { words } = await own<{ words: string }>('create', name, made);
     await goOnline(invite);
