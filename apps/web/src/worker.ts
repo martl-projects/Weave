@@ -93,7 +93,13 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     // Words with nothing here: an account made on a computer, which the page brings with recover().
     if (!data && 'words' in given) return { fromComputer: true };
     if (!data) throw new Error('no Weave account goes with this passkey: it was made where its account was never stored here, or that browser was linked from a computer. Come in with your 24 words, then add a passkey under Keys & devices');
-    await ready(await account.arriveAccount(HOME, way, data));
+    try {
+      await ready(await account.arriveAccount(HOME, way, data));
+    } catch (error) {
+      // The box's root was rotated since (on a computer): with the words, the keys come fresh from the person's devices.
+      if ('words' in given && /out of date/.test((error as Error).message)) return { fromComputer: true };
+      throw error;
+    }
     return {};
   },
 

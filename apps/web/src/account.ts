@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, KEY_KINDS, newRecoveryWords, normalizeWords, randomBytes, type Json, type Sealed } from '@weave/core';
-import { readSecretJson, resolveHome, saveSpace, useHomeKey, vaultOf, WeaveNode, writeSecretJson, loadSpaces, type BrowserHandover, type StoredSpace } from '@weave/node';
-import { accountOf, accountRecord, socketTo, StorageClient, type StorageLink } from './host/net.ts';
+import { readSecretJson, resolveHome, saveSpace, useHomeKey, vaultOf, WeaveNode, writeSecretJson, loadSpaces, type BrowserHandover, type RecoveredKeys, type StoredSpace } from '@weave/node';
+import { accountOf, accountRecord, handOnAgain, socketTo, StorageClient, type StorageLink } from './host/net.ts';
 import { openBox, openHomeKey, openingFromWords, sealBox, sealHomeKey, type Opening } from './lock.ts';
 
 /*
@@ -10,12 +10,14 @@ import { openBox, openHomeKey, openingFromWords, sealBox, sealHomeKey, type Open
  *
  *   lock.json     this browser's home key, sealed once per way in (a passkey, the words); not secret itself
  *   the home      sealed with that home key, as on a computer; the key is never written down open
- *   a box         at the storage node, per way in: the words, the keys of the spaces, the identity's key events, what
- *                 a new device needs. Sealed with the key of that way in, found by its token.
+ *   a box         at the storage node, per way in: the identity's current root and encryption keys, the keys of the
+ *                 spaces, the identity's key events, what a new device needs. Sealed with the key of that way in, found
+ *                 by its token.
  *
  * A new browser doesn't get this one's device key. Two devices signing with one key would sign different events with the
- * same number, which everyone takes for a stolen key. It makes its own, from the words, as `weave restore` does.
- * That's why the box holds the words, and why a passkey here is worth as much as the words themselves.
+ * same number, which everyone takes for a stolen key. It makes its own and signs it with the root from the box.
+ * The box holds today's keys, never the words: whoever gets a passkey has today's root and no more, and rotating with
+ * the words, which stay on paper, shuts them out. (Boxes from before held the words; they're replaced as they go up.)
  */
 
 /** A way in: a passkey (by its credential id) or, without one, the words. */
@@ -31,7 +33,9 @@ interface LockEntry {
 
 /** What's kept sealed in the home so the boxes can follow the spaces. */
 interface Keeping {
-  /** None on a linked browser (linkAccount): it has a key one of the person's computers gave it, and no box. */
+  /** The identity's current keys. None on a linked browser (linkAccount): it has a key one of the person's computers gave it, and no box. */
+  keys?: KeptKeys;
+  /** How boxes were before: the words themselves. Turned into keys when this browser next goes online. */
   words?: string;
   account: ReturnType<typeof accountRecord>;
   ways: Array<{ id: string; key: string; token: string }>;
@@ -45,6 +49,17 @@ interface Box {
   spaces: StoredSpace[];
   events: unknown[];
 }
+
+type KeptKey = { did: string; publicKey: string; secretKey: string };
+export interface KeptKeys {
+  author: string;
+  root: KeptKey;
+  enc: KeptKey[];
+}
+const keptKey = (k: RecoveredKeys['root']): KeptKey => ({ did: k.did, publicKey: b64u.encode(k.publicKey), secretKey: b64u.encode(k.secretKey) });
+const keyOf = (k: KeptKey) => ({ did: k.did as RecoveredKeys['author'], publicKey: b64u.decode(k.publicKey), secretKey: b64u.decode(k.secretKey) });
+const keptKeys = (k: RecoveredKeys): KeptKeys => ({ author: k.author, root: keptKey(k.root), enc: k.enc.map(keptKey) });
+export const keysOf = (k: KeptKeys): RecoveredKeys => ({ author: k.author as RecoveredKeys['author'], root: keyOf(k.root), enc: k.enc.map(keyOf) });
 
 export const WORDS = 'words';
 
@@ -81,7 +96,7 @@ export function createAccount(dir: string, name: string, passkey?: WayIn): { nod
   useHomeKey(home, homeKey);
   const { node } = WeaveNode.create(name, dir, { words });
   // The account at the storage node is made when it first connects; it has no key before that.
-  writeSecretJson(home, keepingFile(dir), { words, account: null, ways: ways.map(wayOf) });
+  writeSecretJson(home, keepingFile(dir), { keys: keptKeys(node.currentKeys(words)), account: null, ways: ways.map(wayOf) });
   lockHome(dir, homeKey, ways);
   return { node, words };
 }
@@ -99,7 +114,7 @@ export async function recoverAccount(dir: string, words: string, link: { url: st
   const home = resolveHome(dir);
   const homeKey = randomBytes(32);
   useHomeKey(home, homeKey);
-  writeSecretJson(home, keepingFile(dir), { words: clean, account: null, ways: ways.map(wayOf) });
+  writeSecretJson(home, keepingFile(dir), { account: null, ways: ways.map(wayOf) });
   let node: WeaveNode;
   try {
     node = await WeaveNode.restore(clean, dir, { online: true, timeoutMs, beforeOnline: (n) => link.use(storageLink(dir, n, link.url, { invite: link.invite, status: link.status })) });
@@ -108,6 +123,9 @@ export async function recoverAccount(dir: string, words: string, link: { url: st
     rmSync(dir, { recursive: true, force: true });
     throw error;
   }
+  // Its keys as they are now, for the boxes; with them, the boxes go up.
+  writeSecretJson(home, keepingFile(dir), { ...keeping(dir, node), keys: keptKeys(node.currentKeys(clean)) });
+  handOnAgain();
   lockHome(dir, homeKey, ways);
   return node;
 }
@@ -137,7 +155,7 @@ export async function findBox(url: string, opening: Opening): Promise<string | u
   }
 }
 
-/** Set up this browser from a box: the same person, with a device key of its own. */
+/** Set up this browser from a box: the same person, with a device key of its own, signed by the root in the box. */
 export async function arriveAccount(dir: string, way: WayIn, data: string): Promise<WeaveNode> {
   if (lockState(dir).exists) throw new Error('this browser has an account already');
   let box: Box;
@@ -150,11 +168,19 @@ export async function arriveAccount(dir: string, way: WayIn, data: string): Prom
   const homeKey = randomBytes(32);
   useHomeKey(home, homeKey);
   for (const space of box.spaces) saveSpace(home, space);
-  writeSecretJson(home, keepingFile(dir), box.keeping as unknown as Json);
-  // Only an account made here keeps a box, and its box always has the words (a linked browser keeps none).
-  const words = box.keeping.words!;
-  const node = await WeaveNode.restore(words, dir, { events: box.events });
-  const ways = [{ id: WORDS, opening: openingFromWords(words) }, ...(way.id === WORDS ? [] : [way])];
+  // A box from before holds the words: the keys are made of them here, and only the keys are kept.
+  const { words: old, ...kept } = box.keeping;
+  let node: WeaveNode;
+  try {
+    node = old ? await WeaveNode.restore(old, dir, { events: box.events }) : await WeaveNode.restoreFromKeys(keysOf(kept.keys!), dir, { events: box.events });
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  writeSecretJson(home, keepingFile(dir), { ...kept, ...(old ? { keys: keptKeys(node.currentKeys(old)) } : {}) } as unknown as Json);
+  // The words open this browser too: their way in is kept (its key, not the words).
+  const words = kept.ways.find((w) => w.id === WORDS);
+  const ways = [...(words ? [{ id: WORDS, opening: openingOf(words) }] : []), ...(way.id === WORDS ? [] : [way])];
   lockHome(dir, homeKey, ways);
   return node;
 }
@@ -215,9 +241,15 @@ export function storageLink(dir: string, node: WeaveNode, url: string, options: 
     },
     keepAccount: (account) => writeSecretJson(node.home, keepingFile(dir), { ...keeping(dir, node), account: accountRecord(account) }),
     afterHold: async (client) => {
+      // From before: the words kept here become today's keys, and the boxes that held them are replaced below.
+      const before = keeping(dir, node);
+      if (before.words) {
+        const { words, ...rest } = before;
+        writeSecretJson(node.home, keepingFile(dir), { ...rest, keys: keptKeys(node.currentKeys(words)) } as unknown as Json);
+      }
       const box = boxOf(dir, node);
       // A linked browser keeps no box: the next browser is linked by the person's computer too.
-      if (box.keeping.words) for (const way of box.keeping.ways.map(openingOf)) await client.putBox(way.token, sealBox(way, box as unknown as Json));
+      if (box.keeping.keys) for (const way of box.keeping.ways.map(openingOf)) await client.putBox(way.token, sealBox(way, box as unknown as Json));
       for (const token of box.keeping.gone ?? []) await client.removeBox(b64u.decode(token));
       if (box.keeping.gone?.length) writeSecretJson(node.home, keepingFile(dir), { ...keeping(dir, node), gone: [] });
     },

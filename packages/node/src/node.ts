@@ -165,6 +165,13 @@ import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { BROWSER_PREFIX, browserLinkUrl, linkToken, sealLink } from './browserlink.ts';
 
+/** An identity's current root and encryption keys (currentKeys), what a browser's box holds instead of the words. */
+export interface RecoveredKeys {
+  author: Did;
+  root: SigningIdentity['keys'] & { did: Did };
+  enc: Array<SigningIdentity['keys'] & { did: Did }>;
+}
+
 /** What a linked browser gets (linkBrowser), sealed for it. */
 export interface BrowserHandover {
   person: Did;
@@ -1017,6 +1024,40 @@ export class WeaveNode implements Backend {
    * `events`, or from peers while it waits online), so it knows which root and
    * encryption key are current.
    */
+  /**
+   * A device from the identity's current keys, not its words (a browser's box, docs/web-stage2.md): its own device key,
+   * signed by that root. Whoever has these keys has today's root and no more: rotating with the words, which stay on
+   * paper, shuts them out again. A root rotated since says so, and the words have to come in.
+   */
+  static async restoreFromKeys(keys: RecoveredKeys, dir?: string, options: { events?: unknown[] } = {}): Promise<WeaveNode> {
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const device = createSubKey(keys.author);
+    saveEncryptionKeys(home, keys.enc.map((k) => ({ did: k.did, keys: k })));
+    saveDevice(home, device);
+    const node = WeaveNode.open(home.dir);
+    for (const event of options.events ?? []) node.replica.ingest(event);
+    const state = node.replica.authority.keys(keys.author);
+    if (!state.next || state.root !== keys.root.did) {
+      await node.close();
+      throw new Error('these keys are out of date: your account rotated its keys since. Come in with your 24 words');
+    }
+    node.replica.append({ author: keys.author, did: keys.root.did, keys: keys.root }, delegation(device.did, 'device', ['*'], deviceName()));
+    return node;
+  }
+
+  /** This identity's current keys, from its words: what a browser keeps instead of them (restoreFromKeys). */
+  currentKeys(words: string): RecoveredKeys {
+    const clean = normalizeWords(words);
+    const author = this.identity.author;
+    if (recoveryIdentity(clean) !== author) throw new Error("these words aren't this account's");
+    const state = this.replica.authority.keys(author);
+    const rootIndex = findRecoveryIndex(clean, state.root, 'root');
+    const encIndex = findRecoveryIndex(clean, state.enc, 'enc');
+    if (rootIndex === undefined || encIndex === undefined) throw new Error("these words don't match this identity's current keys");
+    return { author, root: recoveryRoot(clean, rootIndex), enc: Array.from({ length: encIndex + 1 }, (_, i) => recoveryEncryptionKey(clean, i)) };
+  }
+
   /** `beforeOnline`: what has to be set up for this node before it goes looking (a browser's storage node, which needs the node). */
   static async restore(words: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number; beforeOnline?: (node: WeaveNode) => void } = {}): Promise<WeaveNode> {
     const clean = normalizeWords(words);

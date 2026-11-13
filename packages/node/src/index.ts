@@ -123,7 +123,7 @@ export { FileStore } from './filestore.ts';
 export { closeOpenStores, openStore, readJsonlLogs, SqliteStore } from './sqlitestore.ts';
 export { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
 export { resolveHome, type Home } from './home.ts';
-export { WeaveNode, type Bundle, type BrowserHandover } from './node.ts';
+export { WeaveNode, type Bundle, type BrowserHandover, type RecoveredKeys } from './node.ts';
 export { BROWSER_PREFIX, browserLinkUrl, LINK_MS, linkToken, openLink, sealLink } from './browserlink.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './shared.ts';
 export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';
