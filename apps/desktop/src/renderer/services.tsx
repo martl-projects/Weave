@@ -282,7 +282,6 @@ export function ShippedUpdate({ service: s }: { service: ServiceInfo }) {
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { t } = useTexts();
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
-  const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ServiceInfo>();
   const state = (s: ServiceInfo) => {
@@ -355,7 +354,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
       <div className="buttons">
         <button onClick={() => setAdding(true)}>{t('svc.add.a.service')}</button>
       </div>
-      {adding && <AddServiceWizard nodes={nodes} onClose={() => setAdding(false)} />}
+      {adding && <AddServiceWizard onClose={() => setAdding(false)} />}
       {editing && <ServiceSettingsDialog service={editing} onClose={() => setEditing(undefined)} />}
     </fieldset>
   );

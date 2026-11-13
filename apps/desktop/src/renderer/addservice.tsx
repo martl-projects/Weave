@@ -179,7 +179,7 @@ export function ServiceCatalog({ project, services, maintainer, pick, askedBy, o
           {loading && <p className="small muted">{t('addservice.looking')}</p>}
           {!loading && !shown.length && <p className="small muted">{query ? t('addservice.nothing.matches') : t('addservice.all.run', { project: project.name })}</p>}
           <p className="small muted">
-            {t('addservice.trust.note')} <a href="#/keys">{t('addservice.keys.services')}</a>.
+            {t('addservice.trust.note')}
           </p>
         </>
       ) : (
