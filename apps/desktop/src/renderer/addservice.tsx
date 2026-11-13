@@ -33,6 +33,22 @@ export function serviceIcon(s: { name: string; builtin?: string; shipped?: strin
   return 'plug';
 }
 
+/** One service in a catalog: its icon, name, who it's by, what it does and a mark. Here and in Keys & devices' Add a service. */
+export function ServiceTile({ icon, heading, by, about, badge, onClick }: { icon: IconName; heading: string; by?: string; about: string; badge?: string; onClick(): void }) {
+  const { t } = useTexts();
+  return (
+    <button className="service-tile" onClick={onClick}>
+      <Icon name={icon} size={32} />
+      <span className="service-tile-text">
+        <b>{heading}</b>
+        {by && <span className="small muted">{t('addservice.by', { by })}</span>}
+        <span className="small service-tile-about">{about}</span>
+        {badge && <span className="small service-tile-badge">{badge}</span>}
+      </span>
+    </button>
+  );
+}
+
 interface Entry {
   key: string;
   icon: IconName;
@@ -155,15 +171,7 @@ export function ServiceCatalog({ project, services, maintainer, pick, askedBy, o
                 {shown
                   .filter((e) => e.source.key === src.key)
                   .map((e) => (
-                    <button key={e.key} className="service-tile" onClick={e.open}>
-                      <Icon name={e.icon} size={32} />
-                      <span className="service-tile-text">
-                        <b>{e.heading}</b>
-                        <span className="small muted">{t('addservice.by', { by: e.by })}</span>
-                        <span className="small service-tile-about">{e.about}</span>
-                        {e.badge && <span className="small service-tile-badge">{e.badge}</span>}
-                      </span>
-                    </button>
+                    <ServiceTile key={e.key} icon={e.icon} heading={e.heading} by={e.by} about={e.about} {...(e.badge ? { badge: e.badge } : {})} onClick={e.open} />
                   ))}
               </div>
             </fieldset>
@@ -265,7 +273,7 @@ function SettingsForm({ project, maintainer, contract, note, settings, add }: { 
   return (
     <>
       <p className="small muted">
-        {t('service.it.does', { contract: contractText(contract) })} {note}
+        {t('service.it.does', { contract: contractText(contract) })}. {note}
       </p>
       {settings.map((s) => (
         <SettingInput key={s.name} setting={s} value={values[s.name] ?? ''} onChange={(v) => setValues((x) => ({ ...x, [s.name]: v }))} />

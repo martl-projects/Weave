@@ -779,7 +779,7 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
 .service-tile .icon { flex: none; }
 .service-tile-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .service-tile-about { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.service-tile-badge { color: var(--accent, #000080); }
+.service-tile-badge { color: var(--link); }
 .service-details { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .service-details > button:first-child { align-self: flex-start; }
 .service-details-head { display: flex; gap: 10px; align-items: flex-start; }
@@ -1038,3 +1038,15 @@ button.session-title:hover { text-decoration: underline; }
 
 /* The people table's small tools (make a maintainer, remove). */
 .people-table .icon-button.people-tool { min-width: 0; min-height: 0; padding: 0 3px; line-height: 1; }
+
+/* Add a service, step by step (addwizard.tsx) */
+.wizard-question { margin: 4px 0 8px; font-size: 1.1em; }
+.wizard-options { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.wizard-option { align-items: flex-start; }
+.wizard-option input { margin-top: 3px; }
+.wizard-option label { display: block; }
+.wizard-section { margin: 6px 0 2px; }
+.wizard-section:first-child { margin-top: 0; }
+.wizard-advanced { margin: 6px 0 0 14px; }
+.wizard-advanced fieldset { margin: 6px 0; }
+.service-spaces:has(.wizard-section) { max-height: 260px; }
