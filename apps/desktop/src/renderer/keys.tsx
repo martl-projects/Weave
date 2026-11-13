@@ -419,10 +419,24 @@ export function Unlock({ onDone }: { onDone: () => void }) {
   const { t } = useTexts();
   const [words, setWords] = useState('');
   const [busy, setBusy] = useState(false);
+  // Words that don't open what's here: most likely another account's (one from a computer, say), and this browser
+  // holds a different one. Then the way is to empty this browser first.
+  const [other, setOther] = useState(false);
   const open = async (given?: string) => {
     setBusy(true);
-    const ok = await attempt(() => bridge.web!.unlock(given).then(() => true));
+    let wrong = false;
+    const ok = await attempt(() =>
+      bridge.web!.unlock(given).then(
+        () => true,
+        (error: Error) => {
+          wrong = !!given && /doesn't open|isn't a way/.test(error.message);
+          if (wrong) return false;
+          throw error;
+        },
+      ),
+    );
     setBusy(false);
+    setOther(wrong);
     if (ok) onDone();
   };
   // With a passkey, asked for at once (back from a game, a new start): a browser that wants a tap first says no
@@ -462,6 +476,16 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
               <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
             </div>
+            {other && (
+              <div className="notice">
+                <p>{t('web.unlock.other')}</p>
+                <div className="buttons">
+                  <button id="empty-browser" type="button" onClick={async () => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.forget())))}>
+                    {t('web.unlock.empty')}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="buttons">
               <button disabled={busy || !words.trim()}>{t('web.unlock.open')}</button>
             </div>
