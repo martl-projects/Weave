@@ -1,4 +1,4 @@
-import { b64u, type Did, type Json, newPlanSecret, onboardLink, openPlan, parseBlobRef, parseOnboardLink, peekInvite, peekKnock, planCheck, sealPlan, type OnboardPlan, type OnboardStep } from '@weave/core';
+import { b64u, decodeContact, type Did, type Json, newPlanSecret, onboardLink, openPlan, parseBlobRef, parseOnboardLink, peekInvite, peekKnock, planCheck, sealPlan, type OnboardPlan, type OnboardStep } from '@weave/core';
 import { StorageClient, type PlanListing } from '@weave/net';
 import type { SpaceInfo } from './backend.ts';
 import type { WeaveNode } from './node.ts';
@@ -27,14 +27,34 @@ export const KIND_ONBOARD_HELLO = 'weave.onboard.hello';
  */
 export const KIND_PLAY_LINK = 'weave.onboard.play';
 
-/** A quick start: a link's project, and its game, one click (or one icon on the home screen) away. */
+/** Where a link leads: to you (a chat with you), to a space, or in a space to a board, a post or a website. */
+export type LinkTarget =
+  | { kind: 'me' }
+  | { kind: 'space'; space: string }
+  | { kind: 'board'; space: string; board: string }
+  | { kind: 'post'; space: string; post: string }
+  | { kind: 'website'; space: string; website: string };
+
+/** Where a followed link opens, resolved: what the app shows. */
+export interface OpenTarget {
+  kind: LinkTarget['kind'];
+  space?: { id: string; kind: string; name: string };
+  board?: string;
+  post?: string;
+  website?: string;
+  /** A chat with this person (a link to them). */
+  chat?: Did;
+  /** Start the website (or the space's first one), as ▶ would. */
+  play?: true;
+}
+
+/** A quick start: where a link leads, one click (or one icon on the home screen) away. */
 export interface PlayLinkInfo {
   code: string;
   /** The link's page, where /play/<code> is (an app of its own on a home screen). */
   page: string;
   title: string;
-  space: { id: string; kind: string; name: string };
-  play: boolean;
+  target: OpenTarget;
 }
 
 /** Where the link's page is, and the storage node it uses: Weave Web's own, unless said otherwise. */
@@ -59,6 +79,8 @@ interface LinkRecord {
   /** The invites in the plan, by space: closed when the link is taken back; joiners followed back when `friends`. */
   invites: Array<{ space: string; invite: string }>;
   friends: boolean;
+  /** Where it leads (older records: a space). */
+  kind?: LinkTarget['kind'];
   created: string;
   expires?: string;
   uses?: number;
@@ -78,16 +100,20 @@ export interface OnboardLinkInfo {
   revoked?: true;
   /** The spaces it lets people into. */
   spaces: string[];
+  /** Where it leads. */
+  kind: LinkTarget['kind'];
 }
 
 export interface OnboardLinkInput {
-  /** The project it invites to (its name or id). */
-  project: string;
+  /** Where it leads: to you, a space, or a board, post or website in one. */
+  target?: LinkTarget;
+  /** Older callers: the space it invites to (its name or id), as `target: { kind: 'space' }`. */
+  project?: string;
   /** More spaces to join with it, like a group of yours. */
   also?: string[];
   /** You follow back whoever comes in with it, so you're friends at once. Default: yes. */
   friends?: boolean;
-  /** Open the project's app when they arrive. */
+  /** Start the website when they arrive (a website target: yes unless false; a project: its first website). */
   play?: boolean;
   welcome?: string;
   /** How many people may use it; none: no limit. */
@@ -194,28 +220,64 @@ export class Onboarding {
     const page = new URL(input.page ?? WEB_PAGE).origin;
     const storage = new URL(input.storage ?? storageFor(page)).origin;
     for (const at of [page, storage]) if (!at.startsWith('https:') && !/^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(at)) throw new Error('an onboarding link lives on an https page');
-    const project = await node.project(input.project);
+    const target: LinkTarget | undefined = input.target ?? (input.project ? { kind: 'space', space: input.project } : undefined);
+    if (!target) throw new Error('a link leads somewhere: to you, or to a space');
     const days = input.days ?? DEFAULT_DAYS;
     if (!(days > 0 && days <= 3650)) throw new Error('a link works from one day to ten years');
     if (input.uses !== undefined && !(Number.isInteger(input.uses) && input.uses >= 1)) throw new Error('uses are a whole number, at least 1');
-    const friends = input.friends !== false;
+    // A link to you is for becoming friends.
+    const friends = target.kind === 'me' || input.friends !== false;
     const expires = new Date(Date.now() + days * 86_400_000).toISOString();
     const me = node.identity.author;
     const name = node.nameOf(me);
 
+    // What it leads to, checked here, and what it's called.
+    let space: SpaceInfo | undefined;
+    let project: Awaited<ReturnType<WeaveNode['project']>> | undefined;
+    let title: string;
+    let open: Extract<OnboardStep, { do: 'open' }>;
+    if (target.kind === 'me') {
+      title = name ?? 'Weave';
+      open = { do: 'open', chat: me };
+    } else {
+      space = (await node.spaces()).find((s) => s.id === target.space || s.name === target.space);
+      if (!space) throw new Error(`you're not in ${target.space}`);
+      project = space.kind === 'project' ? await node.project(space.id) : undefined;
+      const where = (project?.page.title || space.name).slice(0, 200);
+      title = where;
+      open = { do: 'open', space: space.id };
+      if (target.kind === 'board') {
+        const board = (await node.boards(space.id)).find((b) => b.name === target.board || b.title === target.board);
+        if (!board) throw new Error(`${where} has no board ${target.board}`);
+        title = `${board.title} · ${where}`;
+        open.board = board.name;
+      } else if (target.kind === 'post') {
+        const post = await node.post(target.post);
+        if (post.space?.id !== space.id) throw new Error(`that post isn't in ${where}`);
+        title = post.title || where;
+        open.post = post.id;
+      } else if (target.kind === 'website') {
+        const website = (await node.websites(space.id)).find((w) => w.id === target.website || w.name === target.website);
+        if (!website) throw new Error(`nothing called ${target.website} is live in ${where}`);
+        title = website.name;
+        open.website = website.id;
+        if (input.play !== false) open.play = true;
+      } else if (input.play && space.kind === 'project') open.play = true;
+    }
+    title = title.slice(0, 200);
+
     // The steps: their contact link, the invites, open it, a welcome.
     const steps: OnboardStep[] = [{ do: 'account' }, { do: 'contact', link: await node.contactLink(), ...(friends ? { friends: true as const, enc: this.#core.encryptionKey() } : {}) }];
     const invites: LinkRecord['invites'] = [];
-    for (const ref of [project.id, ...(input.also ?? [])]) {
+    for (const ref of [...(space ? [space.id] : []), ...(input.also ?? [])]) {
       const link = await node.invite(ref, days * 24, { accept: input.ask === true });
       const parsed = input.ask ? peekKnock(link) : peekInvite(link);
       steps.push({ do: 'join', link, space: { id: parsed.space.id, kind: parsed.space.kind, name: parsed.space.name } });
       invites.push({ space: parsed.space.id, invite: parsed.invite });
     }
-    steps.push({ do: 'open', space: project.id, ...(input.play ? { play: true as const } : {}) });
+    steps.push(open);
     const welcome = input.welcome?.trim().slice(0, 1000);
     if (welcome) steps.push({ do: 'welcome', text: welcome });
-    const title = (project.page.title || project.name).slice(0, 200);
     const plan: OnboardPlan = { v: 1, by: { did: me, ...(name ? { name } : {}) }, title, steps };
 
     // The open preview: the creator's words, or a line saying who invites to what; the project's picture if it's a PNG.
@@ -224,16 +286,18 @@ export class Onboarding {
     let icon: string | undefined;
     if (input.preview !== false) {
       const p = input.preview ?? {};
-      preview = { title: (p.title?.trim() || title).slice(0, 100), text: (p.text?.trim() || `${name ?? 'Someone'} invites you to ${title} on Weave`).slice(0, 300) };
+      const line = target.kind === 'me' ? `${name ?? 'Someone'} wants to connect with you on Weave` : `${name ?? 'Someone'} invites you to ${title} on Weave`;
+      preview = { title: (p.title?.trim() || title).slice(0, 100), text: (p.text?.trim() || line).slice(0, 300) };
+      // Pictures come from a project's page; other places have none to show.
       const which = p.image ?? 'banner';
-      const ref = which === 'none' ? undefined : which === 'icon' ? (project.page.icon ?? project.page.banner) : (project.page.banner ?? project.page.icon);
+      const ref = !project || which === 'none' ? undefined : which === 'icon' ? (project.page.icon ?? project.page.banner) : (project.page.banner ?? project.page.icon);
       if (ref && parseBlobRef(ref)) {
         const blob = await node.blob(ref).catch(() => undefined);
         const bytes = blob && Buffer.from(blob.data, 'base64');
         if (bytes && blob.type === 'image/png' && PNG.every((b, i) => bytes[i] === b) && bytes.length <= 300 * 1024) image = blob.data;
       }
       // The game's own app (/play/<code>) takes the project's icon: square, where a banner isn't.
-      if (project.page.icon && parseBlobRef(project.page.icon)) {
+      if (project?.page.icon && parseBlobRef(project.page.icon)) {
         const blob = await node.blob(project.page.icon).catch(() => undefined);
         const bytes = blob && Buffer.from(blob.data, 'base64');
         if (bytes && blob.type === 'image/png' && PNG.every((b, i) => bytes[i] === b) && bytes.length <= 300 * 1024) icon = blob.data;
@@ -248,14 +312,15 @@ export class Onboarding {
       for (const i of invites) void node.closeInvite(i.space, i.invite).catch(() => {});
       throw /operator decides/.test(error.message) ? new Error(`the storage node at ${new URL(storage).host} makes no links for this computer yet: its operator lets it with weave-storage planner ${node.identity.did}`) : error;
     });
-    const record: LinkRecord = { code, link: onboardLink(page, code, secret), page, storage, title, invites, friends, created: new Date().toISOString(), expires, ...(input.uses ? { uses: input.uses } : {}) };
+    const record: LinkRecord = { code, link: onboardLink(page, code, secret), page, storage, title, invites, friends, kind: target.kind, created: new Date().toISOString(), expires, ...(input.uses ? { uses: input.uses } : {}) };
     this.#core.sealForSelf(KIND_ONBOARD_LINK, record as unknown as Json);
-    this.#savePlay(page, code, title, project, input.play === true);
+    // Your own quick start to it (a link to you leads you nowhere new).
+    if (space) this.#savePlay(page, code, title, this.#target(open, space));
     return this.#info(record);
   }
 
   #info(r: LinkRecord, used?: number): OnboardLinkInfo {
-    return { code: r.code, link: r.link, title: r.title, friends: r.friends, created: r.created, ...(r.expires ? { expires: r.expires } : {}), ...(r.uses ? { uses: r.uses } : {}), ...(used !== undefined ? { used } : {}), ...(r.revoked ? { revoked: true as const } : {}), spaces: r.invites.map((i) => i.space) };
+    return { code: r.code, link: r.link, title: r.title, friends: r.friends, kind: r.kind ?? 'space', created: r.created, ...(r.expires ? { expires: r.expires } : {}), ...(r.uses ? { uses: r.uses } : {}), ...(used !== undefined ? { used } : {}), ...(r.revoked ? { revoked: true as const } : {}), spaces: r.invites.map((i) => i.space) };
   }
 
   /** Your links, newest first, with their uses as each storage node counts them (where it can be reached). */
@@ -310,7 +375,7 @@ export class Onboarding {
    * Follow a link with the Weave you have: one use is counted, then its steps run in order (the creator as a contact,
    * the spaces joined). Returns the space to open and the welcome. Steps already done (a space you're in) are skipped.
    */
-  async follow(text: string, storage?: string, options: { counted?: boolean } = {}): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }> {
+  async follow(text: string, storage?: string, options: { counted?: boolean } = {}): Promise<{ open?: SpaceInfo; target?: OpenTarget; joined: SpaceInfo[]; welcome?: string; play?: true }> {
     const { plan, parts, storage: at } = await this.#open(text, storage);
     const own = plan.by.did === this.#node.identity.author;
     const mySpaces = await this.#node.spaces();
@@ -321,8 +386,10 @@ export class Onboarding {
     if (own) {
       const openStep = plan.steps.find((s): s is Extract<OnboardStep, { do: 'open' }> => s.do === 'open');
       const open = openStep && mySpaces.find((s) => s.id === openStep.space);
-      if (open) this.#savePlay(parts.page, parts.code, plan.title, open, !!openStep.play);
-      return { ...(open ? { open } : {}), joined: [], ...(openStep?.play ? { play: true as const } : {}) };
+      if (!openStep || !open) return { joined: [] };
+      const target = this.#target(openStep, open);
+      this.#savePlay(parts.page, parts.code, plan.title, target);
+      return { open, target, joined: [], ...(openStep.play ? { play: true as const } : {}) };
     }
     const joined: SpaceInfo[] = [];
     let openStep: Extract<OnboardStep, { do: 'open' }> | undefined;
@@ -343,14 +410,27 @@ export class Onboarding {
       } else if (step.do === 'open') openStep = step;
       else if (step.do === 'welcome') welcome = step.text;
     }
-    const open = openStep && (joined.find((s) => s.id === openStep.space) ?? (await this.#node.spaces()).find((s) => s.id === openStep.space));
-    if (open) this.#savePlay(parts.page, parts.code, plan.title, open, !!openStep?.play);
-    return { ...(open ? { open } : {}), joined, ...(welcome ? { welcome } : {}), ...(openStep?.play ? { play: true as const } : {}) };
+    // A link to a person shares no space to leave our contact link in: it waits for them at the storage node.
+    if (friends && !plan.steps.some((s) => s.do === 'join') && contactStep) {
+      const contact = await this.#node.contactLink();
+      const box = JSON.stringify(this.#core.boxFor(contactStep.enc ?? plan.by.did, { contact }));
+      await withStorage(at, parts.page, (client) => client.helloPlan(parts.code, planCheck(parts.secret), box)).catch(() => {});
+    }
+    const open = openStep?.space ? (joined.find((s) => s.id === openStep.space) ?? (await this.#node.spaces()).find((s) => s.id === openStep.space)) : undefined;
+    const target = openStep && (openStep.chat ? ({ kind: 'me', chat: openStep.chat } as OpenTarget) : open ? this.#target(openStep, open) : undefined);
+    if (target && open) this.#savePlay(parts.page, parts.code, plan.title, target);
+    return { ...(open ? { open } : {}), ...(target ? { target } : {}), joined, ...(welcome ? { welcome } : {}), ...(openStep?.play ? { play: true as const } : {}) };
   }
 
-  #savePlay(page: string, code: string, title: string, space: SpaceInfo, play: boolean): void {
+  /** What an open step leads to, in a space this node is in. */
+  #target(step: Extract<OnboardStep, { do: 'open' }>, space: SpaceInfo): OpenTarget {
+    const kind: OpenTarget['kind'] = step.website ? 'website' : step.post ? 'post' : step.board ? 'board' : 'space';
+    return { kind, space: { id: space.id, kind: space.kind, name: space.name }, ...(step.board ? { board: step.board } : {}), ...(step.post ? { post: step.post } : {}), ...(step.website ? { website: step.website } : {}), ...(step.play ? { play: true as const } : {}) };
+  }
+
+  #savePlay(page: string, code: string, title: string, target: OpenTarget): void {
     if (this.playLinks().some((p) => p.code === code)) return;
-    this.#core.sealForSelf(KIND_PLAY_LINK, { code, page, title, space: { id: space.id, kind: space.kind, name: space.name }, play });
+    this.#core.sealForSelf(KIND_PLAY_LINK, { code, page, title, target: target as unknown as Json });
   }
 
   /** Your quick starts, the newest first: links you followed or made, each to its project and game. */
@@ -358,9 +438,11 @@ export class Onboarding {
     const byCode = new Map<string, PlayLinkInfo | null>();
     for (const b of this.#core.selfBodies(KIND_PLAY_LINK)) {
       if (typeof b.code !== 'string') continue;
-      const space = b.space as PlayLinkInfo['space'] | undefined;
+      // Older records name the space and whether to play; newer ones their target.
+      const space = b.space as OpenTarget['space'] | undefined;
+      const target = (b.target as OpenTarget | undefined) ?? (space && typeof space.id === 'string' ? ({ kind: b.play === true ? 'website' : 'space', space, ...(b.play === true ? { play: true } : {}) } as OpenTarget) : undefined);
       if (b.removed === true) byCode.set(b.code, null);
-      else if (typeof b.page === 'string' && typeof b.title === 'string' && space && typeof space.id === 'string') byCode.set(b.code, { code: b.code, page: b.page, title: b.title, space, play: b.play === true });
+      else if (typeof b.page === 'string' && typeof b.title === 'string' && target && typeof target.kind === 'string') byCode.set(b.code, { code: b.code, page: b.page, title: b.title, target });
     }
     return [...byCode.values()].filter((p): p is PlayLinkInfo => !!p).reverse();
   }
@@ -368,6 +450,41 @@ export class Onboarding {
   /** No longer a quick start (the link and your memberships stay). */
   removePlayLink(code: string): void {
     this.#core.sealForSelf(KIND_PLAY_LINK, { code, removed: true });
+  }
+
+  #helloAt = 0;
+  /**
+   * Add back whoever followed one of your links to you: their contact links wait, boxed to you, at the storage node.
+   * At most once a minute (it asks the storage node), unless `now`.
+   */
+  async collectHellos(now = false): Promise<number> {
+    if (!now && this.#clock() - this.#helloAt < 60_000) return 0;
+    this.#helloAt = this.#clock();
+    let n = 0;
+    for (const record of this.#records().filter((r) => r.friends && !r.revoked && !r.invites.length)) {
+      const boxes = await withStorage(record.storage, record.page, (client) => client.planHellos(this.#node.identity, record.code)).catch(() => [] as string[]);
+      for (const text of boxes) {
+        let contact: string | undefined;
+        try {
+          const opened = this.#core.openBox(JSON.parse(text)) as { contact?: unknown } | undefined;
+          contact = typeof opened?.contact === 'string' ? opened.contact : undefined;
+        } catch {
+          continue;
+        }
+        if (!contact) continue;
+        const did = (() => {
+          try {
+            return decodeContact(contact).did;
+          } catch {
+            return undefined;
+          }
+        })();
+        if (!did || did === this.#node.identity.author || (await this.#node.profile(did)).contact) continue;
+        await this.#node.addContact(contact).catch(() => {});
+        n++;
+      }
+    }
+    return n;
   }
 
   /** Follow back whoever came into a watched space with one of your friendly links (once, as you'd do by hand). */

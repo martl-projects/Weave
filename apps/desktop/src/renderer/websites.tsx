@@ -35,9 +35,14 @@ const play = (room: WebsiteInfo) => {
  * and enters its game, as ▶ would. A browser opens no tab by itself, so on the web at a computer's width the ▶ waits,
  * in focus, for the one click; on a phone's width the game opens over Weave at once.
  */
-const playWanted = new Set<string>();
-export const playSoon = (project: string): void => void playWanted.add(project);
-const takePlay = (project: string): boolean => playWanted.delete(project);
+const playWanted = new Map<string, string | true>();
+/** Play in a project soon: its website `website`, or the first one anyone may enter. */
+export const playSoon = (project: string, website?: string): void => void playWanted.set(project, website ?? true);
+const takePlay = (project: string): string | true | undefined => {
+  const wanted = playWanted.get(project);
+  playWanted.delete(project);
+  return wanted;
+};
 
 /** On a phone's width, Weave on the web opens a website over itself rather than in a tab: no second browser bar. */
 const inAFrame = () => !!bridge.web && matchMedia('(max-width: 700px)').matches;
@@ -1364,6 +1369,8 @@ export function ProjectLiveView({ project, members, meDid }: { project: SpaceInf
   // A quick start's wish to play here: the first game anyone may enter gets it.
   const [autoplay] = useState(() => takePlay(project.id));
   const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', project.id), [project.id]);
+  // The website asked for, if it's here; else the first anyone may enter.
+  const chosen = autoplay === undefined ? undefined : ((typeof autoplay === 'string' ? (rooms ?? []).find((r) => r.id === autoplay) : undefined) ?? (rooms ?? []).find((r) => r.mine || r.mayJoin));
   const { data: services } = useApi(() => api<ServiceInfo[]>('services').catch(() => [] as ServiceInfo[]), []);
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: shows } = useApi(() => api<ShowInfo[]>('shows', project.id), [project.id]);
@@ -1384,7 +1391,7 @@ export function ProjectLiveView({ project, members, meDid }: { project: SpaceInf
       {rooms && !rooms.length && <p className="empty">{t('live.nothing.running', { project: project.name })}</p>}
       {(rooms ?? []).map((room) => (
         <div key={room.id}>
-          <WebsiteCard room={room} shows={shows ?? []} autoplay={autoplay && room.id === (rooms ?? []).find((r) => r.mine || r.mayJoin)?.id} />
+          <WebsiteCard room={room} shows={shows ?? []} autoplay={!!chosen && room.id === chosen.id} />
           <HostedStatus hosted={(services ?? []).flatMap((s) => s.websites ?? []).find((r) => r.id === room.id)} />
         </div>
       ))}

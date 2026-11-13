@@ -8,7 +8,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { MyGames, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, PlayRoute } from './onboardlinks.tsx';
+import { joinLinkOf, LinkBuilder, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
 import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
@@ -49,7 +49,7 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'build'; space?: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
@@ -157,7 +157,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
         <TreeLink href="#/people" icon="users" label={t('nav.people')} on={route[0] === 'people'} />
         <TreeLink href="#/memberships" icon="star" label={t('nav.memberships')} on={route[0] === 'memberships'} />
         {bridge.workOn && <TreeLink href="#/sessions" icon="code" label={t('nav.sessions')} on={route[0] === 'sessions'} />}
-        <MyGames route={route} />
+        <QuickStarts route={route} />
         <li className="tree-head">
           <Icon name="message" /> {t('tree.chats')}
         </li>
@@ -476,6 +476,9 @@ function openLink(link: string): void {
   }
   if (isInviteHref(link)) return openInviteLink(link);
   if (ONBOARD_IN_TEXT.test(link)) return openOnboardLink(ONBOARD_IN_TEXT.exec(link)![0]);
+  // Weave Web's "Open in the Weave app": the link it was opened with, handed over by the OS.
+  const joined = joinLinkOf(link);
+  if (joined) return openOnboardLink(joined);
   if (!ref) return toast(t('link.paste'));
   if (!ref.startsWith('http')) return go(`#/post/${ref}`);
   api<PostInfo>('post', ref).then(
@@ -757,7 +760,7 @@ function Shell() {
     else if (route[0] === 'sessions') center = <SessionsView />;
     else if (route[0] === 'memberships') center = <MembershipsView meDid={me.did} meName={me.name} />;
     else if (route[0] === 'post' && route[1]) center = <PublicPost id={route[1]} me={me} spaces={spaces} />;
-    else if (route[0] === 'play' && route[1]) center = <PlayRoute code={route[1]} />;
+    else if (route[0] === 'play' && route[1]) center = <QuickRoute code={route[1]} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
     else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
@@ -804,6 +807,7 @@ function Shell() {
           items={[
             { label: t('menu.file.new'), onClick: () => setDialog({ kind: 'new' }) },
             { label: t('menu.file.join'), onClick: () => setDialog({ kind: 'new' }) },
+            { label: t('menu.file.link'), onClick: () => setDialog({ kind: 'build', space }) },
             ...(bridge.web ? [] : [{ label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' as const }) }]),
             'sep',
             { label: t('menu.file.close'), onClick: () => window.close() },
@@ -919,6 +923,7 @@ function Shell() {
         </p>
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
+      {dialog?.kind === 'build' && <LinkBuilder spaces={spaces ?? []} space={dialog.space} onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} spaces={spaces ?? []} onClose={close} />}
       {dialog?.kind === 'link' && <OpenLinkDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}

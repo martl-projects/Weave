@@ -24,6 +24,8 @@ const MAX_SEALED = 64 * 1024;
 export const MAX_PREVIEW_IMAGE = 300 * 1024;
 const MAX_USES = 100_000;
 const MAX_PLANS_PER_PLANNER = 500;
+const MAX_HELLO = 4000;
+const MAX_HELLOS = 1000;
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 export interface PlanPreview {
@@ -46,6 +48,8 @@ interface PlanFile {
   expires?: string;
   revoked?: true;
   created: string;
+  /** Boxes for the creator alone (a newcomer's contact link), for links that share no space to leave them in. */
+  hellos?: string[];
 }
 
 /** What a game's own app is called and looks like (/play/<code>): for members, so it stays when the link is used up. */
@@ -193,6 +197,30 @@ export class PlanStore {
     plan.used++;
     writeJson(this.#path(plan.code), plan);
     return account ? { invite: invite() } : {};
+  }
+
+  /**
+   * Leave a box for the link's creator (a newcomer's contact link, sealed to the creator), with the key's check: for a
+   * link to a person, which shares no space where it could wait. Counts no use; at most MAX_HELLOS per link.
+   */
+  hello(code: unknown, check: unknown, box: unknown): void {
+    const plan = this.#read(code);
+    if (!plan || !this.#live(plan)) throw new Error('this invite link no longer works');
+    const given = Buffer.from(typeof check === 'string' ? hashOf(check) : '');
+    if (given.length !== plan.check.length || !timingSafeEqual(given, Buffer.from(plan.check))) throw new Error('that is not this link');
+    if (!isText(box, MAX_HELLO)) throw new Error('that is not a box');
+    const hellos = plan.hellos ?? [];
+    if (hellos.includes(box)) return;
+    if (hellos.length >= MAX_HELLOS) throw new Error('this link has all the hellos it can keep');
+    plan.hellos = [...hellos, box];
+    writeJson(this.#path(plan.code), plan);
+  }
+
+  /** The boxes left for a creator at one of their links. */
+  hellos(by: Did, code: unknown): string[] {
+    const plan = this.#read(code);
+    if (!plan || plan.by !== by) throw new Error('no such link of yours');
+    return plan.hellos ?? [];
   }
 
   /** The creator takes a link back: it stops working, and its preview says so. */

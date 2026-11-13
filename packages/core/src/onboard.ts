@@ -13,7 +13,8 @@ import { isDid, type Did } from './keys.ts';
  *   contact    add the creator as a contact (their contact link); `friends`: the creator adds them back, by the contact
  *              link they box to `enc` (the creator's encryption key) in the space they joined
  *   join       join a space with its invite (or knock) link
- *   open       open a space when done; `play`: with its app's Play
+ *   open       what to open when done: a space, or in it a board, a post or a website (`play`: start it, as ▶ would),
+ *              or `chat`, a chat with the creator (a link to them alone has no space). An older Weave opens the space.
  *   welcome    a line from the creator, shown at the end
  */
 
@@ -26,7 +27,7 @@ export type OnboardStep =
   | { do: 'account' }
   | { do: 'contact'; link: string; friends?: true; enc?: Did }
   | { do: 'join'; link: string; space: { id: string; kind: string; name: string } }
-  | { do: 'open'; space: string; play?: true }
+  | { do: 'open'; space?: string; board?: string; post?: string; website?: string; chat?: Did; play?: true }
   | { do: 'welcome'; text: string };
 
 export interface OnboardPlan {
@@ -53,8 +54,20 @@ function stepOf(value: unknown): OnboardStep | undefined {
       if (!isText(s.link, 20_000) || !/^weave:(invite|knock):/.test(s.link) || !space || !isText(space.id, 200) || !isText(space.kind, 20) || !isText(space.name, 200)) return undefined;
       return { do: 'join', link: s.link, space: { id: space.id, kind: space.kind, name: space.name } };
     }
-    case 'open':
-      return isText(s.space, 200) ? { do: 'open', space: s.space, ...(s.play === true ? { play: true as const } : {}) } : undefined;
+    case 'open': {
+      const space = isText(s.space, 200) ? s.space : undefined;
+      const chat = isDid(s.chat) ? s.chat : undefined;
+      if (!space && !chat) return undefined;
+      return {
+        do: 'open',
+        ...(space ? { space } : {}),
+        ...(space && isText(s.board, 100) ? { board: s.board } : {}),
+        ...(space && isText(s.post, 200) ? { post: s.post } : {}),
+        ...(space && isText(s.website, 200) ? { website: s.website } : {}),
+        ...(chat ? { chat } : {}),
+        ...(s.play === true ? { play: true as const } : {}),
+      };
+    }
     case 'welcome':
       return isText(s.text, 1000) ? { do: 'welcome', text: s.text } : undefined;
   }

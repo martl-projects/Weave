@@ -199,6 +199,16 @@ export class StorageClient {
     return typeof invite === 'string' ? { invite } : {};
   }
 
+  /** Leave a box for a link's creator (with the key's check): for a link to a person, which shares no space. */
+  async helloPlan(code: string, check: string, box: string): Promise<void> {
+    await this.#ask({ t: 'plan.hello', code, check, box });
+  }
+
+  /** The boxes left at one of your links. */
+  async planHellos(identity: SigningIdentity, code: string): Promise<string[]> {
+    return (await this.#ask({ t: 'plan.hellos', ...this.#planProof(identity), code })).hellos as string[];
+  }
+
   async revokePlan(identity: SigningIdentity, code: string): Promise<void> {
     await this.#ask({ t: 'plan.revoke', ...this.#planProof(identity), code });
   }

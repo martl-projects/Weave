@@ -600,6 +600,13 @@ menu[role='tablist'] { margin-bottom: 0; }
 .onboard-made { display: flex; gap: 10px; align-items: center; margin: 8px 0; }
 .onboard-made .qr svg { width: 120px; height: 120px; display: block; }
 .onboard-made input { flex: 1; min-width: 0; }
+.link-builder .steps-dots { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 10px; }
+.link-builder .steps-dots li { width: 8px; height: 8px; border-radius: 50%; background: var(--muted, #8888); }
+.link-builder .steps-dots li.done { background: var(--accent, #3b6cf6); opacity: 0.5; }
+.link-builder .steps-dots li.on { background: var(--accent, #3b6cf6); }
+.link-card { display: grid; gap: 2px; margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent, #3b6cf6); background: var(--surface-2, #0001); border-radius: 4px; font-size: 12px; }
+.link-card-site { opacity: 0.6; font-size: 11px; }
+.link-list { margin-top: 12px; max-height: 220px; overflow: auto; }
 /* Inside a hub, links and quiet text follow the hub's theme, so they stay readable on any colors. */
 .space:not(.app-boxes) a:not(.button-link), .space:not(.app-boxes) .post-title { color: var(--accent); }
 .space:not(.app-boxes) :is(.muted, .post-meta, .post-meta a) { color: color-mix(in srgb, var(--text) 65%, transparent); }

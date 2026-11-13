@@ -5,6 +5,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { askPasskey, makePasskey } from './passkey.ts';
 import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { StorageClient } from '@weave/net/browser';
+import { joinLinkFor } from '../../desktop/src/renderer/joinlink.ts';
 
 declare const ROOMS_BASE: string;
 
@@ -297,7 +298,18 @@ const web: Bridge['web'] = {
     await goOnline(invite);
   },
   needsInvite: () => !invitation() && !onboardPlan.plan,
-  onboarding: () => (onboardPlan.plan ? { by: onboardPlan.plan.by.name ?? 'Someone', title: onboardPlan.plan.title, welcome: (onboardPlan.plan.steps.find((s) => s.do === 'welcome') as { text?: string } | undefined)?.text } : onboardPlan.problem ? { problem: onboardPlan.problem } : undefined),
+  onboarding: () =>
+    onboardPlan.plan
+      ? {
+          by: onboardPlan.plan.by.name ?? 'Someone',
+          title: onboardPlan.plan.title,
+          welcome: (onboardPlan.plan.steps.find((s) => s.do === 'welcome') as { text?: string } | undefined)?.text,
+          // The same link for the Weave app, which the OS hands it to (weave:join:<the link, base64url>).
+          app: joinLinkFor(onboardLink!),
+        }
+      : onboardPlan.problem
+        ? { problem: onboardPlan.problem }
+        : undefined,
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
   addPasskey: async () => {

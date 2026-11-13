@@ -438,6 +438,15 @@ export class StorageNode {
           const taken = this.plans.take(m.code, m.check, m.account === true, () => this.invite());
           return channel.send({ t: 'ok', ...taken });
         }
+        case 'plan.hello': {
+          this.plans.hello(m.code, m.check, m.box);
+          return channel.send({ t: 'ok' });
+        }
+        case 'plan.hellos': {
+          const by = planner(m);
+          if (!by) return no('that proof is not from this key');
+          return channel.send({ t: 'ok', hellos: this.plans.hellos(by, m.code) });
+        }
         case 'plan.put': {
           const by = planner(m);
           if (!by) return no('that proof is not from this key');

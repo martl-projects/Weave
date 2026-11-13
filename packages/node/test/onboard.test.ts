@@ -73,7 +73,7 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     expect((await lena.spaces()).map((s) => s.name)).toContain('Pferderennen');
     expect((await martl.onboardLinks())[0].used).toBe(1);
     // Kept as her quick start; following it again (she's in) opens it and uses nothing up.
-    expect(await lena.playLinks()).toMatchObject([{ code: made.code, title: 'Pferderennen', space: { name: 'Pferderennen', kind: 'project' }, play: true }]);
+    expect(await lena.playLinks()).toMatchObject([{ code: made.code, title: 'Pferderennen', target: { kind: 'space', space: { name: 'Pferderennen', kind: 'project' }, play: true } }]);
     expect(await lena.followOnboardLink(made.link)).toMatchObject({ open: { name: 'Pferderennen' }, play: true });
     expect((await martl.onboardLinks())[0].used).toBe(1);
     expect((await lena.playLinks()).length).toBe(1);
@@ -116,11 +116,63 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     expect((await martl.lookAtOnboardLink(made.link)).mine).toBe(true);
     // One's own link is a quick start: it opens the project, and it's kept as one.
     expect(await martl.followOnboardLink(made.link)).toMatchObject({ open: { name: 'Snake Flight' }, joined: [] });
-    expect((await martl.playLinks()).map((p) => [p.code, p.space.name, p.play])).toEqual([[made.code, 'Snake Flight', false]]);
+    expect((await martl.playLinks()).map((p) => [p.code, p.target.kind, p.target.space?.name, !!p.target.play])).toEqual([[made.code, 'space', 'Snake Flight', false]]);
     await martl.removePlayLink(made.code);
     expect(await martl.playLinks()).toEqual([]);
     const lena = person('Lena');
     await expect(lena.lookAtOnboardLink(made.link.replace(/#.*/, '#AAAAAAAAAAAAAAAAAAAAAA'))).rejects.toThrow(/is the link whole/);
     await expect(lena.lookAtOnboardLink(`${page}/j/${made.code}`)).rejects.toThrow(/not an onboarding link/);
+  });
+
+  it('makes a link to oneself: friends both ways without a shared space, the contact link waiting at the storage node', async () => {
+    const { dir, page } = await storage();
+    const martl = person('martl');
+    const bea = person('Bea');
+    PlanStore.allowIn(dir, martl.identity.did);
+    const made = await martl.createOnboardLink({ target: { kind: 'me' }, page });
+    expect(made).toMatchObject({ kind: 'me', friends: true, spaces: [] });
+    const look = await bea.lookAtOnboardLink(made.link);
+    expect(look).toMatchObject({ title: 'martl', spaces: [] });
+
+    // Bea follows it: martl is her contact, and the link says to open a chat with him.
+    const followed = await bea.followOnboardLink(made.link);
+    expect(followed).toMatchObject({ target: { kind: 'me', chat: martl.identity.author }, joined: [] });
+    expect((await bea.profile(martl.identity.author)).contact).toBe(true);
+    expect(await bea.playLinks()).toEqual([]);
+
+    // martl's node picks up her contact link at the storage node and adds her back: friends, though they share no space.
+    expect(await martl.collectOnboardHellos()).toBe(1);
+    expect((await martl.profile(bea.identity.author)).contact).toBe(true);
+    expect(await martl.collectOnboardHellos()).toBe(0);
+    sync(martl, bea);
+    sync(bea, martl);
+    await bea.reconcile();
+    await martl.reconcile();
+    sync(bea, martl);
+    sync(martl, bea);
+    expect((await martl.social()).friends.map((p) => p.name)).toContain('Bea');
+    expect((await bea.social()).friends.map((p) => p.name)).toContain('martl');
+  });
+
+  it('makes links to a board, a post and a live website in a project, each opening there', async () => {
+    const { dir, page } = await storage();
+    const martl = person('martl');
+    const lena = person('Lena');
+    await martl.createProject({ name: 'Pferderennen' });
+    PlanStore.allowIn(dir, martl.identity.did);
+    const post = await martl.submit({ space: 'Pferderennen', title: 'Die Regeln', text: 'Wer zuerst ankommt, gewinnt.' });
+
+    const toBoard = await martl.createOnboardLink({ target: { kind: 'board', space: 'Pferderennen', board: 'ideas' }, page });
+    expect(toBoard).toMatchObject({ kind: 'board', title: expect.stringContaining('Pferderennen') });
+    const toPost = await martl.createOnboardLink({ target: { kind: 'post', space: 'Pferderennen', post: post.id }, page });
+    expect(toPost).toMatchObject({ kind: 'post', title: 'Die Regeln' });
+    await expect(martl.createOnboardLink({ target: { kind: 'board', space: 'Pferderennen', board: 'nowhere' }, page })).rejects.toThrow(/no board nowhere/);
+    await expect(martl.createOnboardLink({ target: { kind: 'website', space: 'Pferderennen', website: 'Race' }, page })).rejects.toThrow(/nothing called Race is live/);
+    await expect(martl.createOnboardLink({ target: { kind: 'space', space: 'Elsewhere' }, page })).rejects.toThrow(/not in Elsewhere/);
+
+    // Following the post's link joins the project and leads to the post; the board's, once in, to the board.
+    expect(await lena.followOnboardLink(toPost.link)).toMatchObject({ target: { kind: 'post', post: post.id, space: { name: 'Pferderennen' } } });
+    expect(await lena.followOnboardLink(toBoard.link)).toMatchObject({ target: { kind: 'board', board: 'ideas' } });
+    expect((await lena.playLinks()).map((p) => p.target.kind).sort()).toEqual(['board', 'post']);
   });
 });

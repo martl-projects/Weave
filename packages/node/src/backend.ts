@@ -1,7 +1,7 @@
 import type { CompanyAction, CompanyPolicy } from './company.ts';
 import type { AuditSinkInput } from './auditsinks.ts';
-import type { OnboardLinkInfo, OnboardLinkInput, OnboardLook, PlayLinkInfo } from './onboard.ts';
-export type { OnboardLinkInfo, OnboardLinkInput, OnboardLook, PlayLinkInfo } from './onboard.ts';
+import type { OnboardLinkInfo, OnboardLinkInput, OnboardLook, OpenTarget, PlayLinkInfo } from './onboard.ts';
+export type { LinkTarget, OnboardLinkInfo, OnboardLinkInput, OnboardLook, OpenTarget, PlayLinkInfo } from './onboard.ts';
 import { WeaveError, type TextPackage, type TextRecord } from '@weave/core';
 import type { ActionWho, ArtifactKind, ArtifactSource, Builtin, GumroadLink, Language, LanguageSetting, OnchainPrice, ServiceActionField, VisitorRule } from '@weave/core';
 import type { AppImage, AppManifest, AppSetting, Attachment, Pack, RoomPages, BoardType, Choice, Did, Hint, HintSubject, HistorySetting, IssueStatus, Json, Lifetime, Mark, MarkSlot, MarkSubject, PostSort, SaveMode, ServiceContract, SpaceKind } from '@weave/core';
@@ -2035,7 +2035,7 @@ export interface Backend {
   /** No longer a quick start; the link and your memberships stay. */
   removePlayLink(code: string): Promise<void>;
   /** Follow an onboarding link with the Weave you have: the creator as a contact, its spaces joined; the space to open comes back. */
-  followOnboardLink(link: string, storage?: string, options?: { counted?: boolean }): Promise<{ open?: SpaceInfo; joined: SpaceInfo[]; welcome?: string; play?: true }>;
+  followOnboardLink(link: string, storage?: string, options?: { counted?: boolean }): Promise<{ open?: SpaceInfo; target?: OpenTarget; joined: SpaceInfo[]; welcome?: string; play?: true }>;
   /** People asking to join with your links that need your OK. */
   knocks(): Promise<KnockInfo[]>;
   /** Let someone in (or turn them away) who asked with your link. */

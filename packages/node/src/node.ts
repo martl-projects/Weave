@@ -1519,6 +1519,11 @@ export class WeaveNode implements Backend {
     this.#onboarding.removePlayLink(code);
   }
 
+  /** Add back who followed your links to you (their contact links wait at the storage node; also done as the node goes). */
+  collectOnboardHellos(): Promise<number> {
+    return this.#onboarding.collectHellos(true);
+  }
+
   /** Follow back who came in with your friendly onboarding links (also done by itself as they arrive). */
   followBackOnboarded(): Promise<number> {
     return this.#onboarding.followBack();
@@ -2025,7 +2030,7 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
     this.#content.prefetchBlobs();
-    let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts();
+    let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts() + (await this.#onboarding.collectHellos().catch(() => 0));
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.settleEpochKeys(space);
     changed += await this.#content.closeProposals();
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);

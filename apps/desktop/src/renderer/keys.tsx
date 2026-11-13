@@ -266,16 +266,25 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         <WeaveMark size={48} />
         {invited && 'title' in invited ? (
           <p>
-            <b>{t('playlink.web.invited', { by: invited.by, title: invited.title })}</b>
+            <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b>
             <br />
-            {t('playlink.web.invited.how')}
+            {t('linkb.web.invited.how')}
           </p>
         ) : (
           <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
         )}
       </div>
       {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
-      {invited && 'problem' in invited && <p className="notice">{t('playlink.web.problem', { problem: invited.problem })}</p>}
+      {/* With the Weave app on this computer: the link goes there instead, which asks to join and opens what it leads to. */}
+      {invited && 'app' in invited && invited.app && (
+        <p className="notice">
+          {t('linkb.web.have.app')}{' '}
+          <a className="button" href={invited.app}>
+            {t('linkb.web.open.app')}
+          </a>
+        </p>
+      )}
+      {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
       {/* Someone with Weave on a computer brings their account here from there, rather than making a second one. */}
       {bridge.web && !(invited && 'title' in invited) && <p className="notice">{t('web.link.hint')}</p>}
       <div className="field-row-stacked">
@@ -299,7 +308,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           {t('onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
-          {t(invited && 'title' in invited ? 'playlink.web.create' : 'onboard.create')}
+          {t(invited && 'title' in invited ? 'linkb.web.create' : 'onboard.create')}
         </button>
       </div>
     </form>,
