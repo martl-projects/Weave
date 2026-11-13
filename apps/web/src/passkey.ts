@@ -52,5 +52,14 @@ export async function makePasskey(name: string): Promise<PasskeySecret> {
   if (!credential) throw new Error('no passkey was made');
   const id = b64u.encode(new Uint8Array(credential.rawId));
   const first = (credential.getClientExtensionResults() as PrfResults).prf?.results?.first;
-  return first ? { id, secret: value(first) } : askPasskey(id);
+  if (first) return { id, secret: value(first) };
+  try {
+    return await askPasskey(id);
+  } catch (error) {
+    // Made, but it opens nothing (no PRF here): it shouldn't wait in the keychain to be picked later. Browsers that can
+    // take a hint remove it.
+    const signal = (PublicKeyCredential as unknown as { signalUnknownCredential?(o: { rpId: string; credentialId: string }): Promise<void> }).signalUnknownCredential;
+    await signal?.call(PublicKeyCredential, { rpId: location.hostname, credentialId: id }).catch(() => {});
+    throw error;
+  }
 }

@@ -90,7 +90,13 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   async arrive(url: string, given: GivenWay) {
     const way = wayIn(given);
     const data = await account.findBox(url, way.opening);
-    if (!data) throw new Error("the storage node doesn't know this: no account comes with it");
+    // Nothing here for this way in: say which way, and what does work.
+    if (!data)
+      throw new Error(
+        'words' in given
+          ? "these words aren't an account made on the web: if your Weave is on a computer, link this browser from there (Keys & devices → Browsers → Link a browser)"
+          : 'no Weave account goes with this passkey: it was made where its account was never stored here, or that browser was linked from a computer. Come in with your 24 words, then add a passkey under Keys & devices',
+      );
     await ready(await account.arriveAccount(HOME, way, data));
   },
 
