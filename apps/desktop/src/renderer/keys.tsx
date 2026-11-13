@@ -234,6 +234,22 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         }}
       >
         <p>{t('web.paste.intro')}</p>
+        {bridge.web?.scanLink && !!navigator.mediaDevices?.getUserMedia && (
+          <div className="first-ways">
+            <button
+              id="scan-link"
+              type="button"
+              className="default"
+              onClick={async () => {
+                const text = await attempt(() => bridge.web!.scanLink!());
+                if (text && (await attempt(async () => (bridge.web!.pasteLink(text), true)))) setMode('start');
+              }}
+            >
+              {t('web.paste.scan')}
+            </button>
+            <p className="small muted">{t('web.paste.or')}</p>
+          </div>
+        )}
         <textarea id="paste-link" className="wide" rows={3} required autoFocus spellCheck={false} value={pasted} onChange={(e) => setPasted(e.target.value)} />
         <div className="buttons">
           <button type="button" onClick={() => setMode('start')}>

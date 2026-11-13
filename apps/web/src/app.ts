@@ -306,6 +306,34 @@ const web: Bridge['web'] = {
   linkWaiting: () => !!lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
   // A link pasted rather than opened: the app on an iPhone's home screen is a browser of its own, which a scanned code
   // never reaches (the camera opens Safari).
+  // The code on the computer's screen, read here with the camera: what the camera app can't do for the home-screen app.
+  scanLink: async () => {
+    const { Html5Qrcode } = await import('html5-qrcode');
+    const de = navigator.language.startsWith('de');
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom))';
+    const hint = document.createElement('p');
+    hint.textContent = de ? 'Halte die Kamera auf den Code an deinem Computer.' : 'Point the camera at the code on your computer.';
+    hint.style.cssText = 'color:#fff;font:15px system-ui,sans-serif;text-align:center;margin:0';
+    const view = document.createElement('div');
+    view.id = 'weave-scan';
+    view.style.cssText = 'width:min(90vw,420px)';
+    const cancel = document.createElement('button');
+    cancel.textContent = de ? 'Abbrechen' : 'Cancel';
+    cancel.style.cssText = 'padding:10px 20px;border:1px solid #555;border-radius:8px;background:#222;color:#fff;font:15px system-ui,sans-serif';
+    overlay.append(hint, view, cancel);
+    document.body.append(overlay);
+    const scanner = new Html5Qrcode('weave-scan', { verbose: false });
+    try {
+      return await new Promise<string | undefined>((resolve, reject) => {
+        cancel.onclick = () => resolve(undefined);
+        scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 240, height: 240 } }, (text) => /#link=/.test(text) && resolve(text), () => {}).catch((error: unknown) => reject(new Error(`no camera: ${error instanceof Error ? error.message : String(error)}`)));
+      });
+    } finally {
+      await scanner.stop().catch(() => {});
+      overlay.remove();
+    }
+  },
   pasteLink: (text) => {
     const secret = /#link=([\w-]+)/.exec(text)?.[1];
     if (!secret) throw new Error("that isn't a link from Keys & devices → Browsers on your computer");

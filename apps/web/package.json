@@ -10,6 +10,7 @@
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "@sqlite.org/sqlite-wasm": "3.54.1-build1",
+    "html5-qrcode": "^2.3.8",
     "@weave/core": "*",
     "@weave/net": "*",
     "@weave/node": "*"

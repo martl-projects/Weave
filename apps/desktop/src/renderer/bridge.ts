@@ -114,6 +114,8 @@ export interface Bridge {
     linkWaiting(): boolean;
     /** A link from a computer, pasted (the home-screen app on an iPhone, which no scanned code reaches). */
     pasteLink(text: string): void;
+    /** The code on the computer's screen, read with this device's camera; undefined if cancelled. */
+    scanLink?(): Promise<string | undefined>;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */
     link(): Promise<void>;
     /** Whether a new account here still needs an invitation to the storage node. */

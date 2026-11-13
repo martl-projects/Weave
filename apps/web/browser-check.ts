@@ -69,7 +69,7 @@ if (!chrome) throw new Error('no Chrome here: say where with CHROME');
 
 const profile = mkdtempSync(join(tmpdir(), 'weave-web-chrome-'));
 let server = startServer();
-const browser = spawn(chrome, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
+const browser = spawn(chrome, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'], { stdio: 'ignore' });
 
 try {
   await until('the page', async () => (await fetch(`${ORIGIN}/sw.js`)).ok, 60_000);
@@ -434,6 +434,11 @@ try {
     await until('the first screen', () => tab.run<boolean>(`!!document.querySelector('#first-link')`));
     await tab.run(`document.querySelector('#first-link').click()`);
     await until('the paste screen', () => tab.run<boolean>(`!!document.querySelector('#paste-link')`));
+    // The camera, to scan the code: it opens over the page, and Cancel closes it again.
+    await tab.run(`document.querySelector('#scan-link').click()`);
+    await until('the camera', () => tab.run<boolean>(`!!document.querySelector('#weave-scan video') && document.querySelector('#weave-scan video').readyState >= 2`), 20_000);
+    await tab.run(`[...document.querySelectorAll('button')].find((b) => b.textContent === 'Cancel' || b.textContent === 'Abbrechen').click()`);
+    await until('the camera closed', () => tab.run<boolean>(`!document.querySelector('#weave-scan') && !!document.querySelector('#paste-link')`));
     await tab.run(`(() => { const area = document.querySelector('#paste-link'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(`here: ${link}`)}); area.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
     await until('the link screen', () => tab.run<boolean>(`!!document.querySelector('#link-browser')`));
     await tab.run(`document.querySelector('#link-browser').click()`);
