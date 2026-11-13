@@ -23,17 +23,18 @@ type Where = 'me' | 'space';
 type What = 'space' | 'board' | 'post' | 'website';
 const STEPS = 4;
 /** Where the card says the link is from: Weave Web's page, where links live. */
-const CARD_SITE = new URL('https://web.martl.io').host;
+const CARD_SITE = bridge.web ? location.host : new URL('https://web.martl.io').host;
 const USES = [0, 1, 10, 50];
 const DAYS = [7, 30, 365];
 
 /** The link builder: four steps, then the link. `space`: a place to start from (Invite in a space). */
 export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: SpaceInfo[]; space?: SpaceInfo; tabs?: ReactNode; onClose(): void }) {
   const { t } = useTexts();
-  const places = spaces.filter((s) => s.kind !== 'direct' && !s.closed);
+  // Only places you may let people into: a project's maintainers make its links, any member a group's or community's.
+  const places = spaces.filter((s) => s.kind !== 'direct' && !s.closed && s.mayInvite);
   const [step, setStep] = useState(1);
-  const [where, setWhere] = useState<Where>(from ? 'space' : 'me');
-  const [spaceId, setSpaceId] = useState(from?.id ?? places[0]?.id ?? '');
+  const [where, setWhere] = useState<Where>(from?.mayInvite ? 'space' : 'me');
+  const [spaceId, setSpaceId] = useState(from?.mayInvite ? from.id : (places[0]?.id ?? ''));
   const [what, setWhat] = useState<What>('space');
   const [board, setBoard] = useState('');
   const [post, setPost] = useState('');
@@ -87,6 +88,8 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
     const link = await attempt(() =>
       api<OnboardLinkInfo>('createOnboardLink', {
         target,
+        // Weave Web makes links for its own page (and the storage node behind it); the desktop for web.martl.io.
+        ...(bridge.web ? { page: location.origin } : {}),
         also,
         friends: where === 'me' || friends,
         play: what === 'website' ? play : false,

@@ -225,6 +225,8 @@ export interface SpaceInfo extends SpaceRef {
   managed?: { agents: string[]; provider: string; unlocked: boolean; ttlMinutes: number; graceHours: number; attestor?: Did; problem?: string };
   /** You unfollowed it: off your Home, and no notifications about its new posts (only you know). */
   hiddenFromHome?: true;
+  /** You may make invite links to it (a project's maintainers; a group's or community's members). */
+  mayInvite?: true;
   /** What people's agents and services may do here, as those who manage it set it, and the keys they approved (person/name). */
   visitors?: { agents: VisitorRule; services: VisitorRule; approved: string[] };
 }

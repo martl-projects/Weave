@@ -110,6 +110,8 @@ const server = createServer(async (req, res) => {
     const page = `http://127.0.0.1:${port}`;
     return json(await person.createOnboardLink({ project: 'Party', page, storage: page, welcome: 'Schön, dass du da bist!', play: true }));
   }
+  // This storage node lets a key make links (the browser's, to try the link builder): /dev/allow?did=…
+  if (url.pathname === '/dev/allow') return json(PlanStore.allowIn(join(scratch, 'storage'), url.searchParams.get('did') as `did:key:z${string}`));
   if (url.pathname === '/dev/members') return json((await person.members('Party')).map((m) => m.name));
   if (url.pathname === '/dev/friends') return json(await Promise.all((await person.members('Party')).map(async (m) => [m.name, (await person.profile(m.did)).following])));
   // An onboarding link's page: the page, with what a link card shows (no invitation of its own: the link brings one).

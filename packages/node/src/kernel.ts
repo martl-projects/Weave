@@ -948,7 +948,16 @@ export class Kernel {
       ...(space.kind !== 'direct' ? { visitors: this.#visitorsInfo(space) } : {}),
       ...(this.core.retention.held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.core.homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
+      ...(this.#mayInvite(space, state) ? { mayInvite: true as const } : {}),
     };
+  }
+
+  /** Whether this node may make invite links to a space: as Membership.invite decides it. */
+  #mayInvite(space: StoredSpace, state: SpaceState): boolean {
+    if (space.kind === 'direct' || state.closed) return false;
+    const me = this.node.identity.author;
+    if (state.tier && !mayDo(state, me, 'invite').ok) return false;
+    return mayDo(state, me, 'invite').ok || (space.kind !== 'project' && this.mineFounder(space));
   }
 
   /** A space's photo and banner text, as its founder, maintainers or moderators last set them. */
