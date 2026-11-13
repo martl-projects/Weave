@@ -1299,13 +1299,16 @@ export class WeaveNode implements Backend {
       .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
   }
 
-  /** Written by our devices while we have always-on nodes: every space of ours they should keep and host. When it changes. */
+  /**
+   * Written by our devices: every space of ours, with its keys, so each of our devices has them all (a computer, a
+   * browser, an always-on node). When it changes. A device that has none yet writes none while another's lists some:
+   * its empty list would be the latest, and hide the one it takes its spaces from.
+   */
   #writeNodeIndex(force = false): number {
     if (this.#isLinkedNode || this.#isLinkedBrowser) return 0;
-    const me = this.identity.author;
-    const linked = this.replica.authority.grantsOf(me).some((g) => g.role === 'agent' && (g.name?.startsWith(NODE_PREFIX) || g.name?.startsWith(BROWSER_PREFIX)) && g.revokedAfter === undefined);
-    if (!linked) return 0;
-    const body = { spaces: this.#nodeSpaces() };
+    const spaces = this.#nodeSpaces();
+    if (!spaces.length && this.#nodeIndexHash === undefined && this.#selfBodies(KIND_NODE_INDEX).length) return 0;
+    const body = { spaces };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (!force && hash === this.#nodeIndexHash) return 0;
     this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
@@ -2094,12 +2097,13 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#companies.streamAudit();
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
-    // Bookkeeping for our own computers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
+    // Bookkeeping for our own devices, not a change to anyone's spaces. What the lists name comes here first, so the list
+    // this device writes after has it too, rather than hiding it. A node writes none of its person's.
+    this.#holding.recoverSpaces();
     if (!this.#isLinkedNode) {
       this.#holding.writeKeepIndex();
       this.#writeNodeIndex();
     }
-    this.#holding.recoverSpaces();
     // On an always-on node: services handed over by its person's computers.
     changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {

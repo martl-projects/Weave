@@ -71,3 +71,30 @@ describe('content held by members', () => {
     for (const node of all) await node.close();
   });
 });
+
+describe("a person's spaces on each of their devices", () => {
+  it('a device restored from the words gets every space, the big ones too', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-holding-'));
+    dirs.push(dir);
+    const { node: martl, words } = WeaveNode.create('Martl', dir);
+    const others = ['Lena', 'Kofi', 'Ada', 'Noah'].map(person);
+    await martl.createGroup('Small');
+    await martl.createGroup('Crowd');
+    for (const node of others) await node.joinSpace(await martl.invite('Crowd'));
+    for (let round = 0; round < 2; round++) for (const a of [martl, ...others]) for (const b of [martl, ...others]) if (a !== b) sync(a, b);
+    await martl.reconcile();
+
+    const second = mkdtempSync(join(tmpdir(), 'weave-holding-'));
+    dirs.push(second);
+    const restored = await WeaveNode.restore(words, second, { events: martl.replica.events().map((r) => r.wire) });
+    // It writes no list of its own before it has taken theirs.
+    await restored.reconcile();
+    sync(restored, martl);
+    sync(martl, restored);
+    await restored.reconcile();
+    const names = (await restored.spaces()).map((s) => s.name);
+    expect(names).toContain('Small');
+    expect(names).toContain('Crowd');
+    for (const node of [martl, restored, ...others]) await node.close();
+  });
+});

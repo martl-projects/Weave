@@ -356,9 +356,10 @@ export class Holding {
     return 1;
   }
 
-  /** Spaces our latest keep index (and, on an always-on node, node index) lists that this node doesn't have. */
+  /** Spaces our latest keep index and node index list that this node doesn't have. */
   recoverSpaces(): void {
-    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.core.readsNodeIndex ? [this.core.selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
+    // Every device of ours takes every space of ours: the keep index has the small ones, the node index all.
+    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), this.core.selfBodies(KIND_NODE_INDEX).at(-1)] as Array<{ spaces?: unknown } | undefined>;
     for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
   }
 
