@@ -303,6 +303,7 @@ const web: Bridge['web'] = {
     };
   },
   linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
+  linkWaiting: () => !!lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
   link: async () => {
     const invite = given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');

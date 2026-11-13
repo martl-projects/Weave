@@ -484,6 +484,8 @@
     "web.unlock.passkey": "Open with my passkey",
     "web.unlock.words": "Your recovery words",
     "web.unlock.open": "Open",
+    "web.unlock.link": "You opened a link from your computer, but this browser holds another account already. Empty the browser, and it is linked to the account from your computer.",
+    "web.unlock.link.button": "Empty the browser and link…",
     "web.unlock.other": "These words don't open the account in this browser. Are they another account's, such as yours from a computer? Then empty this browser first, and sign in with these words after.",
     "web.unlock.empty": "Empty this browser…",
     "web.unlock.empty.ask": "The account in this browser now is taken out of it. If it has words or a passkey, it stays at your storage node and comes back with them. A browser linked by QR code from a computer is simply linked again there. Empty it?",

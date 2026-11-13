@@ -110,6 +110,8 @@ export interface Bridge {
     websiteFrame(room: { id: string; name: string }): { url: string; attach(window: Window, onFailed: (why: string) => void): void; detach(): void };
     /** Whether this page was opened with a link from one of the person's computers (linkBrowser). */
     linking(): boolean;
+    /** A link from a computer came, but this browser holds an account already: it has to be emptied first. */
+    linkWaiting(): boolean;
     /** Link this browser with that link: a passkey of its own, then the person's account here. */
     link(): Promise<void>;
     /** Whether a new account here still needs an invitation to the storage node. */

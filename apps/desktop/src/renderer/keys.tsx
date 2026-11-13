@@ -442,8 +442,10 @@ export function Unlock({ onDone }: { onDone: () => void }) {
   // With a passkey, asked for at once (back from a game, a new start): a browser that wants a tap first says no
   // quietly, and the button is there.
   const asked = useRef(false);
+  // A link from a computer is waiting: the account here isn't the one wanted, so no passkey is asked for it.
+  const linkWaiting = bridge.web!.linkWaiting();
   useEffect(() => {
-    if (asked.current || !bridge.web!.passkey()) return;
+    if (asked.current || !bridge.web!.passkey() || linkWaiting) return;
     asked.current = true;
     setBusy(true);
     bridge.web!.unlock().then(onDone, () => setBusy(false));
@@ -459,9 +461,20 @@ export function Unlock({ onDone }: { onDone: () => void }) {
             <WeaveMark size={48} />
             <p>{t('web.unlock.intro')}</p>
           </div>
+          {linkWaiting && (
+            <div className="notice">
+              <p>{t('web.unlock.link')}</p>
+              <div className="buttons">
+                {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
+                <button id="empty-and-link" className="default" onClick={async () => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.forget())))}>
+                  {t('web.unlock.link.button')}
+                </button>
+              </div>
+            </div>
+          )}
           {bridge.web!.passkey() && (
             <div className="buttons">
-              <button className="default" disabled={busy} onClick={() => void open()}>
+              <button className={linkWaiting ? '' : 'default'} disabled={busy} onClick={() => void open()}>
                 {t('web.unlock.passkey')}
               </button>
             </div>

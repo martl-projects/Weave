@@ -395,6 +395,28 @@ try {
 
   server = startServer();
   await until('the server to come back', async () => (await fetch(`${ORIGIN}/sw.js`)).ok, 60_000);
+
+  // A link from Lena's computer, opened in a browser that holds another account: emptied, then linked.
+  {
+    const { link } = (await (await fetch(`${ORIGIN}/dev/link-browser?name=phone&origin=${encodeURIComponent(ORIGIN)}`)).json()) as { link: string };
+    // As from the camera: a new page load, not a change of the # in a page that's open.
+    await send('Page.navigate', { url: 'about:blank' });
+    await sleep(500);
+    await open(link);
+    await until('the lock, with the link waiting', () => run<boolean>(`!!document.querySelector('#empty-and-link')`), 20_000).catch(async (error: Error) => {
+      throw new Error(`${error.message}; it shows: ${await run<string>(`document.body.innerText.slice(0, 300)`)}`);
+    });
+    if (await run<boolean>(`!!document.querySelector('.app-window')`)) throw new Error('it opened the account here, with a link waiting');
+    await run(`window.confirm = () => true; document.querySelector('#empty-and-link').click()`);
+    await sleep(300);
+    await run(`document.querySelector('.question-text')?.parentElement?.querySelector('.buttons button.default')?.click()`);
+    await until('the link screen', () => run<boolean>(`!!document.querySelector('#link-browser')`), 30_000);
+    await run(`document.querySelector('#link-browser').click()`);
+    await appUp();
+    const as = (await call<{ name?: string }>('profile')).result?.name;
+    if (as !== 'Lena') throw new Error(`linked as ${as}, not Lena`);
+    passed('a link opened where another account is: the browser is emptied, and linked');
+  }
   close();
   console.log(`\n${steps.length} steps passed`);
 } finally {
