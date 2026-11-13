@@ -38,7 +38,7 @@ await buildRooms(dist, { web: `http://localhost:${port}`, storage: `http://local
 console.log('services:', await buildServices(dist));
 
 const scratch = mkdtempSync(join(tmpdir(), 'weave-web-dev-'));
-const person = WeaveNode.init('Lena', join(scratch, 'lena'));
+const { node: person, words: personWords } = WeaveNode.create('Lena', join(scratch, 'lena'));
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 
@@ -92,6 +92,13 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(value));
   };
+  // Lena opens another website in Party, as when she puts one live on her computer.
+  if (url.pathname === '/dev/website-open') {
+    // A website of its own, on a port of its own: one port answers one website.
+    const encore = createServer((_req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Encore</title><h1>Encore</h1>'));
+    await new Promise<void>((resolve) => encore.listen(0, '127.0.0.1', resolve));
+    return json(await person.openWebsite({ project: 'Party', name: url.searchParams.get('name') ?? 'Encore', port: (encore.address() as { port: number }).port }).catch((error: Error) => ({ error: error.message })));
+  }
   if (url.pathname === '/dev/invite') return json({ invite: storage.invite(), link: await person.invite('Climb'), party: await person.invite('Party'), website: website.id });
   // A website's tab: its own origin under .localhost, as under weave-rooms.net (rooms-worker.ts).
   if (/^[a-z2-7]{26}\.localhost:\d+$/.test(req.headers.host ?? '')) {
@@ -103,6 +110,8 @@ const server = createServer(async (req, res) => {
   // Lena links a browser, as from her computer: the link opens this page, and the handover waits here (/link/…).
   if (url.pathname === '/dev/link-browser') return json(await person.linkBrowser({ url: url.searchParams.get('origin') ?? `http://127.0.0.1:${port}`, name: url.searchParams.get('name') ?? 'test' }));
   if (url.pathname.startsWith('/link/')) return handovers(req, res, url.pathname.slice('/link/'.length));
+  // Lena's words, as she'd type them into a browser (dev only: the words never leave a real computer).
+  if (url.pathname === '/dev/words') return json({ words: personWords });
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
   // An onboarding link to Party, as Lena makes one in her app (idea bZFDCQNT): this storage node lets her.
   if (url.pathname === '/dev/onboard') {
@@ -145,7 +154,7 @@ const server = createServer(async (req, res) => {
     return res.end(readFileSync(join(dist, 'index.html'), 'utf8').replace('</head>', `<meta name="weave-invite" content="${storage.invite()}"></head>`));
   }
   const file = url.pathname.slice(1);
-  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
+  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
   if (file.includes('..') || !existsSync(join(dist, file))) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
   createReadStream(join(dist, file)).pipe(res);

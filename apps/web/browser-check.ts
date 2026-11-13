@@ -69,7 +69,7 @@ if (!chrome) throw new Error('no Chrome here: say where with CHROME');
 
 const profile = mkdtempSync(join(tmpdir(), 'weave-web-chrome-'));
 let server = startServer();
-const browser = spawn(chrome, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
+const browser = spawn(chrome, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'], { stdio: 'ignore' });
 
 try {
   await until('the page', async () => (await fetch(`${ORIGIN}/sw.js`)).ok, 60_000);
@@ -88,16 +88,38 @@ try {
     await until('the page to answer', () => run<boolean>(`document.readyState === 'complete' && !!document.querySelector('#root')`));
   };
   const appUp = () => until('the app', () => run<boolean>(`!!document.querySelector('.app-window')`));
+  // Locked, Weave asks for the passkey at once; where that waits for a tap, the tap.
+  const unlocked = () =>
+    until(
+      'the account open',
+      async () => {
+        if (await run<boolean>(`!!document.querySelector('.app-window')`)) return true;
+        if (await run<boolean>(`!!document.querySelector('#unlock-words') && document.querySelector('.buttons button.default') && !document.querySelector('.buttons button.default').disabled`)) await run(clickDefault);
+        return false;
+      },
+      30_000,
+    );
+  const lockedOrOpen = `!!document.querySelector('#unlock-words') || !!document.querySelector('.app-window')`;
   const call = <T>(method: string, ...args: unknown[]) => run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
   const texts = async () => ((await call<Array<{ text: string }>>('messages', 'Climb')).result ?? []).map((m) => m.text);
   const clickDefault = `document.querySelector('.buttons button.default').click()`;
 
   await open(ORIGIN);
-  await until('the first screen', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
+  await until('the first screen', () => run<boolean>(`!!document.querySelector('#first-create')`));
+  await run(`document.querySelector('#first-create').click()`);
+  await until('the name', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
   await run(`(() => { const input = document.querySelector('#welcome-name'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Webby'); input.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
   await until('the words', () => run<boolean>(`!!document.querySelector('#wrote')`));
   if (await run<boolean>(`!!document.querySelector('.notice.alarm')`)) throw new Error('no passkey was made');
   passed('a passkey with PRF makes an account');
+  // All 24 words to the clipboard at once, numbered: the way a restore takes them back.
+  await run(`navigator.clipboard.writeText = async (text) => void (window.__copied = text)`);
+  await run(`document.querySelector('#copy-words').click()`);
+  const copied = await until('the words copied', () => run<string>(`window.__copied`));
+  const listed = await run<string[]>(`[...document.querySelectorAll('.words li')].map((li) => li.textContent.replace(/^\\s*\\d+\\.\\s*/, ''))`);
+  if (copied !== listed.map((w, i) => `${i + 1}. ${w}`).join('\n')) throw new Error(`copied ${JSON.stringify(copied)}`);
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'words.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  passed('the 24 words copy at once');
   // Weave's own contacts for newcomers, as `weave init` adds them: martl, through the front door.
   for (const link of bundle.contacts) {
     const { did } = decodeContact(link);
@@ -229,8 +251,42 @@ try {
   await send('Emulation.clearDeviceMetricsOverride');
   passed('on a phone it opens over Weave, in a frame', [framedText, framedShows.split('\n').filter((l) => l.startsWith('ws:')).join('')]);
 
+  // On an iPhone it takes Weave's whole window: Weave hands the visit over in the address and goes; the website runs
+  // without Weave beside it, and its corner leads back, where Weave is locked again.
+  await run(`window.weave.web.visitWebsite({ id: ${JSON.stringify(website)}, name: 'Party' })`).catch(() => undefined);
+  await until('the website in the whole window', async () => {
+    const text = await run<string | undefined>(`location.hash === '' && /\\.localhost:/.test(location.host) ? document.querySelector('iframe')?.contentDocument?.body?.innerText : undefined`).catch(() => undefined);
+    return text?.includes('ws: echo') && /tick [1-9]/.test(text) ? text : undefined;
+  }, 45_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; it shows: ${await run<string>(`location.href + ' ' + document.body?.innerText?.slice(0, 300)`).catch((e: Error) => e.message)}`);
+  });
+  await run(`[...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Weave').click()`);
+  await run(`[...document.querySelectorAll('button')].find((b) => /Back to Weave|Zurück zu Weave/.test(b.textContent)).click()`).catch(() => undefined);
+  await until('Weave again', () => run<boolean>(`location.origin === ${JSON.stringify(ORIGIN)} && (${lockedOrOpen})`), 30_000);
+  await unlocked();
+  passed('on an iPhone it takes the whole window, and leads back to Weave');
+
+  // Lena puts another website live on her computer while the project's Live page is open here: it shows, no reload.
+  {
+    await run(`location.hash = '#/p/${partyId}/live'`);
+    await until('the Live page', () => run<boolean>(`document.querySelectorAll('.room').length > 0`), 30_000);
+    const before = await run<number>(`document.querySelectorAll('.room').length`);
+    const opened = (await (await fetch(`${ORIGIN}/dev/website-open?name=Encore`)).json()) as { id: string; error?: string };
+    if (opened.error) throw new Error(`Lena couldn't open another website: ${opened.error}`);
+    const encore = opened.id;
+    const listed = await until('the new website, in the node', async () => ((await call<Array<{ id: string }>>('websites')).result ?? []).some((w) => w.id === encore) || undefined, 30_000).catch(() => false);
+    const shown = await until('the new website, on the page', () => run<boolean>(`document.querySelectorAll('.room').length > ${before}`), 15_000).catch(() => false);
+    if (!listed || !shown) throw new Error(`Lena's new website: in the node ${listed}, on the page ${shown}`);
+    await run(`location.hash = '#/'`);
+    passed('a website put live on a computer shows on the page that is open, without a reload');
+  }
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
+  // Installable as an app of its own (Android: its own window, no browser bars), as Chrome itself judges it.
+  const { installabilityErrors } = (await send('Page.getInstallabilityErrors')) as { installabilityErrors: Array<{ errorId: string }> };
+  if (installabilityErrors.length) throw new Error(`not installable: ${installabilityErrors.map((e) => e.errorId).join(', ')}`);
+  passed('Chrome can install it as an app of its own');
 
   // On a phone's width: what the menu bar has on a computer is under Settings.
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
@@ -273,15 +329,47 @@ try {
   chromeItself.close();
   passed("a browser linked from Lena's computer is Lena, without her words");
 
+  // Lena's words alone, in a browser that has nothing, while her computer is online: she comes as a device of her own.
+  {
+    const { words: lenaWords } = (await (await fetch(`${ORIGIN}/dev/words`)).json()) as { words: string };
+    const { invite } = (await (await fetch(`${ORIGIN}/dev/invite`)).json()) as { invite: string };
+    const browser = await devtools(((await (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl);
+    const { browserContextId: context } = (await browser.send('Target.createBrowserContext')) as { browserContextId: string };
+    const { targetId: target } = (await browser.send('Target.createTarget', { url: 'about:blank', browserContextId: context })) as { targetId: string };
+    const tab = await devtools(`ws://127.0.0.1:${DEBUG}/devtools/page/${target}`);
+    await tab.send('Page.enable');
+    await tab.send('Runtime.enable');
+    await tab.send('WebAuthn.enable');
+    await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
+    await tab.send('Page.navigate', { url: `${ORIGIN}/?invite=${invite}` });
+    await until('the first screen', () => tab.run<boolean>(`!!document.querySelector('#first-words')`));
+    await tab.run(`document.querySelector('#first-words').click()`);
+    await until('the words screen', () => tab.run<boolean>(`!!document.querySelector('#restore-words')`));
+    // Numbered, one per line, as the copy button gives them.
+    const typed = lenaWords.split(' ').map((w, i) => `${i + 1}. ${w}`).join('\n');
+    await tab.run(`(() => { const area = document.querySelector('#restore-words'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(typed)}); area.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
+    await until('Lena, from her words', () => tab.run<boolean>(`!!document.querySelector('.app-window')`), 70_000).catch(async (error: Error) => {
+      throw new Error(`${error.message}; it shows: ${await tab.run<string>(`document.body.innerText.slice(0, 400)`)}`);
+    });
+    const tabCall = <T>(method: string, ...args: unknown[]) => tab.run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
+    const as = (await tabCall<{ name?: string }>('profile')).result?.name;
+    if (as !== 'Lena') throw new Error(`the words brought ${as}, not Lena`);
+    await until("Lena's group, from her computer", async () => ((await tabCall<Array<{ text: string }>>('messages', 'Climb')).result ?? []).some((m) => m.text === 'the rope is in the van'), 40_000);
+    if (!(await tab.run<string[]>(`window.weave.web.ways()`)).some((way) => way !== 'words')) throw new Error('no passkey was made for the next time');
+    tab.close();
+    await browser.send('Target.disposeBrowserContext', { browserContextId: context });
+    browser.close();
+    passed("Lena's words from her computer bring her to an empty browser, spaces and a passkey with her");
+  }
+
   // Leaving this browser, and coming back with nothing but the passkey.
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;
   await sleep(600);
   await run(`void window.weave.web.forget()`);
-  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
-  passed('leaving takes everything from this browser');
-  await run(`[...document.querySelectorAll('.buttons button')].find((b) => !b.classList.contains('default')).click()`);
-  await until('the way back', () => run<boolean>(`document.querySelectorAll('.buttons button').length === 3`));
-  await run(`document.querySelectorAll('.buttons button')[1].click()`);
+  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#first-passkey.default')`));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'first.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  passed('leaving takes everything from this browser, and asks first for a passkey');
+  await run(`document.querySelector('#first-passkey').click()`);
   await appUp();
   const back = (await call<{ did: string; signer: string }>('whoami')).result!;
   if (back.did !== who.did || back.signer === who.signer) throw new Error(`came back as ${JSON.stringify(back)}, was ${JSON.stringify(who)}`);
@@ -289,11 +377,9 @@ try {
   passed('the passkey alone brings the account back, with a device key of its own');
 
   await open(ORIGIN);
-  await until('the lock', () => run<boolean>(`!!document.querySelector('#unlock-words')`));
-  passed('a reload locks it');
-  await run(clickDefault);
-  await appUp();
-  passed('the passkey opens it again');
+  // Locked after a reload, and the passkey asked for at once: open without a click.
+  await until('the passkey, asked at once', () => run<boolean>(`!!document.querySelector('.app-window')`), 20_000);
+  passed('a reload locks it, and asks for the passkey at once');
   if (!(await run<boolean>(`!!navigator.serviceWorker.controller`))) throw new Error('no service worker in charge');
 
   // A second tab: one tab at a time has the account, and the second takes it over.
@@ -309,27 +395,80 @@ try {
   await until('the second tab to have it', () => tab.run<boolean>(locked));
   passed('it takes the account over, and the first tab lets go');
   await run(`document.querySelector('#take-over').click()`);
-  await until('the first tab to have it again', () => run<boolean>(locked));
+  await until('the first tab to have it again', () => run<boolean>(lockedOrOpen));
   await until('the second tab to let go', () => tab.run<boolean>(takeOver));
   tab.close();
   await fetch(`http://127.0.0.1:${DEBUG}/json/close/${second.id}`);
-  await run(clickDefault);
-  await appUp();
+  await unlocked();
   passed('and the first takes it back');
 
   server.kill();
   await until('the server to go', () => fetch(`${ORIGIN}/health`).then(() => false, () => true));
   await open(ORIGIN);
-  await until('the lock, offline', () => run<boolean>(`!!document.querySelector('#unlock-words')`));
+  await until('the lock, offline', () => run<boolean>(lockedOrOpen));
   passed('without a network the page starts');
-  await run(clickDefault);
-  await appUp();
+  await unlocked();
   const offline = await texts();
   if (!offline.includes('from Chrome')) throw new Error(`read ${JSON.stringify(offline)} offline`);
   passed('and it opens and reads', offline.length);
 
   server = startServer();
   await until('the server to come back', async () => (await fetch(`${ORIGIN}/sw.js`)).ok, 60_000);
+
+  // A link from Lena's computer, opened in a browser that holds another account: emptied, then linked.
+  {
+    const { link } = (await (await fetch(`${ORIGIN}/dev/link-browser?name=phone&origin=${encodeURIComponent(ORIGIN)}`)).json()) as { link: string };
+    // As from the camera: a new page load, not a change of the # in a page that's open.
+    await send('Page.navigate', { url: 'about:blank' });
+    await sleep(500);
+    await open(link);
+    await until('the lock, with the link waiting', () => run<boolean>(`!!document.querySelector('#empty-and-link')`), 20_000).catch(async (error: Error) => {
+      throw new Error(`${error.message}; it shows: ${await run<string>(`document.body.innerText.slice(0, 300)`)}`);
+    });
+    if (await run<boolean>(`!!document.querySelector('.app-window')`)) throw new Error('it opened the account here, with a link waiting');
+    await run(`window.confirm = () => true; document.querySelector('#empty-and-link').click()`);
+    await sleep(300);
+    await run(`document.querySelector('.question-text')?.parentElement?.querySelector('.buttons button.default')?.click()`);
+    await until('the link screen', () => run<boolean>(`!!document.querySelector('#link-browser')`), 30_000);
+    await run(`document.querySelector('#link-browser').click()`);
+    await appUp();
+    const as = (await call<{ name?: string }>('profile')).result?.name;
+    if (as !== 'Lena') throw new Error(`linked as ${as}, not Lena`);
+    passed('a link opened where another account is: the browser is emptied, and linked');
+  }
+
+  // The app on an iPhone's home screen is a browser of its own, which a scanned code never reaches: the link, pasted.
+  {
+    const { link } = (await (await fetch(`${ORIGIN}/dev/link-browser?name=homescreen&origin=${encodeURIComponent(ORIGIN)}`)).json()) as { link: string };
+    const { invite } = (await (await fetch(`${ORIGIN}/dev/invite`)).json()) as { invite: string };
+    const browser = await devtools(((await (await fetch(`http://127.0.0.1:${DEBUG}/json/version`)).json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl);
+    const { browserContextId: context } = (await browser.send('Target.createBrowserContext')) as { browserContextId: string };
+    const { targetId: target } = (await browser.send('Target.createTarget', { url: 'about:blank', browserContextId: context })) as { targetId: string };
+    const tab = await devtools(`ws://127.0.0.1:${DEBUG}/devtools/page/${target}`);
+    await tab.send('Page.enable');
+    await tab.send('Runtime.enable');
+    await tab.send('WebAuthn.enable');
+    await tab.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true, hasPrf: true } });
+    await tab.send('Page.navigate', { url: `${ORIGIN}/?invite=${invite}` });
+    await until('the first screen', () => tab.run<boolean>(`!!document.querySelector('#first-link')`));
+    await tab.run(`document.querySelector('#first-link').click()`);
+    await until('the paste screen', () => tab.run<boolean>(`!!document.querySelector('#paste-link')`));
+    // The camera, to scan the code: it opens over the page, and Cancel closes it again.
+    await tab.run(`document.querySelector('#scan-link').click()`);
+    await until('the camera', () => tab.run<boolean>(`!!document.querySelector('#weave-scan video') && document.querySelector('#weave-scan video').readyState >= 2`), 20_000);
+    await tab.run(`[...document.querySelectorAll('button')].find((b) => b.textContent === 'Cancel' || b.textContent === 'Abbrechen').click()`);
+    await until('the camera closed', () => tab.run<boolean>(`!document.querySelector('#weave-scan') && !!document.querySelector('#paste-link')`));
+    await tab.run(`(() => { const area = document.querySelector('#paste-link'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(`here: ${link}`)}); area.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
+    await until('the link screen', () => tab.run<boolean>(`!!document.querySelector('#link-browser')`));
+    await tab.run(`document.querySelector('#link-browser').click()`);
+    await until('Lena, linked by a pasted link', () => tab.run<boolean>(`!!document.querySelector('.app-window')`), 30_000);
+    const as = (await tab.run<{ result?: { name?: string } }>(`window.weave.call('profile')`)).result?.name;
+    if (as !== 'Lena') throw new Error(`linked as ${as}, not Lena`);
+    tab.close();
+    await browser.send('Target.disposeBrowserContext', { browserContextId: context });
+    browser.close();
+    passed('a link pasted, not scanned, links a browser too (the home-screen app on an iPhone)');
+  }
   close();
   console.log(`\n${steps.length} steps passed`);
 } finally {

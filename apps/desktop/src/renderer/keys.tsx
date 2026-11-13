@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
 import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
@@ -23,22 +23,33 @@ import { T, useTexts } from './texts.tsx';
  */
 
 function Words({ words }: { words: string }) {
+  const { t } = useTexts();
   const list = words.split(' ');
   return (
-    <ol className="words sunken">
-      {list.map((w, i) => (
-        <li key={i}>
-          <span className="n">{i + 1}.</span> {w}
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol className="words sunken">
+        {list.map((w, i) => (
+          <li key={i}>
+            <span className="n">{i + 1}.</span> {w}
+          </li>
+        ))}
+      </ol>
+      {/* All 24 at once, numbered one per line: a restore takes them back as they are. */}
+      <div className="buttons">
+        <button id="copy-words" type="button" onClick={() => void navigator.clipboard.writeText(list.map((w, i) => `${i + 1}. ${w}`).join('\n')).then(() => toast(t('onboard.words.copied')))}>
+          <Icon name="copy" /> {t('onboard.words.copy')}
+        </button>
+      </div>
+    </>
   );
 }
 
 /** First start: a name, then the words to write down; or restore from words you already have; or a company account. */
 export function Onboarding({ onDone }: { onDone(): void }) {
   const { t } = useTexts();
-  const [mode, setMode] = useState<'create' | 'restore' | 'company'>('create');
+  // Weave Web first asks how: most who come back have a passkey already (synced by their phone or browser).
+  const [mode, setMode] = useState<'start' | 'create' | 'restore' | 'company' | 'paste'>(() => (bridge.web ? (bridge.web.startWith() === 'link' ? 'paste' : 'start') : 'create'));
+  const [pasted, setPasted] = useState('');
   // A company's device management may name its enrollment link, or allow only company accounts here.
   const [managed, setManaged] = useState<{ enrollLink?: string; companyOnly?: boolean }>({});
   const [link, setLink] = useState('');
@@ -178,7 +189,15 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       >
         {bridge.web && <p className="notice">{t('web.link.hint')}</p>}
         <p className="small">{t(bridge.web ? 'web.restore.intro' : 'onboard.restore.intro')}</p>
-        <textarea className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        <textarea id="restore-words" className="wide" rows={4} required autoFocus spellCheck={false} value={restoring} onChange={(e) => setRestoring(e.target.value)} />
+        {/* An account from a computer comes with an invitation, as a new one does; a browser's account needs none. */}
+        {bridge.web?.needsInvite() && (
+          <div className="field-row-stacked">
+            <label htmlFor="restore-invite">{t('web.restore.invite')}</label>
+            <input id="restore-invite" spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+          </div>
+        )}
+        {bridge.web && busy && <p className="small muted">{t('web.restore.waiting')}</p>}
         {/* With a backup file, the words and the file are enough: everything it holds comes back, with nobody else online. */}
         {!bridge.web && <div className="field-row-stacked">
           <label htmlFor="restore-backup">{t('onboard.restore.backup')}</label>
@@ -193,25 +212,51 @@ export function Onboarding({ onDone }: { onDone(): void }) {
           <p className="small muted">{t('onboard.restore.backup.why')}</p>
         </div>}
         <div className="buttons">
-          <button type="button" onClick={() => setMode('create')}>
+          <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'create')}>
             {t('button.back')}
           </button>
-          {bridge.web && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                const ok = await attempt(() => bridge.web!.arrive().then(() => true));
-                setBusy(false);
-                if (ok) onDone();
-              }}
-            >
-              {t('onboard.restore.passkey')}
-            </button>
-          )}
           <button className="default" disabled={busy}>
             {t(busy ? 'onboard.restore.looking' : 'onboard.restore')}
+          </button>
+        </div>
+      </form>,
+    );
+
+  // Weave Web: a link from the person's computer, pasted (the home-screen app on an iPhone, which no scanned code reaches).
+  if (mode === 'paste' && !bridge.web?.linking())
+    return window(
+      t('web.paste.title'),
+      <form
+        onSubmit={async (e: FormEvent) => {
+          e.preventDefault();
+          // Taken, the link screen comes next (linking()).
+          if (await attempt(async () => (bridge.web!.pasteLink(pasted), true))) setMode('start');
+        }}
+      >
+        <p>{t('web.paste.intro')}</p>
+        {bridge.web?.scanLink && !!navigator.mediaDevices?.getUserMedia && (
+          <div className="first-ways">
+            <button
+              id="scan-link"
+              type="button"
+              className="default"
+              onClick={async () => {
+                const text = await attempt(() => bridge.web!.scanLink!());
+                if (text && (await attempt(async () => (bridge.web!.pasteLink(text), true)))) setMode('start');
+              }}
+            >
+              {t('web.paste.scan')}
+            </button>
+            <p className="small muted">{t('web.paste.or')}</p>
+          </div>
+        )}
+        <textarea id="paste-link" className="wide" rows={3} required autoFocus spellCheck={false} value={pasted} onChange={(e) => setPasted(e.target.value)} />
+        <div className="buttons">
+          <button type="button" onClick={() => setMode('start')}>
+            {t('button.back')}
+          </button>
+          <button className="default" disabled={!pasted.trim()}>
+            {t('button.continue')}
           </button>
         </div>
       </form>,
@@ -249,6 +294,61 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       </form>,
     );
 
+  // Weave Web, first time in this browser: sign in with a passkey, make an account, or the words.
+  if (mode === 'start') {
+    const fromGame = !!invited && 'title' in invited;
+    const passkey = async () => {
+      setBusy(true);
+      const ok = await attempt(() => bridge.web!.arrive().then(() => true));
+      setBusy(false);
+      if (ok) onDone();
+    };
+    return window(
+      t('onboard.welcome'),
+      <>
+        <div className="welcome-head">
+          <WeaveMark size={48} />
+          {fromGame ? (
+            <p>
+              <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b>
+              <br />
+              {t('web.first.intro.game')}
+            </p>
+          ) : (
+            <p>{t('web.first.intro')}</p>
+          )}
+        </div>
+        {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
+        {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
+        {/* With the Weave app on this computer: the link goes there instead, which asks to join and opens what it leads to. */}
+        {invited && 'app' in invited && invited.app && (
+          <p className="notice">
+            {t('linkb.web.have.app')}{' '}
+            <a className="button" href={invited.app}>
+              {t('linkb.web.open.app')}
+            </a>
+          </p>
+        )}
+        <div className="first-ways">
+          <button id="first-passkey" className={fromGame ? '' : 'default'} disabled={busy} onClick={() => void passkey()}>
+            <Icon name="lock" /> {t('web.first.passkey')}
+          </button>
+          <p className="small muted">{t('web.first.passkey.why')}</p>
+          <button id="first-create" className={fromGame ? 'default' : ''} disabled={busy} onClick={() => setMode('create')}>
+            {t(fromGame ? 'linkb.web.create' : 'web.first.create')}
+          </button>
+          <button id="first-words" disabled={busy} onClick={() => setMode('restore')}>
+            {t('web.first.words')}
+          </button>
+          <button id="first-link" disabled={busy} onClick={() => setMode('paste')}>
+            {t('web.first.link')}
+          </button>
+        </div>
+        <p className="notice">{t('web.link.hint')}</p>
+      </>,
+    );
+  }
+
   return window(
     t('onboard.welcome'),
     <form
@@ -275,18 +375,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
         )}
       </div>
       {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
-      {/* With the Weave app on this computer: the link goes there instead, which asks to join and opens what it leads to. */}
-      {invited && 'app' in invited && invited.app && (
-        <p className="notice">
-          {t('linkb.web.have.app')}{' '}
-          <a className="button" href={invited.app}>
-            {t('linkb.web.open.app')}
-          </a>
-        </p>
-      )}
       {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
-      {/* Someone with Weave on a computer brings their account here from there, rather than making a second one. */}
-      {bridge.web && !(invited && 'title' in invited) && <p className="notice">{t('web.link.hint')}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
@@ -304,8 +393,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
             {t('onboard.company.button')}
           </button>
         )}
-        <button type="button" onClick={() => setMode('restore')}>
-          {t('onboard.restore.button')}
+        <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'restore')}>
+          {t(bridge.web ? 'button.back' : 'onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
           {t(invited && 'title' in invited ? 'linkb.web.create' : 'onboard.create')}
@@ -323,6 +412,7 @@ function WebAccountBox() {
     <fieldset>
       <legend>{t('web.ways.legend')}</legend>
       <p className="small">{t('web.ways.why')}</p>
+      <p className="small muted">{t('web.ways.delete')}</p>
       <table className="keys-table">
         <tbody>
           {(ways ?? []).map((way) => (
@@ -383,12 +473,41 @@ export function Unlock({ onDone }: { onDone: () => void }) {
   const { t } = useTexts();
   const [words, setWords] = useState('');
   const [busy, setBusy] = useState(false);
+  // Words that don't open what's here: most likely another account's (one from a computer, say), and this browser
+  // holds a different one. Then the way is to empty this browser first.
+  const [other, setOther] = useState(false);
+  // What went wrong, said plainly (the node's errors are for developers).
+  const [said, setSaid] = useState<string>();
   const open = async (given?: string) => {
     setBusy(true);
-    const ok = await attempt(() => bridge.web!.unlock(given).then(() => true));
+    setSaid(undefined);
+    let wrong = false;
+    const ok = await bridge.web!.unlock(given).then(
+      () => true,
+      (error: Error) => {
+        wrong = /doesn't open|isn't a way/.test(error.message);
+        // A passkey dialog closed, or the browser said no: nothing to say.
+        if (/NotAllowed|abort|cancel/i.test(error.name + error.message)) return false;
+        setSaid(wrong ? t(given ? 'web.unlock.wrong.words' : 'web.unlock.wrong.passkey') : error.message);
+        return false;
+      },
+    );
     setBusy(false);
+    setOther(wrong);
     if (ok) onDone();
   };
+  const reset = async (then?: 'link') => void ((await ask(t('web.unlock.empty.ask'), t('web.unlock.empty'))) && (await attempt(() => bridge.web!.reset(then))));
+  // With a passkey, asked for at once (back from a game, a new start): a browser that wants a tap first says no
+  // quietly, and the button is there.
+  const asked = useRef(false);
+  // A link from a computer is waiting: the account here isn't the one wanted, so no passkey is asked for it.
+  const linkWaiting = bridge.web!.linkWaiting();
+  useEffect(() => {
+    if (asked.current || !bridge.web!.passkey() || linkWaiting) return;
+    asked.current = true;
+    setBusy(true);
+    bridge.web!.unlock().then(onDone, () => setBusy(false));
+  }, []);
   return (
     <div className="desktop">
       <div className="window welcome">
@@ -400,9 +519,20 @@ export function Unlock({ onDone }: { onDone: () => void }) {
             <WeaveMark size={48} />
             <p>{t('web.unlock.intro')}</p>
           </div>
+          {linkWaiting && (
+            <div className="notice">
+              <p>{t('web.unlock.link')}</p>
+              <div className="buttons">
+                {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
+                <button id="empty-and-link" className="default" onClick={() => void reset()}>
+                  {t('web.unlock.link.button')}
+                </button>
+              </div>
+            </div>
+          )}
           {bridge.web!.passkey() && (
             <div className="buttons">
-              <button className="default" disabled={busy} onClick={() => void open()}>
+              <button className={linkWaiting ? '' : 'default'} disabled={busy} onClick={() => void open()}>
                 {t('web.unlock.passkey')}
               </button>
             </div>
@@ -417,10 +547,25 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
               <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
             </div>
+            {said && <p className="notice alarm">{said}</p>}
+            {other && <p className="notice">{t('web.unlock.other')}</p>}
             <div className="buttons">
               <button disabled={busy || !words.trim()}>{t('web.unlock.open')}</button>
             </div>
           </form>
+          {/* Always a way out: another account, or this browser linked with a computer instead. */}
+          <fieldset>
+            <legend>{t('web.unlock.else')}</legend>
+            <div className="first-ways">
+              <button id="reset-and-link" type="button" disabled={busy} onClick={() => void reset('link')}>
+                {t('web.unlock.else.link')}
+              </button>
+              <button id="empty-browser" type="button" disabled={busy} onClick={() => void reset()}>
+                {t('web.unlock.empty')}
+              </button>
+              <p className="small muted">{t('web.unlock.else.why')}</p>
+            </div>
+          </fieldset>
         </div>
       </div>
     </div>

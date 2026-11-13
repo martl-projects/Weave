@@ -50,6 +50,9 @@ writeFileSync(
     '  Referrer-Policy: no-referrer',
     // By invitation for now: not for search engines.
     '  X-Robots-Tag: noindex, nofollow',
+    // The page's files keep their names across deploys (app.js, worker.js): asked again each time (an unchanged one is a
+    // short 304), or a browser runs the last deploy for hours.
+    '  Cache-Control: no-cache',
     '',
   ].join('\n'),
 );

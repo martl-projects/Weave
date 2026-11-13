@@ -39,14 +39,16 @@ interface Proof {
   key: string;
   purpose: 'control' | 'tunnel';
   time: string;
+  /** Not after this (ISO): a proof handed to a browser for a visit (websitePass with hours). Hosts before 12.11.2026 don't look. */
+  until?: string;
 }
 
 /**
  * The first line of a connection to a room's host: who this is, signed, bound to the connection's own DHT key (hex), so
  * it can't be used on another. A browser's room tab makes its connections itself, and gets its lines from Weave.
  */
-export function proofLine(room: Room, me: SigningIdentity, key: string, purpose: Proof['purpose']): string {
-  const proof: Proof = { room: room.id, person: me.author, signer: me.did, key, purpose, time: new Date().toISOString() };
+export function proofLine(room: Room, me: SigningIdentity, key: string, purpose: Proof['purpose'], until?: string): string {
+  const proof: Proof = { room: room.id, person: me.author, signer: me.did, key, purpose, time: new Date().toISOString(), ...(until ? { until } : {}) };
   const sig = b64u.encode(sign(utf8(canonicalJson(proof as unknown as Json)), me.keys.secretKey));
   return `${JSON.stringify({ proof, sig })}\n`;
 }
@@ -328,6 +330,8 @@ export class LiveRooms {
     try {
       const { proof, sig } = JSON.parse(line) as { proof: Proof; sig: string };
       if (!proof || proof.room !== room.id || proof.key !== socket.remotePublicKey.toString('hex')) return undefined;
+      // A proof that says until when it holds holds until then.
+      if (proof.until !== undefined && !(Date.parse(proof.until) > Date.now())) return undefined;
       if (!verify(b64u.decode(sig), utf8(canonicalJson(proof as unknown as Json)), publicKeyFromDid(proof.signer))) return undefined;
       const person = this.#host.personOf(proof.signer);
       if (person !== proof.person || !this.#host.mayJoin(room, person)) return undefined;

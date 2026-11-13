@@ -41,7 +41,7 @@ const log = (line: string) => {
   if (panel) panel.textContent = lines.join('\n');
 };
 addEventListener('message', ({ origin, data }: MessageEvent<{ type?: string }>) => {
-  if (origin !== WEB_ORIGIN || data?.type !== 'weave-website-details') return;
+  if ((origin !== WEB_ORIGIN && origin !== location.origin) || data?.type !== 'weave-website-details') return;
   if (panel) return void ((panel.remove(), (panel = undefined)));
   panel = document.createElement('pre');
   panel.style.cssText = 'position:fixed;inset:auto 0 0 0;max-height:60%;overflow:auto;margin:0;padding:8px 8px calc(8px + env(safe-area-inset-bottom));background:rgba(0,0,0,.85);color:#9fe;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:9';
@@ -60,8 +60,35 @@ const cantRunHere = (why: string) => {
   weave?.postMessage({ type: 'weave-website-failed', error: why }, WEB_ORIGIN);
 };
 
+/**
+ * A visit Weave handed over (visitWebsite): Weave went, and the website has its window. The key, the proofs (for hours)
+ * and a relay ticket for as long came after the #, which no server sees; taken out of the address at once, and kept for
+ * this tab only, so a reload finds it.
+ */
+interface Visit extends Pass {
+  secret: string;
+  back: string;
+}
+const VISIT = 'weave.visit';
+const fromAddress = /^#weave=([\w-]+)$/.exec(location.hash)?.[1];
+if (fromAddress) {
+  sessionStorage.setItem(VISIT, decodeURIComponent(escape(atob(fromAddress.replace(/-/g, '+').replace(/_/g, '/')))));
+  history.replaceState(null, '', location.pathname + location.search);
+}
+const visit: Visit | undefined = (() => {
+  try {
+    return JSON.parse(sessionStorage.getItem(VISIT) ?? 'null') ?? undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
 const keyPair = { publicKey: b4a.alloc(32), secretKey: b4a.alloc(64) };
-sodium.crypto_sign_keypair(keyPair.publicKey, keyPair.secretKey);
+if (visit) {
+  const secret = Uint8Array.from(atob(visit.secret), (c) => c.charCodeAt(0));
+  keyPair.secretKey.set(secret);
+  keyPair.publicKey.set(secret.subarray(32));
+} else sodium.crypto_sign_keypair(keyPair.publicKey, keyPair.secretKey);
 const ourKey = b4a.toString(keyPair.publicKey, 'hex');
 
 /** Ask Weave, which opened this tab: only it answers, and only to this tab. */
@@ -85,7 +112,8 @@ let dht: RelayedDHT | undefined;
 /** The relay, again with a new ticket when the last connection to it went. */
 async function relayed(pass: Pass): Promise<RelayedDHT> {
   if (dht) return dht;
-  const ticket = pass.ticket || (await fromWeave<{ ticket: string }>('weave-website-ticket', 'weave-website-ticket')).ticket;
+  // A handed-over visit's ticket is good for hours, again and again; otherwise a ticket is good once, and Weave gives another.
+  const ticket = visit?.ticket ?? (pass.ticket || (await fromWeave<{ ticket: string }>('weave-website-ticket', 'weave-website-ticket')).ticket);
   pass.ticket = '';
   const socket = new WebSocket(`${STORAGE_ORIGIN.replace(/^http/, 'ws')}/dht?ticket=${encodeURIComponent(ticket)}`);
   const made = new RelayedDHT(new RelayStream(true, socket), { custodial: false, keyPair });
@@ -96,10 +124,36 @@ async function relayed(pass: Pass): Promise<RelayedDHT> {
   return made;
 }
 
+/** A visit Weave handed over has the window: a corner button back to Weave, where it came from. */
+function wayBack(back: string): void {
+  const corner = document.createElement('button');
+  corner.textContent = '⋯';
+  corner.setAttribute('aria-label', 'Weave');
+  corner.style.cssText = 'position:fixed;z-index:10;top:calc(8px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));width:36px;height:36px;border:0;border-radius:18px;background:rgba(0,0,0,.45);color:#fff;font-size:20px;line-height:1;opacity:.7;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)';
+  const menu = document.createElement('div');
+  menu.style.cssText = 'position:fixed;z-index:10;top:calc(52px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));display:none;flex-direction:column;gap:6px;padding:10px;border-radius:12px;background:rgba(20,20,24,.92);font:15px system-ui,sans-serif';
+  const item = (label: string, act: () => void) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'padding:10px 14px;border:1px solid #333;border-radius:8px;background:#1a1d24;color:#eee;font:inherit;text-align:left';
+    b.onclick = act;
+    menu.append(b);
+  };
+  const de = navigator.language.startsWith('de');
+  item(de ? 'Zurück zu Weave' : 'Back to Weave', () => {
+    sessionStorage.removeItem(VISIT);
+    location.href = back;
+  });
+  item('Details', () => (menu.style.display = 'none', window.postMessage({ type: 'weave-website-details' }, location.origin)));
+  corner.onclick = () => (menu.style.display = menu.style.display === 'none' ? 'flex' : 'none');
+  document.body.append(corner, menu);
+}
+
 async function start(): Promise<void> {
-  if (!weave) return say('Open this website from Weave.');
-  say('Asking Weave…');
-  const pass = await fromWeave<Pass>('weave-website', 'weave-website-pass');
+  if (!weave && !visit) return say('Open this website from Weave.');
+  if (visit) wayBack(visit.back);
+  else say('Asking Weave…');
+  const pass = visit ?? (await fromWeave<Pass>('weave-website', 'weave-website-pass'));
   document.title = pass.name;
   const jar = new CookieJar();
 
@@ -281,7 +335,15 @@ async function start(): Promise<void> {
   frame.addEventListener('load', () => document.querySelector('#say')?.remove(), { once: true });
   // The website's own errors, in its frame (same origin): its scripts, and what it couldn't load.
   frame.addEventListener('load', () => {
-    log(`frame loaded ${frame.contentWindow?.location.pathname ?? ''}`);
+    // The website came through the tunnel only if its frame is this origin's: where the service worker didn't take it
+    // (Safari, this tab in a frame of Weave's), the network answered, and the browser blanked what it may not frame.
+    let path: string;
+    try {
+      path = frame.contentWindow!.location.pathname;
+    } catch {
+      return cantRunHere("This browser doesn't let the website run inside Weave here.");
+    }
+    log(`frame loaded ${path}`);
     const inside = frame.contentWindow;
     if (!inside) return;
     inside.addEventListener('error', (event) => {

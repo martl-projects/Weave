@@ -165,6 +165,13 @@ import type { Registered as ServiceRegistered } from './register.ts';
 import { NODE_PREFIX, Services } from './services.ts';
 import { BROWSER_PREFIX, browserLinkUrl, linkToken, sealLink } from './browserlink.ts';
 
+/** An identity's current root and encryption keys (currentKeys), what a browser's box holds instead of the words. */
+export interface RecoveredKeys {
+  author: Did;
+  root: SigningIdentity['keys'] & { did: Did };
+  enc: Array<SigningIdentity['keys'] & { did: Did }>;
+}
+
 /** What a linked browser gets (linkBrowser), sealed for it. */
 export interface BrowserHandover {
   person: Did;
@@ -1017,7 +1024,42 @@ export class WeaveNode implements Backend {
    * `events`, or from peers while it waits online), so it knows which root and
    * encryption key are current.
    */
-  static async restore(words: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number } = {}): Promise<WeaveNode> {
+  /**
+   * A device from the identity's current keys, not its words (a browser's box, docs/web-stage2.md): its own device key,
+   * signed by that root. Whoever has these keys has today's root and no more: rotating with the words, which stay on
+   * paper, shuts them out again. A root rotated since says so, and the words have to come in.
+   */
+  static async restoreFromKeys(keys: RecoveredKeys, dir?: string, options: { events?: unknown[] } = {}): Promise<WeaveNode> {
+    const home = resolveHome(dir);
+    if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
+    const device = createSubKey(keys.author);
+    saveEncryptionKeys(home, keys.enc.map((k) => ({ did: k.did, keys: k })));
+    saveDevice(home, device);
+    const node = WeaveNode.open(home.dir);
+    for (const event of options.events ?? []) node.replica.ingest(event);
+    const state = node.replica.authority.keys(keys.author);
+    if (!state.next || state.root !== keys.root.did) {
+      await node.close();
+      throw new Error('these keys are out of date: your account rotated its keys since. Come in with your 24 words');
+    }
+    node.replica.append({ author: keys.author, did: keys.root.did, keys: keys.root }, delegation(device.did, 'device', ['*'], deviceName()));
+    return node;
+  }
+
+  /** This identity's current keys, from its words: what a browser keeps instead of them (restoreFromKeys). */
+  currentKeys(words: string): RecoveredKeys {
+    const clean = normalizeWords(words);
+    const author = this.identity.author;
+    if (recoveryIdentity(clean) !== author) throw new Error("these words aren't this account's");
+    const state = this.replica.authority.keys(author);
+    const rootIndex = findRecoveryIndex(clean, state.root, 'root');
+    const encIndex = findRecoveryIndex(clean, state.enc, 'enc');
+    if (rootIndex === undefined || encIndex === undefined) throw new Error("these words don't match this identity's current keys");
+    return { author, root: recoveryRoot(clean, rootIndex), enc: Array.from({ length: encIndex + 1 }, (_, i) => recoveryEncryptionKey(clean, i)) };
+  }
+
+  /** `beforeOnline`: what has to be set up for this node before it goes looking (a browser's storage node, which needs the node). */
+  static async restore(words: string, dir?: string, options: { events?: unknown[]; online?: boolean; timeoutMs?: number; beforeOnline?: (node: WeaveNode) => void } = {}): Promise<WeaveNode> {
     const clean = normalizeWords(words);
     const home = resolveHome(dir);
     if (loadIdentity(home)) throw new Error(`an identity already exists in ${home.dir}`);
@@ -1030,6 +1072,7 @@ export class WeaveNode implements Backend {
     for (const event of options.events ?? []) node.replica.ingest(event);
     const known = () => !!node.replica.authority.keys(author).next;
     if (!known() && options.online) {
+      options.beforeOnline?.(node);
       await node.goOnline();
       await node.join(author);
       const until = Date.now() + (options.timeoutMs ?? 30_000);
@@ -1256,13 +1299,16 @@ export class WeaveNode implements Backend {
       .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
   }
 
-  /** Written by our devices while we have always-on nodes: every space of ours they should keep and host. When it changes. */
+  /**
+   * Written by our devices: every space of ours, with its keys, so each of our devices has them all (a computer, a
+   * browser, an always-on node). When it changes. A device that has none yet writes none while another's lists some:
+   * its empty list would be the latest, and hide the one it takes its spaces from.
+   */
   #writeNodeIndex(force = false): number {
     if (this.#isLinkedNode || this.#isLinkedBrowser) return 0;
-    const me = this.identity.author;
-    const linked = this.replica.authority.grantsOf(me).some((g) => g.role === 'agent' && (g.name?.startsWith(NODE_PREFIX) || g.name?.startsWith(BROWSER_PREFIX)) && g.revokedAfter === undefined);
-    if (!linked) return 0;
-    const body = { spaces: this.#nodeSpaces() };
+    const spaces = this.#nodeSpaces();
+    if (!spaces.length && this.#nodeIndexHash === undefined && this.#selfBodies(KIND_NODE_INDEX).length) return 0;
+    const body = { spaces };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (!force && hash === this.#nodeIndexHash) return 0;
     this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
@@ -2056,12 +2102,13 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#companies.streamAudit();
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
-    // Bookkeeping for our own computers and always-on nodes, not a change to anyone's spaces. A node does none of its person's.
+    // Bookkeeping for our own devices, not a change to anyone's spaces. What the lists name comes here first, so the list
+    // this device writes after has it too, rather than hiding it. A node writes none of its person's.
+    this.#holding.recoverSpaces();
     if (!this.#isLinkedNode) {
       this.#holding.writeKeepIndex();
       this.#writeNodeIndex();
     }
-    this.#holding.recoverSpaces();
     // On an always-on node: services handed over by its person's computers.
     changed += await this.#services.takeHandovers();
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {

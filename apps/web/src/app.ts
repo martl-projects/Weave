@@ -2,7 +2,8 @@ import type { ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { askPasskey, makePasskey } from './passkey.ts';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { StorageClient } from '@weave/net/browser';
 import { joinLinkFor } from '../../desktop/src/renderer/joinlink.ts';
@@ -220,6 +221,8 @@ if (arrived) {
 // A link from one of the person's computers (linkBrowser): its secret is after the #, which no server sees. It stays in
 // this tab only, out of the address bar.
 const LINK_KEY = 'weave.link';
+/** Where to start after this browser was emptied on purpose (reset). */
+const START_KEY = 'weave.start';
 const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
 if (linkSecret) {
   sessionStorage.setItem(LINK_KEY, linkSecret);
@@ -274,6 +277,23 @@ const web: Bridge['web'] = {
     if (!tab) throw new Error('the browser kept the website from opening a tab: allow pop-ups for Weave');
     answerWebsite(room, origin, () => tab);
   },
+  visitWebsite: async (room) => {
+    // A key for this visit (sodium's form: the seed, then the public key), its proofs for hours, a relay ticket for as
+    // long: all the website needs while Weave isn't there. The way back is where this page is now.
+    const seed = ed25519.utils.randomSecretKey();
+    const publicKey = ed25519.getPublicKey(seed);
+    const hex = Array.from(publicKey, (b) => b.toString(16).padStart(2, '0')).join('');
+    const HOURS = 6;
+    const pass = await ask('websitePass', { room: room.id, key: hex, hours: HOURS });
+    if ('error' in pass) throw new Error(String(pass.error));
+    const ticket = await own<string>('relayTicket', HOURS);
+    const secret = new Uint8Array(64);
+    secret.set(seed);
+    secret.set(publicKey, 32);
+    const visit = { ...(pass.result as object), ticket, secret: btoa(String.fromCharCode(...secret)), back: location.href };
+    const handed = btoa(unescape(encodeURIComponent(JSON.stringify(visit)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    location.href = `${websiteOrigin(room.id)}/#weave=${handed}`;
+  },
   websiteFrame: (room) => {
     const origin = websiteOrigin(room.id);
     let frame: Window | null = null;
@@ -286,11 +306,58 @@ const web: Bridge['web'] = {
     };
   },
   linking: () => !lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
+  linkWaiting: () => !!lock?.exists && sessionStorage.getItem(LINK_KEY) !== null,
+  // A link pasted rather than opened: the app on an iPhone's home screen is a browser of its own, which a scanned code
+  // never reaches (the camera opens Safari).
+  // The code on the computer's screen, read here with the camera: what the camera app can't do for the home-screen app.
+  scanLink: async () => {
+    const { Html5Qrcode } = await import('html5-qrcode');
+    const de = navigator.language.startsWith('de');
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom))';
+    const hint = document.createElement('p');
+    hint.textContent = de ? 'Halte die Kamera auf den Code an deinem Computer.' : 'Point the camera at the code on your computer.';
+    hint.style.cssText = 'color:#fff;font:15px system-ui,sans-serif;text-align:center;margin:0';
+    const view = document.createElement('div');
+    view.id = 'weave-scan';
+    view.style.cssText = 'width:min(90vw,420px)';
+    const cancel = document.createElement('button');
+    cancel.textContent = de ? 'Abbrechen' : 'Cancel';
+    cancel.style.cssText = 'padding:10px 20px;border:1px solid #555;border-radius:8px;background:#222;color:#fff;font:15px system-ui,sans-serif';
+    overlay.append(hint, view, cancel);
+    document.body.append(overlay);
+    const scanner = new Html5Qrcode('weave-scan', { verbose: false });
+    try {
+      return await new Promise<string | undefined>((resolve, reject) => {
+        cancel.onclick = () => resolve(undefined);
+        scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 240, height: 240 } }, (text) => /#link=/.test(text) && resolve(text), () => {}).catch((error: unknown) => reject(new Error(`no camera: ${error instanceof Error ? error.message : String(error)}`)));
+      });
+    } finally {
+      await scanner.stop().catch(() => {});
+      overlay.remove();
+    }
+  },
+  // Empty this browser, and come back to the start (or straight to linking it with a computer).
+  reset: async (then) => {
+    if (then) sessionStorage.setItem(START_KEY, then);
+    await own('forget');
+    location.reload();
+  },
+  startWith: () => {
+    const then = sessionStorage.getItem(START_KEY) ?? undefined;
+    sessionStorage.removeItem(START_KEY);
+    return then === 'link' ? 'link' : undefined;
+  },
+  pasteLink: (text) => {
+    const secret = /#link=([\w-]+)/.exec(text)?.[1];
+    if (!secret) throw new Error("that isn't a link from Keys & devices → Browsers on your computer");
+    sessionStorage.setItem(LINK_KEY, secret);
+  },
   link: async () => {
     const invite = given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
     // A passkey opens this browser; with no words here, it's the way in.
-    const made = await makePasskey('Weave');
+    const made = await makePasskey(passkeyLabel('Weave'));
     // The handover waits at the storage node (/link/…), which is reached over its socket after.
     await own('link', STORAGE_AT, sessionStorage.getItem(LINK_KEY), made);
     sessionStorage.removeItem(LINK_KEY);
@@ -313,7 +380,7 @@ const web: Bridge['web'] = {
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
   addPasskey: async () => {
-    await own('addWay', await makePasskey('Weave'));
+    await own('addWay', await makePasskey(passkeyLabel(((await ask('profile')) as { result?: { name?: string } }).result?.name ?? 'Weave')));
     passkey = true;
   },
   removeWay: async (id) => {
@@ -325,12 +392,24 @@ const web: Bridge['web'] = {
     location.reload();
   },
   unlock: async (words) => {
-    await own('unlock', words ? { words } : await askPasskey());
+    // Only this browser's passkeys: another account's, or another browser's, can't be picked by mistake.
+    await own('unlock', words ? { words } : await askPasskey(lock?.ways.filter((way) => way !== 'words')));
     await goOnline();
     void followOnboard(false);
   },
   arrive: async (words) => {
-    await own('arrive', STORAGE, words ? { words } : await askPasskey());
+    const arrived = await own<{ fromComputer?: boolean }>('arrive', STORAGE, words ? { words } : await askPasskey());
+    if (arrived.fromComputer && words) {
+      // Words of an account made on a computer: this browser comes as a device of its own, with an invitation, and a
+      // passkey from now on. Its key events come from one of the person's devices, which has to be online.
+      const invite = given || invitation();
+      if (!invite) throw new Error('Weave on the web is by invitation for now: give the invitation you were given');
+      const made = await makePasskey(passkeyLabel('Weave')).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+      await own('recover', STORAGE, words, invite, made);
+      passkey = !!made;
+      open = true;
+      return;
+    }
     await goOnline();
     void followOnboard(false);
   },
@@ -345,7 +424,7 @@ window.weave = {
     const viaLink = !given && !!onboardPlan.plan;
     const invite = viaLink ? await takeOnboardInvite() : given || invitation();
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
-    const made = await makePasskey(name).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
+    const made = await makePasskey(passkeyLabel(name)).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
     passkey = !!made;
     const { words } = await own<{ words: string }>('create', name, made);
     await goOnline(invite);

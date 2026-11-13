@@ -98,5 +98,12 @@ describe("a storage node's relay", () => {
     expect(answer).toMatch(/^HTTP\/1\.1 200/);
     expect(answer).toContain('the party app');
     expect(await refused(`/dht?ticket=${ticket}`)).toBe(true);
+
+    // A ticket for hours (a visit Weave hands over): good again for each connection.
+    const lasting = await client.relayTicket(2);
+    for (let i = 0; i < 2; i++) {
+      const again = socket(`/dht?ticket=${lasting}`);
+      expect(await new Promise<boolean>((resolve) => (again.addEventListener('open', () => (again.close(), resolve(true))), again.addEventListener('error', () => resolve(false))))).toBe(true);
+    }
   }, 60_000);
 });

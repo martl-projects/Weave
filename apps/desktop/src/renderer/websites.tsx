@@ -46,6 +46,8 @@ const takePlay = (project: string): string | true | undefined => {
 
 /** On a phone's width, Weave on the web opens a website over itself rather than in a tab: no second browser bar. */
 const inAFrame = () => !!bridge.web && matchMedia('(max-width: 700px)').matches;
+/** An iPhone or iPad: there a frame of another origin gets no service worker, so the website takes Weave's whole window. */
+const anIPhone = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 /**
  * A website over Weave, on the whole screen (docs/web-stage2.md, step 9): its own origin in a frame, which reaches its
@@ -189,7 +191,7 @@ function WebsiteCard({ room, shows, autoplay = false }: { room: WebsiteInfo; sho
   else if (bridge.web)
     main = room.mayJoin ? (
       <>
-        <button ref={playButton} className={`default play${autoplay ? ' wanted' : ''}`} onClick={() => attempt(async () => (inAFrame() ? setFramed(true) : bridge.web!.openWebsite(room)))}>
+        <button ref={playButton} className={`default play${autoplay ? ' wanted' : ''}`} onClick={() => attempt(async () => (anIPhone() ? bridge.web!.visitWebsite(room) : inAFrame() ? setFramed(true) : bridge.web!.openWebsite(room)))}>
           ▶ {label}
         </button>
         {framed && <WebsiteFrame room={room} onClose={() => setFramed(false)} />}

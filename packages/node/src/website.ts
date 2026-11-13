@@ -260,12 +260,18 @@ export class Website {
    * and the first lines of its connections, signed here for the tab's own DHT key. The tab's connections go through
    * the storage node's relay, encrypted from the tab to the host; the person's key stays here.
    */
-  async websitePass(input: { room: string; key: string }): Promise<WebsitePass> {
+  /**
+   * `hours`: the proofs hold that long (at most 12), for a visit Weave hands over and isn't there for after (a phone,
+   * where the website takes Weave's whole window).
+   */
+  async websitePass(input: { room: string; key: string; hours?: number }): Promise<WebsitePass> {
     const { room } = this.roomById(input.room);
     if (!room.open) throw new Error('this website is closed');
     if (!this.mayJoin(room, this.h.identity.author)) throw new Error("you're not invited to this website");
     if (!/^[0-9a-f]{64}$/.test(input.key)) throw new Error("that isn't a connection's key");
-    return { id: room.id, name: room.name, key: room.key, tunnel: proofLine(room, this.h.identity, input.key, 'tunnel'), control: proofLine(room, this.h.identity, input.key, 'control') };
+    const hours = input.hours === undefined ? undefined : Math.min(12, Math.max(0.1, Number(input.hours) || 0));
+    const until = hours === undefined ? undefined : new Date(Date.now() + hours * 3600_000).toISOString();
+    return { id: room.id, name: room.name, key: room.key, tunnel: proofLine(room, this.h.identity, input.key, 'tunnel', until), control: proofLine(room, this.h.identity, input.key, 'control', until) };
   }
 
   async leaveWebsite(ref: string): Promise<void> {

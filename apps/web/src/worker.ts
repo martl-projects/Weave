@@ -90,8 +90,23 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   async arrive(url: string, given: GivenWay) {
     const way = wayIn(given);
     const data = await account.findBox(url, way.opening);
-    if (!data) throw new Error("the storage node doesn't know this: no account comes with it");
-    await ready(await account.arriveAccount(HOME, way, data));
+    // Words with nothing here: an account made on a computer, which the page brings with recover().
+    if (!data && 'words' in given) return { fromComputer: true };
+    if (!data) throw new Error("no Weave account goes with this passkey: it belongs to a browser linked from a computer, or one whose account was never stored here. Each browser is linked on its own, the app on an iPhone's home screen too: paste a new link from your computer here (I have Weave on a computer), or come in with your 24 words");
+    try {
+      await ready(await account.arriveAccount(HOME, way, data));
+    } catch (error) {
+      // The box's root was rotated since (on a computer): with the words, the keys come fresh from the person's devices.
+      if ('words' in given && /out of date/.test((error as Error).message)) return { fromComputer: true };
+      throw error;
+    }
+    return {};
+  },
+
+  /** The words of an account made on a computer: the same person here, from their devices through the storage node. */
+  async recover(url: string, words: string, invite: string, passkey?: { id: string; secret: Uint8Array }) {
+    const status = (state: string, detail?: string) => self.postMessage({ event: 'status', state, detail });
+    await ready(await account.recoverAccount(HOME, words, { url, invite, status, use: useStorage }, passkey && wayIn(passkey)));
   },
 
   /** Link this browser with a link from one of the person's computers: what it left at the storage node, opened here. */
@@ -111,8 +126,8 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 
   /** A ticket for the relay, for a website's tab this page opened. */
-  relayTicket() {
-    return relayTicket();
+  relayTicket(hours?: number) {
+    return relayTicket(hours);
   },
 
   ways() {

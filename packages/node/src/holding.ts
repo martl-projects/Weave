@@ -344,6 +344,9 @@ export class Holding {
    */
   writeKeepIndex(): number {
     const spaces = this.#keptSpaces().flatMap(({ space }) => (space && !this.core.directs.has(space.id) ? [space] : []));
+    // A device that just came (a restore, a browser from the words) has none yet: its empty list would be the latest, and
+    // hide the list it is to take its spaces from. It writes once it has some.
+    if (!spaces.length && !this.#keeping.index && this.core.selfBodies(KIND_KEEP_INDEX).length) return 0;
     const body = { spaces: spaces.map((s) => ({ ...this.core.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) })) };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (hash === this.#keeping.index) return 0;
@@ -353,9 +356,10 @@ export class Holding {
     return 1;
   }
 
-  /** Spaces our latest keep index (and, on an always-on node, node index) lists that this node doesn't have. */
+  /** Spaces our latest keep index and node index list that this node doesn't have. */
   recoverSpaces(): void {
-    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), ...(this.core.readsNodeIndex ? [this.core.selfBodies(KIND_NODE_INDEX).at(-1)] : [])] as Array<{ spaces?: unknown } | undefined>;
+    // Every device of ours takes every space of ours: the keep index has the small ones, the node index all.
+    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), this.core.selfBodies(KIND_NODE_INDEX).at(-1)] as Array<{ spaces?: unknown } | undefined>;
     for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
   }
 
