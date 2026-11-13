@@ -266,6 +266,21 @@ try {
   await unlocked();
   passed('on an iPhone it takes the whole window, and leads back to Weave');
 
+  // Lena puts another website live on her computer while the project's Live page is open here: it shows, no reload.
+  {
+    await run(`location.hash = '#/p/${partyId}/live'`);
+    await until('the Live page', () => run<boolean>(`document.querySelectorAll('.room').length > 0`), 30_000);
+    const before = await run<number>(`document.querySelectorAll('.room').length`);
+    const opened = (await (await fetch(`${ORIGIN}/dev/website-open?name=Encore`)).json()) as { id: string; error?: string };
+    if (opened.error) throw new Error(`Lena couldn't open another website: ${opened.error}`);
+    const encore = opened.id;
+    const listed = await until('the new website, in the node', async () => ((await call<Array<{ id: string }>>('websites')).result ?? []).some((w) => w.id === encore) || undefined, 30_000).catch(() => false);
+    const shown = await until('the new website, on the page', () => run<boolean>(`document.querySelectorAll('.room').length > ${before}`), 15_000).catch(() => false);
+    if (!listed || !shown) throw new Error(`Lena's new website: in the node ${listed}, on the page ${shown}`);
+    await run(`location.hash = '#/'`);
+    passed('a website put live on a computer shows on the page that is open, without a reload');
+  }
+
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
   // Installable as an app of its own (Android: its own window, no browser bars), as Chrome itself judges it.

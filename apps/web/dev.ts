@@ -92,6 +92,13 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(value));
   };
+  // Lena opens another website in Party, as when she puts one live on her computer.
+  if (url.pathname === '/dev/website-open') {
+    // A website of its own, on a port of its own: one port answers one website.
+    const encore = createServer((_req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Encore</title><h1>Encore</h1>'));
+    await new Promise<void>((resolve) => encore.listen(0, '127.0.0.1', resolve));
+    return json(await person.openWebsite({ project: 'Party', name: url.searchParams.get('name') ?? 'Encore', port: (encore.address() as { port: number }).port }).catch((error: Error) => ({ error: error.message })));
+  }
   if (url.pathname === '/dev/invite') return json({ invite: storage.invite(), link: await person.invite('Climb'), party: await person.invite('Party'), website: website.id });
   // A website's tab: its own origin under .localhost, as under weave-rooms.net (rooms-worker.ts).
   if (/^[a-z2-7]{26}\.localhost:\d+$/.test(req.headers.host ?? '')) {
