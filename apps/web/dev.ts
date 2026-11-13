@@ -145,7 +145,7 @@ const server = createServer(async (req, res) => {
     return res.end(readFileSync(join(dist, 'index.html'), 'utf8').replace('</head>', `<meta name="weave-invite" content="${storage.invite()}"></head>`));
   }
   const file = url.pathname.slice(1);
-  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
+  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
   if (file.includes('..') || !existsSync(join(dist, file))) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
   createReadStream(join(dist, file)).pipe(res);

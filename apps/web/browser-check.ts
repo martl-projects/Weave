@@ -268,6 +268,10 @@ try {
 
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
   passed('the service worker is there');
+  // Installable as an app of its own (Android: its own window, no browser bars), as Chrome itself judges it.
+  const { installabilityErrors } = (await send('Page.getInstallabilityErrors')) as { installabilityErrors: Array<{ errorId: string }> };
+  if (installabilityErrors.length) throw new Error(`not installable: ${installabilityErrors.map((e) => e.errorId).join(', ')}`);
+  passed('Chrome can install it as an app of its own');
 
   // On a phone's width: what the menu bar has on a computer is under Settings.
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

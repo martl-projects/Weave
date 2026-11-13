@@ -98,6 +98,8 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
   copyFileSync(join(import.meta.dirname, 'src', 'manifest.json'), join(dist, 'manifest.json'));
   writeFileSync(join(dist, 'index.html'), readFileSync(join(import.meta.dirname, 'src', 'index.html'), 'utf8').replace("connect-src 'self'", `connect-src ${connectSrc(storage)}; frame-src ${framesFrom(options.rooms)}`));
   copyFileSync(join(DESKTOP, 'assets/icon.png'), join(dist, 'icon.png'));
+  // Chrome on Android installs a web app (its own window, no browser bars) only with a 192 px icon too.
+  copyFileSync(join(import.meta.dirname, 'src', 'icon-192.png'), join(dist, 'icon-192.png'));
   // Weave avatar's renderer, pinned as on the desktop.
   if (options.avatars) cpSync(await pinnedRelease('avatar'), join(dist, 'avatar3d'), { recursive: true });
   copyFileSync(join(require.resolve('@sqlite.org/sqlite-wasm/package.json'), '..', 'dist', 'sqlite3.wasm'), join(dist, 'sqlite3.wasm'));
