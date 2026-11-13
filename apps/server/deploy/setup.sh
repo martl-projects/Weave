@@ -102,6 +102,6 @@ systemctl enable --now weave-storage
 systemctl restart weave-storage
 systemctl restart caddy
 
-# The node opens every account on the network before it answers: that can take half a minute.
-for _ in $(seq 60); do curl -fsS http://127.0.0.1:8790/health >/dev/null 2>&1 && break; sleep 1; done
+# The node opens every account on the network before it answers: that takes longer as accounts grow (100 s on 14.11.).
+for _ in $(seq 180); do curl -fsS http://127.0.0.1:8790/health >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://127.0.0.1:8790/health >/dev/null && echo "weave-storage is up: https://$WEAVE_DOMAIN/" || { echo "it didn't come up: journalctl -u weave-storage" >&2; exit 1; }
