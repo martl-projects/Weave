@@ -867,9 +867,17 @@ export interface HintServiceInfo {
 export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
-  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; site?: boolean; problem?: string };
+  /** `writes`: the kinds its actions propose (its contract); whoever takes an action signs them, an agent only those its person allowed. */
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; writes: string[]; site?: boolean; problem?: string };
   state?: Json;
   actions?: Json[];
+}
+
+/** A kind the lenses of your boards write themselves (not one of Weave's), and which lenses: you may allow an agent it too. */
+export interface LensKindInfo {
+  kind: string;
+  /** The lenses that write it, by their names. */
+  lenses: string[];
 }
 
 /** A person or group a board is open to. */
@@ -1450,6 +1458,8 @@ export interface PermissionRequest {
   agent: string;
   /** The kinds it asks for (only those it doesn't have yet); none when it asks for repositories instead (hand). */
   kinds: string[];
+  /** For the kinds among them that aren't Weave's own: the lenses of your boards that write each, by name (as they were when it asked). */
+  lenses?: Record<string, string[]>;
   /** Asking you to hand a project resources (repositories) your keyvault's app reaches: allowing hands them, with what it has. */
   hand?: { keyvault: string; title: string; platform: string; app: string; project: { id: string; name: string }; resources: string[] };
   /** What it wants to do with them, in its words. */
@@ -2413,6 +2423,8 @@ export interface Backend {
    * desktop, the phone and the web preview each serve it their own way. Only of lenses pinned to a board you're in.
    */
   lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }>;
+  /** The kinds the lenses of your boards write themselves (tiles.move of a game, kanban.move): what an agent may be allowed beside Weave's kinds. */
+  lensKinds(): Promise<LensKindInfo[]>;
 
   // marks (stage 19)
   /** What the mark services you and the space chose say about these subjects ({did}, {space} or {post}) at a slot, with who says so. */
@@ -2701,7 +2713,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile', 'lensKinds',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'imprint', 'setImprint', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',

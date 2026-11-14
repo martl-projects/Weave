@@ -13,6 +13,7 @@ export type {
   Backend,
   BoardInfo,
   BoardViewInfo,
+  LensKindInfo,
   GranteeInfo,
   InviteOptions,
   KnockInfo,

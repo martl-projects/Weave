@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync } f
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
 import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type Did, type Json } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
-import type { BoardViewInfo, FeedItem } from './backend.ts';
+import type { BoardViewInfo, FeedItem, LensKindInfo } from './backend.ts';
 import type { ServicesHost } from './node.ts';
 import { pullImage } from './registry.ts';
 import { prepareWasm, TYPES } from './runtime.ts';
@@ -191,6 +191,26 @@ export class Lenses {
   }
 
   /**
+   * The kinds the lenses of this person's boards bring themselves (what their contracts write that isn't Weave's own),
+   * each with the lenses that write it. A person may allow an agent these, beside Weave's kinds: nothing else.
+   */
+  lensKinds(): LensKindInfo[] {
+    const by = new Map<string, Set<string>>();
+    for (const space of this.h.spaces.values()) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      for (const board of boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers)) {
+        for (const kind of board.lens?.manifest.client?.writes ?? []) {
+          if (kind.startsWith('weave.') || kind.includes('*')) continue;
+          const lenses = by.get(kind) ?? new Set<string>();
+          lenses.add(board.lens!.name);
+          by.set(kind, lenses);
+        }
+      }
+    }
+    return [...by].map(([kind, lenses]) => ({ kind, lenses: [...lenses].sort() })).sort((a, b) => a.lenses[0].localeCompare(b.lenses[0]) || a.kind.localeCompare(b.kind));
+  }
+
+  /**
    * A board as its lens shows it: its state (folded from its items) and actions, and whether it has a renderer.
    * Without a lens, or with a suggested one this member didn't choose (`use`), just the board.
    */
@@ -199,7 +219,7 @@ export class Lenses {
     const lens = board.lens;
     const base: BoardViewInfo = { space: { id: space.id, kind: space.kind, name: this.h.spaceName(space) }, board: { name: board.name, title: board.title } };
     if (!lens) return base;
-    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by) };
+    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes };
     if (lens.mode === 'suggest' && !input.use) return { ...base, lens: about };
     let ready: Ready;
     try {

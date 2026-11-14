@@ -105,6 +105,7 @@ import {
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
+  type LensKindInfo,
   type ChatInfo,
   type FeedItem,
   type IdentityInfo,
@@ -3509,6 +3510,10 @@ export class WeaveNode implements Backend {
 
   lensFile(...args: Parameters<Lenses['lensFile']>): ReturnType<Lenses['lensFile']> {
     return this.#lenses.lensFile(...args);
+  }
+
+  async lensKinds(): Promise<LensKindInfo[]> {
+    return this.#lenses.lensKinds();
   }
 
   marks(...args: Parameters<Marks['marks']>): ReturnType<Marks['marks']> {
