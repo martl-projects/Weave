@@ -548,6 +548,26 @@ function WebPushBox() {
   );
 }
 
+/**
+ * Weave Web: what waits for you, as the number on Weave's icon (the home-screen app on an iPhone, an installed app on
+ * Android or a computer): the counts of your places and chats together. While Weave is closed the service worker counts
+ * the pushes; open, this says the real number again.
+ */
+export function AppBadge() {
+  const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
+  const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
+  const places = [...(spaces ?? []).map((s) => s.id), ...(chats ?? []).map((c) => c.space.id)];
+  const counts = useHints('place', [...new Set(places)].map((id) => ({ space: id })));
+  const total = counts.reduce((n, shown) => n + shown.count, 0);
+  useEffect(() => {
+    const nav = navigator as Navigator & { setAppBadge?(count?: number): Promise<void>; clearAppBadge?(): Promise<void> };
+    if (!nav.setAppBadge || !spaces || !chats) return;
+    void (total ? nav.setAppBadge(total) : nav.clearAppBadge?.())?.catch(() => {});
+    void bridge.web?.push.counted(total);
+  }, [total, !!spaces, !!chats]);
+  return null;
+}
+
 /** View → Notifications…: which kinds of notices show on this computer. */
 export function NotificationSettings({ onClose }: { onClose(): void }) {
   const { t } = useTexts();

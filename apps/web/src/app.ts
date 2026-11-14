@@ -5,7 +5,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { b64u, openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
-import { clearPushKey, loadPushKey, makePushKey, savePushKey, sealNotice } from './pushkey.ts';
+import { clearPushKey, loadPushKey, makePushKey, saveBadge, savePushKey, sealNotice } from './pushkey.ts';
 import { StorageClient } from '@weave/net/browser';
 import { joinLinkFor } from '../../desktop/src/renderer/joinlink.ts';
 
@@ -366,6 +366,7 @@ const web: Bridge['web'] = {
       await (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe();
       await clearPushKey();
     },
+    counted: async (total) => void (await saveBadge(total).catch(() => undefined)),
     test: async (notice) => {
       const kept = await loadPushKey();
       if (!kept) throw new Error('notifications are off on this device');

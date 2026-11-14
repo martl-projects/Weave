@@ -55,6 +55,10 @@ export const loadPushKey = (): Promise<PushKey | undefined> => run<PushKey | und
 export const savePushKey = (key: PushKey): Promise<unknown> => run('readwrite', (s) => s.put(key, ID));
 export const clearPushKey = (): Promise<unknown> => run('readwrite', (s) => s.delete(ID));
 
+/** The number on Weave's icon: what the app counted when it was last open, and the pushes since. */
+export const loadBadge = async (): Promise<number> => (await run<number | undefined>('readonly', (s) => s.get('badge'))) ?? 0;
+export const saveBadge = (count: number): Promise<unknown> => run('readwrite', (s) => s.put(count, 'badge'));
+
 /** A new push key, for an address. */
 export function makePushKey(address: string): PushKey {
   const { publicKey, secretKey } = generateKeyPair();

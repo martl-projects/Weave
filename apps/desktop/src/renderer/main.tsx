@@ -9,7 +9,7 @@ import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { joinLinkOf, LinkBuilder, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
-import { HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
+import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
@@ -968,6 +968,7 @@ function App() {
       ) : (
         <>
           <Shell />
+          {bridge.web && <AppBadge />}
           <InviteLinkDialog />
           <OnboardLinkDialog />
           {/* Connecting agents is about the computer they run on, not this phone. */}

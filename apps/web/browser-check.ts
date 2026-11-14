@@ -319,6 +319,9 @@ try {
     });
     await putKey(null);
     passed('push: one sealed to this browser is opened by its service worker');
+    // The number on Weave's icon: what the app counted, kept for the service worker to count on from.
+    const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : n)));
+    passed("the app keeps its count for Weave's icon", badge);
   }
 
   // On a phone's width: what the menu bar has on a computer is under Settings.

@@ -77,7 +77,7 @@ const pushing = self as unknown as PushWorker;
 pushing.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
-      const { loadPushKey, openNotice } = await import('./pushkey.ts');
+      const { loadBadge, loadPushKey, openNotice, saveBadge } = await import('./pushkey.ts');
       let notice: { title: string; text?: string; open?: string; tag?: string } = { title: 'Weave', text: 'Something new for you' };
       try {
         const message = event.data?.json() as { from?: string; sealed?: unknown } | undefined;
@@ -92,6 +92,10 @@ pushing.addEventListener('push', (event) => {
       const seen = windows.filter((w) => w.focused || w.visibilityState === 'visible');
       if (seen.length) return seen.forEach((w) => w.postMessage({ type: 'weave-push', notice }));
       await pushing.registration.showNotification(notice.title, { body: notice.text ?? '', icon: '/icon-192.png', badge: '/icon-192.png', tag: notice.tag, data: { open: notice.open } }).catch((error: Error) => windows.forEach((w) => w.postMessage({ type: 'weave-push-failed', why: error.message })));
+      // One more on Weave's icon, counted on from what the app said last.
+      const count = (await loadBadge().catch(() => 0)) + 1;
+      await saveBadge(count).catch(() => undefined);
+      await (self as unknown as { navigator: { setAppBadge?(n: number): Promise<void> } }).navigator.setAppBadge?.(count).catch(() => undefined);
     })(),
   );
 });
