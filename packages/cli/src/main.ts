@@ -842,15 +842,15 @@ function newService(folder: string, kind: { website: boolean; rust: boolean; len
   cpSync(join(STARTERS, starter), into, { recursive: true, filter: (from) => !/[\\/](node_modules|target)([\\/]|$)/.test(from) });
   mkdirSync(join(into, 'wit'), { recursive: true });
   cpSync(SERVICE_WIT, join(into, 'wit', 'service.wit'));
-  // Named after its folder.
-  for (const file of ['package.json', 'Cargo.toml']) {
+  // Named after its folder (its weave.app.json too, and the component a Rust build makes).
+  for (const file of ['package.json', 'Cargo.toml', 'weave.app.json']) {
     const path = join(into, file);
-    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replace(/my-weave-(service|game)/, name));
+    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replace(/my-weave-(service|game)/, name).replace(/my_weave_service/, name.replace(/-/g, '_')));
   }
-  const wasm = kind.rust ? `target/wasm32-wasip2/release/${name.replace(/-/g, '_')}.wasm` : kind.website ? 'game.wasm' : 'service.wasm';
-  const add = kind.website ? `weave service add ${name} --wasm ${wasm} --site site --offers-website --reads nothing --spaces <project>` : `weave service add ${name} --wasm ${wasm} --reads addressed --spaces <project>`;
+  // Every service comes from a release: built, released from this folder into a test project, added from that release.
   const build = kind.rust ? ['  rustup target add wasm32-wasip2   (once)', '  cargo build --target wasm32-wasip2 --release'] : ['  npm install', '  npm run build'];
-  return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, `  ${add}`, `Its README says what it can do, and how to release it.`] };
+  const release = ['  weave service add --shipped weave-releases --spaces <test project>   (once a project)', '  weave app release dev-1 --from . -p <test project>', `  weave service add ${name} --artifact <test project>@dev-1 --spaces <test project>`, `Changed it? Build, weave app release dev-2 --from . -p <test project>, then weave service set ${name} --update dev-2`];
+  return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, ...release, `Its README says what it can do, and how to release it for others.`] };
 }
 
 /** The client service starter (a Kanban): built, released, and pinned to a board by the project's maintainers. */
