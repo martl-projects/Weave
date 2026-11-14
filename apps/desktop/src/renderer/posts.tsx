@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -525,10 +525,60 @@ export function PostHeader({ post, meDid, spaces, back, moderator }: { post: Pos
   );
 }
 
+/** Phone width, where the app shows one pane at a time (styles.css: the same breakpoint). */
+const PHONE_WIDTH = '(max-width: 700px)';
+function usePhoneWidth(): boolean {
+  const query = typeof matchMedia === 'function' ? matchMedia(PHONE_WIDTH) : undefined;
+  const [phone, setPhone] = useState(!!query?.matches);
+  useEffect(() => {
+    if (!query) return;
+    const change = () => setPhone(query.matches);
+    query.addEventListener('change', change);
+    return () => query.removeEventListener('change', change);
+  }, []);
+  return phone;
+}
+
+/**
+ * On a phone the post and its chat scroll as one page: the whole post, then the chat under a bar that folds it.
+ * The chat starts folded when the post is taller than the screen, until it's opened or closed by hand.
+ */
+function usePostChatOpen(id: string, phone: boolean, ready: boolean) {
+  const split = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState<boolean>();
+  // Opened or closed by hand, for this post: no more measuring.
+  const chosen = useRef(false);
+  const shown = useRef(id);
+  if (shown.current !== id) {
+    shown.current = id;
+    chosen.current = false;
+  }
+  useLayoutEffect(() => {
+    const body = split.current?.querySelector<HTMLElement>(':scope > .post-full');
+    if (!phone || !body) return;
+    const measure = () => {
+      if (!chosen.current) setOpen(body.offsetHeight <= window.innerHeight);
+    };
+    measure();
+    if (typeof ResizeObserver !== 'function') return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(body);
+    return () => watch.disconnect();
+  }, [id, phone, ready]);
+  const shownOpen = !phone || open !== false;
+  const toggle = () => {
+    chosen.current = true;
+    setOpen(!shownOpen);
+  };
+  return { split, open: shownOpen, toggle };
+}
+
 /** A post with its chat below, like a Discord channel about one thing. */
 export function PostView({ id, space, members, meDid, meName, spaces, back, moderator }: { id: string; space?: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; back?: { href: string; label: string }; moderator?: boolean }) {
   const { t } = useTexts();
   const { data: post, error } = useApi(() => api<PostInfo>('post', id), [id]);
+  const phone = usePhoneWidth();
+  const chat = usePostChatOpen(id, phone, !!post);
   if (error) return <div className="empty">{error}</div>;
   if (!post) return <div className="pane-main" />;
   return (
@@ -539,10 +589,24 @@ export function PostView({ id, space, members, meDid, meName, spaces, back, mode
         </b>
         <span className="pane-tools small">{t('post.chat.in', { n: post.chat })}</span>
       </header>
-      <div className="post-split">
+      <div className="post-split" ref={chat.split}>
         <PostHeader post={post} meDid={meDid} spaces={spaces} back={back} moderator={moderator} />
         {space ? (
-          <ChatView space={space} post={post.id} meDid={meDid} meName={meName} members={members} />
+          <div className={`post-chat${chat.open ? ' open' : ''}`}>
+            <button
+              className="post-chat-bar mobile-only"
+              aria-expanded={chat.open}
+              onClick={(e) => {
+                const bar = e.currentTarget;
+                chat.toggle();
+                if (!chat.open) requestAnimationFrame(() => bar.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+              }}
+            >
+              <Icon name="message" /> <span className="grow">{t('post.chat.bar', { n: post.chat })}</span>
+              <span aria-hidden>{chat.open ? '▴' : '▾'}</span>
+            </button>
+            {chat.open && <ChatView space={space} post={post.id} meDid={meDid} meName={meName} members={members} />}
+          </div>
         ) : (
           <div className="empty">{t('post.public.nochat')}</div>
         )}
