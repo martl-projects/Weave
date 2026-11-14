@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { NoticeSwitch } from './notify.tsx';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
@@ -186,6 +187,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
                 </button>
               )}
               {edge('follow', !p.following, t(p.following ? 'people.unfollow' : 'people.follow'))}
+              <NoticeSwitch who={p.did} />
               {edge('mute', !p.muted, t(p.muted ? 'hub.unmute' : 'hub.mute'))}
               {edge('block', !p.blocked, t(p.blocked ? 'hub.unblock' : 'hub.block'))}
               <ImprintButton did={p.did} me={false} name={name} />
@@ -627,6 +629,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
       <header className="pane-head">
         <b>p/{project.name}</b>
         <span className="pane-tools">
+          <NoticeSwitch space={project.id} />
           <button onClick={() => setSubmitting(true)}>
             <Icon name="pencil" /> {t('word.post')}
           </button>

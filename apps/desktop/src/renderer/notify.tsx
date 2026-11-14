@@ -4,6 +4,7 @@ import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
 import { ask, AsyncButton, attempt, Modal, ServiceOrigin, toast } from './ui.tsx';
 import { has, t, useTexts } from './texts.tsx';
+import { Icon } from './icons.tsx';
 
 /*
  * System notifications for live events the node marked as a notice (see
@@ -422,6 +423,35 @@ function NoticeRules() {
         </button>
       </div>
     </fieldset>
+  );
+}
+
+/**
+ * A place's or a person's notifications at a glance, where they are (a group's, project's or community's head, a chat,
+ * a hub): as usual, counted only, or quiet. It's a rule like those in the notification settings, for that place or person.
+ */
+export function NoticeSwitch({ space, who }: { space?: string; who?: string }) {
+  const { t } = useTexts();
+  const [rules, setRules] = useState(loadRules);
+  useEffect(() => void loadRulesFromNode().then(() => setRules(loadRules())), []);
+  const at = rules.findIndex((r) => r.space === space && r.who === who && !r.board);
+  const rule = at < 0 ? undefined : rules[at];
+  const value = !rule || rule.notify ? 'on' : rule.count ? 'count' : 'off';
+  const choose = (next: string) => {
+    const kept = rules.filter((_, i) => i !== at);
+    const changed = next === 'on' ? kept : [...kept, { ...(space ? { space } : {}), ...(who ? { who } : {}), count: next === 'count', notify: false }];
+    setRules(changed);
+    void saveRules(changed).catch(() => setRules(loadRules()));
+  };
+  return (
+    <label className={`notice-switch ${value}`} title={t('switch.title')}>
+      <Icon name="megaphone" />
+      <select value={value} onChange={(e) => choose(e.target.value)} aria-label={t('switch.title')}>
+        <option value="on">{t('switch.on')}</option>
+        <option value="count">{t('switch.count')}</option>
+        <option value="off">{t('switch.off')}</option>
+      </select>
+    </label>
   );
 }
 

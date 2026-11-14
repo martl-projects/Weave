@@ -280,8 +280,20 @@ try {
     const listed = await until('the new website, in the node', async () => ((await call<Array<{ id: string }>>('websites')).result ?? []).some((w) => w.id === encore) || undefined, 30_000).catch(() => false);
     const shown = await until('the new website, on the page', () => run<boolean>(`document.querySelectorAll('.room').length > ${before}`), 15_000).catch(() => false);
     if (!listed || !shown) throw new Error(`Lena's new website: in the node ${listed}, on the page ${shown}`);
+    // A project's notifications, at its head: quiet, and still quiet when the page is shown again.
+    await run(`location.hash = '#/p/${partyId}'`);
+    await until('the notification switch', () => run<boolean>(`!!document.querySelector('.notice-switch select')`), 20_000);
+    await run(`(() => { const s = document.querySelector('.notice-switch select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'off'); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await sleep(1500);
+    await run(`location.hash = '#/'`);
+    await sleep(500);
+    await run(`location.hash = '#/p/${partyId}'`);
+    await until('the project still quiet', () => run<boolean>(`document.querySelector('.notice-switch select')?.value === 'off'`), 20_000);
+    await run(`(() => { const s = document.querySelector('.notice-switch select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'on'); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await sleep(500);
     await run(`location.hash = '#/'`);
     passed('a website put live on a computer shows on the page that is open, without a reload');
+    passed('a project goes quiet from its own head, and stays so');
   }
 
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));

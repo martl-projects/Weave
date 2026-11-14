@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { NoticeSwitch } from './notify.tsx';
 import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -301,6 +302,7 @@ export function PostList({
       <header className="pane-head">
         <b>{title}</b>
         <span className="pane-tools">
+          {query.space && <NoticeSwitch space={query.space} />}
           {board?.following !== undefined && query.space && (
             <button
               className={board.following ? 'chosen' : ''}

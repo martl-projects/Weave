@@ -9,7 +9,7 @@ import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
 import { joinLinkOf, LinkBuilder, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
-import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
+import { AppBadge, HintSigns, NoticeSwitch, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
@@ -307,6 +307,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
         <header className="pane-head">
           <b># {channel}</b>
           <span className="pane-tools">
+            <NoticeSwitch space={space.id} />
             <button onClick={invite}>
               <Icon name="userPlus" /> {t('space.invite')}
             </button>
@@ -433,6 +434,7 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
             <Icon name="message" /> @{name}
           </b>
           <span className="pane-tools">
+            <NoticeSwitch who={chat.peer.did} />
             {chat.friend && (
               <button onClick={() => setInviting(true)} title={t('chat.invite.title', { name })}>
                 <Icon name="userPlus" /> {t('chat.invite.to')}

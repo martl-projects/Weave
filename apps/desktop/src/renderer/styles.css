@@ -572,6 +572,10 @@ menu[role='tablist'] { margin-bottom: 0; }
 .notify-state .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; background: var(--muted-bg, rgba(127,127,127,.2)); }
 .notify-state .pill.on { background: #2e7d32; color: #fff; }
 .notify-more { margin: 10px 0; }
+/* A place's or person's notifications, at its head: as usual, counted only, or quiet (crossed out). */
+.notice-switch { display: inline-flex; align-items: center; gap: 4px; }
+.notice-switch select { max-width: 9.5em; }
+.notice-switch.off svg, .notice-switch.off img { opacity: .45; }
 .notify-more > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .notify-settings .marks-row { flex-wrap: wrap; }
 .notify-settings .marks-row > div { min-width: 0; flex: 1 1 200px; }
