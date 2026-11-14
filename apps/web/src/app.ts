@@ -369,7 +369,8 @@ const web: Bridge['web'] = {
     test: async (notice) => {
       const kept = await loadPushKey();
       if (!kept) throw new Error('notifications are off on this device');
-      await own('pushSelf', kept.address, sealNotice(kept.did, notice));
+      // A few seconds later: time to put Weave away, so the phone shows it as it would any other.
+      await own('pushSelf', kept.address, sealNotice(kept.did, notice), 5);
     },
   },
   // Empty this browser, and come back to the start (or straight to linking it with a computer).

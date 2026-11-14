@@ -77,7 +77,7 @@ export function isPushEndpoint(endpoint: string, also: string[] = []): boolean {
 }
 
 /** Send one push. `gone`: the push service says the subscription no longer exists (drop it). */
-export async function sendPush(subscription: PushSubscriptionData, payload: Uint8Array, keys: VapidKeys, subject: string, options: { ttl?: number; fetch?: typeof fetch } = {}): Promise<{ ok: boolean; gone: boolean; status: number }> {
+export async function sendPush(subscription: PushSubscriptionData, payload: Uint8Array, keys: VapidKeys, subject: string, options: { ttl?: number; fetch?: typeof fetch } = {}): Promise<{ ok: boolean; gone: boolean; status: number; why?: string }> {
   const res = await (options.fetch ?? fetch)(subscription.endpoint, {
     method: 'POST',
     headers: {
@@ -89,5 +89,7 @@ export async function sendPush(subscription: PushSubscriptionData, payload: Uint
     },
     body: new Uint8Array(encryptPush(subscription, payload)),
   });
-  return { ok: res.ok, gone: res.status === 404 || res.status === 410, status: res.status };
+  // The push service's reason, when it gives one (Apple: {reason}; others: a line of text).
+  const why = res.ok ? undefined : (await res.text().catch(() => '')).slice(0, 200);
+  return { ok: res.ok, gone: res.status === 404 || res.status === 410, status: res.status, ...(why ? { why } : {}) };
 }

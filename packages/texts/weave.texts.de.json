@@ -358,7 +358,7 @@
     "push.test": "Test schicken",
     "push.test.title": "Weave",
     "push.test.text": "So sieht eine Benachrichtigung von Weave aus.",
-    "push.test.sent": "Geschickt: Gleich sollte sie ankommen, am besten mit Weave im Hintergrund.",
+    "push.test.sent": "Kommt in 5 Sekunden: Leg Weave jetzt weg (Home-Bildschirm), dann zeigt das Gerät sie an.",
     "notify.show.for": "Auf diesem Computer benachrichtigen bei:",
     "notify.nothing.looking": "Für den Chat oder Beitrag, den du gerade ansiehst, erscheint nichts. Das Fenster zu schließen lässt Weave im Tray weiterlaufen, Benachrichtigungen kommen weiter; beenden über das Tray-Symbol.",
     "notify.blocked": "Benachrichtigungen für Weave sind in deinen System- oder Browsereinstellungen blockiert.",

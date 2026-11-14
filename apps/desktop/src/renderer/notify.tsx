@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { BoardInfo, ChatInfo, HintServiceInfo, HintsAnswer, MemberInfo, Notice, NoticeCategory, PostInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
-import { ask, AsyncButton, attempt, Modal, ServiceOrigin } from './ui.tsx';
+import { ask, AsyncButton, attempt, Modal, ServiceOrigin, toast } from './ui.tsx';
 import { has, t, useTexts } from './texts.tsx';
 
 /*
@@ -103,6 +103,11 @@ let started = false;
 
 /** Start listening for notices; once per app. */
 export function startNotifications(): void {
+  // Weave Web: a push that came while Weave was open and seen (the service worker hands it here): said in the app.
+  if (!started && bridge.web) window.addEventListener('weave-push', (event) => {
+    const notice = (event as CustomEvent<{ title?: string; text?: string }>).detail;
+    if (notice?.title) toast(notice.text ? `${notice.title}: ${notice.text}` : notice.title);
+  });
   if (started || typeof Notification === 'undefined') return;
   started = true;
   // What you open stops counting; so does what was open while the window was in the background.

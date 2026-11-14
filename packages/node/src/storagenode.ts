@@ -333,6 +333,8 @@ export class StorageNode {
     if (!this.#mayPush(address, message.from)) return 'limit';
     const { sendPush } = await import('./webpush.ts');
     const sent = await sendPush(subscription, payload, await this.#vapidKeys(), this.#options.push.subject, { fetch: this.#options.push.fetch }).catch(() => ({ ok: false, gone: false, status: 0 }));
+    // What a push service said no to, for whoever runs this node (never what was in it).
+    if (!sent.ok) console.warn(`weave-storage: push to ${new URL(subscription.endpoint).host} not taken: ${sent.status}${'why' in sent && sent.why ? ` ${sent.why}` : ''}`);
     if (sent.gone) {
       delete account.file.push![address];
       this.#pushes.delete(address);
@@ -602,6 +604,13 @@ export class StorageNode {
         }
         case 'push.self': {
           if (!isText(m.address, 64) || !mine.file.push?.[m.address]) return no('that is no push address of this account');
+          // A test a few seconds later (`after`, up to 30): time to put Weave away, so the phone shows it.
+          const after = typeof m.after === 'number' && m.after > 0 ? Math.min(30, m.after) : 0;
+          if (after) {
+            const address = m.address;
+            setTimeout(() => void this.push(address, { from: mine.file.id, sealed: m.sealed }), after * 1000).unref?.();
+            return channel.send({ t: 'ok' });
+          }
           const sent = await this.push(m.address, { from: mine.file.id, sealed: m.sealed });
           return sent === 'sent' ? channel.send({ t: 'ok' }) : no(sent === 'limit' ? 'too many pushes in the last hour' : "the push service didn't take it");
         }

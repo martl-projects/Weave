@@ -261,9 +261,9 @@ export class StorageClient {
     await this.#ask({ t: 'push.drop', address });
   }
 
-  /** A push to one of this account's own addresses: what was sealed to that browser's push key. */
-  async pushSelf(address: string, sealed: unknown): Promise<void> {
-    await this.#ask({ t: 'push.self', address, sealed: sealed as Record<string, unknown> });
+  /** A push to one of this account's own addresses: what was sealed to that browser's push key; with `after`, that many seconds later. */
+  async pushSelf(address: string, sealed: unknown, after?: number): Promise<void> {
+    await this.#ask({ t: 'push.self', address, sealed: sealed as Record<string, unknown>, ...(after ? { after } : {}) });
   }
 
   async usage(): Promise<StorageUsage> {

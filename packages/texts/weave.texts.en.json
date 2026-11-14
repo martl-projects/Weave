@@ -358,7 +358,7 @@
     "push.test": "Send a test",
     "push.test.title": "Weave",
     "push.test.text": "This is how a notification from Weave looks.",
-    "push.test.sent": "Sent: it should arrive shortly, best with Weave in the background.",
+    "push.test.sent": "Coming in 5 seconds: put Weave away now (home screen), and the device shows it.",
     "notify.show.for": "Show a notification on this computer for:",
     "notify.nothing.looking": "Nothing shows for the chat or post you're looking at. Closing the window keeps Weave running in the tray, so notifications keep coming; quit from the tray icon.",
     "notify.blocked": "Notifications are blocked for Weave in your system or browser settings.",

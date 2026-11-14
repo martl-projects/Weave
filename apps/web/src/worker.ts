@@ -140,8 +140,8 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   pushDrop(address: string) {
     return withStorage((client) => client.pushDrop(address));
   },
-  pushSelf(address: string, sealed: unknown) {
-    return withStorage((client) => client.pushSelf(address, sealed));
+  pushSelf(address: string, sealed: unknown, after?: number) {
+    return withStorage((client) => client.pushSelf(address, sealed, after));
   },
 
   ways() {

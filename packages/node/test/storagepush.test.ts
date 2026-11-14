@@ -92,6 +92,11 @@ describe('the push relay', { timeout: 30_000 }, () => {
     await client.pushSelf(address, { hello: 1 });
     expect(b.open(got[1].body)).toEqual({ from: expect.stringMatching(/^did:key:/), sealed: { hello: 1 } });
     expect(await node.push('no-such-address', { from: 'x', sealed: {} })).toBe('unknown');
+    // A test a few seconds later: the answer at once, the push after.
+    await client.pushSelf(address, { later: 1 }, 1);
+    expect(got).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(b.open(got[2].body)).toEqual({ from: expect.stringMatching(/^did:key:/), sealed: { later: 1 } });
   });
 
   it('posts to push services only, never to an address of its own network', async () => {
