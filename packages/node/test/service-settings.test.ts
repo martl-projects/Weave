@@ -7,6 +7,7 @@ import { checkManifest, KIND_SERVICE_SETTING, resolveNet, serviceSettingsOf, typ
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease } from './helpers/release.ts';
 
 /*
  * A service's settings kept in its space by the maintainers: any of them sets what it needs, a secret blind (only the
@@ -81,12 +82,12 @@ describe('a service whose settings its space keeps', { timeout: 120_000 }, () =>
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({
+      await serviceFromRelease(martl, {
         name: 'bot',
-        contract: { reads: 'addressed', writes: [], version: '1.0' },
+        manifest: { app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: [], version: '1.0' }, env: [{ name: 'GREETING', label: 'Greeting' }, { name: 'API_KEY', label: 'API key', secret: true, optional: true }, { name: 'CAL', label: 'Calendar', oauth: OAUTH }] },
+        component,
+        project: 'Weave',
         spaces: ['Weave'],
-        wasm: component,
-        asks: [{ name: 'GREETING', label: 'Greeting' }, { name: 'API_KEY', label: 'API key', secret: true, optional: true }, { name: 'CAL', label: 'Calendar', oauth: OAUTH }],
         settings: { GREETING: 'hello' },
       });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
@@ -188,7 +189,7 @@ describe('a service whose settings its space keeps', { timeout: 120_000 }, () =>
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({ name: 'bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Code'], wasm: component, asks: [{ name: 'GH', label: 'GitHub', oauth: DEVICE }] });
+      await serviceFromRelease(martl, { name: 'bot', manifest: { app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: [], version: '1.0' }, env: [{ name: 'GH', label: 'GitHub', oauth: DEVICE }] }, component, project: 'Code', spaces: ['Code'] });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       // Only maintainers sign it in.
       sync([martl, lena]);

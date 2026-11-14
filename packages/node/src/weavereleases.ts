@@ -72,6 +72,9 @@ export function packFolder(from: string): PackedRelease {
   try {
     const content = join(staging, 'content');
     mkdirSync(content);
+    // Its manifest next to its parts, as a checkout has it (and so the archive is never one folder, which unpacking
+    // would take for the release's own folder).
+    cpSync(file, join(content, 'weave.app.json'));
     for (const [path, full] of parts) {
       const into = join(content, path);
       mkdirSync(join(into, '..'), { recursive: true });

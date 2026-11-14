@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease } from './helpers/release.ts';
 
 /*
  * What a WebAssembly service does on its own: ticks it asks for (work nobody asked for, like keeping something in
@@ -49,7 +50,7 @@ describe('a WebAssembly service on its own', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({ name: 'ticker', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Weave'], wasm: component, asks: [{ name: 'KEY', label: 'Signing key', signing: true }], settings: { KEY: pem } });
+      await serviceFromRelease(martl, { name: 'ticker', manifest: { app: 'ticker', name: 'Ticker', service: { reads: 'addressed', writes: [], version: '1.0' }, env: [{ name: 'KEY', label: 'Signing key', signing: true }] }, component, project: 'Weave', spaces: ['Weave'], settings: { KEY: pem } });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena]);
       const answerTo = async (text: string) => {

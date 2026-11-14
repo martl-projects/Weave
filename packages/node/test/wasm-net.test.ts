@@ -8,6 +8,7 @@ import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { nearby } from '../src/runtime.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease } from './helpers/release.ts';
 
 /*
  * A WebAssembly service reaching out: only over HTTPS, only to the hosts its contract names (net), never to this
@@ -76,7 +77,7 @@ describe('WebAssembly services reaching out', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({ name: 'reacher', contract: { reads: 'addressed', writes: [], net: ['api.example.test'], version: '1.0' }, spaces: ['Weave'], wasm: component });
+      await serviceFromRelease(martl, { name: 'reacher', manifest: { app: 'reacher', name: 'Reacher', service: { reads: 'addressed', writes: [], net: ['api.example.test'], version: '1.0' } }, component, project: 'Weave', spaces: ['Weave'] });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena]);
       const answers = async () => {

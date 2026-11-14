@@ -61,20 +61,41 @@ export function shareBlobs(from: WeaveNode, to: WeaveNode, manifest: AppManifest
 
 let releases = 0;
 
-/**
- * A service of a node's own, from a release: a component (a test's JavaScript, built for its world) released from
- * Weave in a project of the node (made if it has none of that name), then added from that release and approved.
- */
-export async function serviceFromRelease(
-  node: WeaveNode,
-  input: { name?: string; manifest: Record<string, unknown>; source?: string; component?: string; world?: 'service' | 'website'; http?: boolean; site?: string; project?: string; tag?: string; spaces?: string[]; settings?: Record<string, string>; settingsIn?: string; description?: string },
-): Promise<ServiceInfo> {
+/** A file that stands in for a component, for a service that never runs in its test (it uses its gate directly). */
+export function placeholderComponent(): string {
+  const file = join(mkdtempSync(join(tmpdir(), 'weave-placeholder-')), 'service.wasm');
+  writeFileSync(file, 'not run in this test');
+  return file;
+}
+
+/** What a release of a test's service is made of: its manifest, and its component (built from a test's JavaScript, or a file). */
+export interface TestRelease {
+  manifest: Record<string, unknown>;
+  /** The component's file, or (source) a test's JavaScript built for its world. */
+  component?: string;
+  source?: string;
+  world?: 'service' | 'website';
+  http?: boolean;
+  site?: string;
+  /** The project it's released in (made if the node has none of that name; default "Releases"). */
+  project?: string;
+  tag?: string;
+}
+
+/** Release a test's service from Weave in a project of the node's (made if needed): where it is, to add it from. */
+export async function releaseService(node: WeaveNode, input: TestRelease): Promise<{ project: string; tag: string; manifest: AppManifest }> {
   const component = input.component ?? (await buildComponent(input.source!, input.world ?? (input.site ? 'website' : 'service'), input.http ? { http: true } : {}));
   const project = input.project ?? 'Releases';
   if (!(await node.spaces()).some((s) => s.kind === 'project' && (s.name === project || s.id === project))) await node.createProject({ name: project });
   const tag = input.tag ?? `dev-${++releases}`;
-  await releaseFolder(node, { project, tag, folder: serviceFolder(input.manifest, component, input.site) });
-  return node.addService({ ...(input.name ? { name: input.name } : {}), ...(input.description ? { description: input.description } : {}), artifact: { project, tag }, spaces: input.spaces ?? [], approve: true, settings: input.settings ?? {}, ...(input.settingsIn ? { settingsIn: input.settingsIn } : {}) });
+  const manifest = await releaseFolder(node, { project, tag, folder: serviceFolder(input.manifest, component, input.site) });
+  return { project, tag, manifest };
+}
+
+/** A service of a node's own, from a release: released from Weave in a project of the node's, then added from it and approved. */
+export async function serviceFromRelease(node: WeaveNode, input: TestRelease & { name?: string; spaces?: string[]; settings?: Record<string, string>; settingsIn?: string; description?: string; node?: string }): Promise<ServiceInfo> {
+  const { project, tag } = await releaseService(node, input);
+  return node.addService({ ...(input.name ? { name: input.name } : {}), ...(input.description ? { description: input.description } : {}), artifact: { project, tag }, spaces: input.spaces ?? [], approve: true, settings: input.settings ?? {}, ...(input.settingsIn ? { settingsIn: input.settingsIn } : {}), ...(input.node ? { node: input.node } : {}) });
 }
 
 /** An empty folder of a test's own, for files it makes. */

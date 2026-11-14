@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
+import { placeholderComponent, serviceFromRelease } from './helpers/release.ts';
 
 /*
  * Visiting agents and services (block 2): a space decides what people's agents and services may do in it, not only
@@ -38,7 +39,7 @@ describe('visiting agents and services', () => {
     await lena.joinSpace(await martl.invite('Weave'));
     await lena.addAgent('claude', ['weave.post', 'weave.msg']);
     await martl.addAgent('helper', ['weave.msg']);
-    const bot = await lena.addService({ name: 'bot', contract: { reads: 'addressed', writes: ['weave.msg'], version: '1.0' }, spaces: ['Weave'] });
+    const bot = await serviceFromRelease(lena, { name: 'bot', manifest: { app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: ['weave.msg'], version: '1.0' } }, component: placeholderComponent(), spaces: ['Weave'] });
     sync([martl, lena]);
     const texts = async (node: WeaveNode) => (await node.messages('Weave')).map((m) => m.text);
 
