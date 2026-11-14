@@ -1134,9 +1134,11 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
         assets: z.record(z.string(), z.string()).optional(),
         wait: z.number().min(0).max(20).optional().describe('Minutes to wait for the release and its files, while a workflow builds it'),
         file: z.string().optional().describe("Path to the checkout's weave.app.json: the texts next to it (weave.texts.<lang>.json) are published with the release"),
+        from: z.string().optional().describe("Instead of GitHub: an absolute path to a folder of this computer with its weave.app.json and what it names (a built WebAssembly component, its site). Weave keeps the files as blobs in the project (at most 32 MB) and the project's Weave releases service publishes the release"),
       },
     },
-    run(async ({ project, tag, artifact, repo, assets, wait, file }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number; file?: string }) => {
+    run(async ({ project, tag, artifact, repo, assets, wait, file, from }: { project: string; tag: string; artifact?: string; repo?: string; assets?: Record<string, string>; wait?: number; file?: string; from?: string }) => {
+      if (from) return backend.releaseArtifact({ project, tag, from, as });
       const texts = file ? textsNextTo(file).map((t) => t.package) : [];
       const which = { project, ...(artifact ? { artifact } : {}), ...(repo ? { source: repo } : {}), ...(texts.length ? { texts } : {}) };
       // A pushed tag becomes a release with files a few minutes later, if a workflow makes it: look every 30 seconds.

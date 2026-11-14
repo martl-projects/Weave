@@ -1,0 +1,18 @@
+{
+  "app": "weave-releases",
+  "name": "Weave releases",
+  "service": {
+    "reads": "addressed",
+    "writes": ["weave.app"],
+    "offers": ["artifact.fetch"],
+    "sources": ["weave"],
+    "actions": [
+      { "name": "publish", "label": "Publish a release from a folder", "who": "maintainers" },
+      { "name": "releases", "label": "See the releases published from Weave", "who": "maintainers" }
+    ],
+    "version": "1.0"
+  },
+  "wasm": {
+    "component": "weave-releases.wasm"
+  }
+}

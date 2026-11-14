@@ -8,6 +8,7 @@ import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
 import { dockerRunning, testImage } from './helpers/docker.ts';
 import { publishRelease } from './helpers/releases.ts';
+import { placeholderComponent, serviceFromRelease } from './helpers/release.ts';
 import { readSecretJson, writeSecretJson } from '../src/vault.ts';
 
 /*
@@ -93,7 +94,7 @@ describe('the website service', { timeout: 60_000 }, () => {
     // It takes no requests: its key may sign its profile and its websites, not even answers.
     expect(lena.replica.authority.grant(service.did)?.permissions.sort()).toEqual(['weave.room', 'weave.room.*', 'weave.service.profile']);
     expect((await lena.servicesIn('Party')).map((p) => [p.name, p.builtin])).toEqual([['website', 'website']]);
-    await expect(lena.addService({ name: 'other', builtin: 'website', command: ['node', 'x.js'] })).rejects.toThrow(/runs in Weave/);
+    await expect(lena.addService({ name: 'other', builtin: 'website', artifact: { project: 'Horses' } })).rejects.toThrow(/a release, or is the website service: one of them/);
 
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     try {
@@ -144,7 +145,7 @@ describe('the website service', { timeout: 60_000 }, () => {
         await vi.waitFor(async () => expect((await sites()).map(([name, project]) => `${name} in ${project}`)).toEqual(['Board in Party', 'Horse race in Horses', 'Horse race in Party']), { timeout: 10_000, interval: 200 });
 
         // A service serves websites only when its contract says so.
-        const quiet = await lena.addService({ name: 'quiet', contract: { reads: 'nothing', writes: [], version: '1.0' }, spaces: ['Party'] });
+        const quiet = await serviceFromRelease(lena, { name: 'quiet', manifest: { app: 'quiet', name: 'Quiet', service: { reads: 'nothing', writes: [], version: '1.0' } }, component: placeholderComponent(), spaces: ['Party'] });
         await expect(lena.serviceGate(tokenOf(lena, quiet.name))!.serve({ space: 'Party', port: boardPort })).rejects.toThrow(/doesn't serve websites in its contract/);
 
         // The website service leaves Party: all websites there end.

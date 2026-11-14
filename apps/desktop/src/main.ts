@@ -447,8 +447,10 @@ ipcMain.handle('weave:attention', () => {
   if (window && !window.isFocused()) window.flashFrame(true);
 });
 
-// Notifications on Windows carry the app's name only with an app user model id.
-if (process.platform === 'win32') app.setAppUserModelId('org.weave.desktop');
+// Notifications on Windows carry the app's name only with an app user model id. The taskbar shows the icon of
+// whichever shortcut has that id: a development run (electron.exe) gets its own, so a shortcut to it never lends
+// the installed Weave Electron's icon.
+if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? 'org.weave.desktop' : 'org.weave.desktop.dev');
 
 let tray: Tray | undefined;
 
@@ -568,6 +570,8 @@ async function createWindow(): Promise<void> {
     // The Clean look's canvas, light or dark like the system, so the window doesn't flash while it loads.
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c111d' : '#f4f5f7',
     title: 'Weave',
+    // Weave's icon on the window itself, also where the executable has Electron's (a development run, Linux).
+    ...(process.platform !== 'darwin' ? { icon: join(__dirname, 'icon.png') } : {}),
     show: !values.screenshot,
     autoHideMenuBar: true,
     // The app draws its own title bar (with working buttons); macOS keeps its traffic lights over it.

@@ -10,6 +10,7 @@ import { startApi } from '../src/api.ts';
 import { closeOpenStores, loadConfig, resolveHome, saveConfig, WeaveNode } from '../src/index.ts';
 import { readSecretJson } from '../src/vault.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease } from './helpers/release.ts';
 
 /*
  * WebAssembly websites (W2): a game as a component, with Weave holding its players' connections. Weave serves its
@@ -86,9 +87,8 @@ describe('WebAssembly websites', { timeout: 120_000 }, () => {
     martl.runServices({ port: api.port });
     try {
       await martl.addService({ builtin: 'website', spaces: ['Club'] });
-      await expect(martl.addService({ name: 'nope', contract: { reads: 'nothing', writes: [], version: '1.0' }, site })).rejects.toThrow(/goes with a WebAssembly service/);
-      const counter = await martl.addService({ name: 'counter', description: 'Counter', contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, spaces: ['Club'], wasm: game, site });
-      expect(counter).toMatchObject({ wasm: game, site });
+      const counter = await serviceFromRelease(martl, { name: 'counter', description: 'Counter', manifest: { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' } }, component: game, site, project: 'Club', spaces: ['Club'] });
+      expect(counter).toMatchObject({ artifact: { name: 'Counter', project: { name: 'Club' } } });
 
       // It runs, and serves itself as a website of Club: a port on this computer, like any other.
       const hosted = await vi.waitFor(
@@ -131,19 +131,19 @@ describe('WebAssembly websites', { timeout: 120_000 }, () => {
     }
   });
 
-  it("is reached through the tunnel: a participant plays from their own node, known by name", async () => {
+  it("is reached through the tunnel: a participant plays from their own node, known by name; nobody else gets in", async () => {
     const martl = person('martl');
     const lena = person('Lena');
+    const kofi = person('Kofi');
     await martl.createProject({ name: 'Club' });
     await lena.joinSpace(await martl.invite('Club'));
     sync([martl, lena]);
-    await martl.goOnline();
-    await lena.goOnline();
+    for (const node of [martl, lena, kofi]) await node.goOnline();
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
       await martl.addService({ builtin: 'website', spaces: ['Club'] });
-      await martl.addService({ name: 'counter', description: 'Counter', contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, spaces: ['Club'], wasm: game, site });
+      await serviceFromRelease(martl, { name: 'counter', description: 'Counter', manifest: { app: 'counter', name: 'Counter', service: { reads: 'nothing', writes: [], website: true, version: '1.0' } }, component: game, site, project: 'Club', spaces: ['Club'] });
       const hosted = await vi.waitFor(
         async () => {
           const found = (await martl.websites('Club')).find((r) => r.name === 'Counter' && r.url);
@@ -174,6 +174,13 @@ describe('WebAssembly websites', { timeout: 120_000 }, () => {
       await vi.waitFor(() => expect(host.got).toContainEqual({ count: 1, by: 'Lena' }), { timeout: 15_000 });
       visitor.close();
       host.close();
+
+      // Kofi isn't in Club: he can't even see its websites.
+      await expect(kofi.visitWebsite(hosted.id)).rejects.toThrow();
+      // The website service turned off: its websites end, for everyone.
+      await martl.setService({ name: 'website', enabled: false });
+      sync([martl, lena]);
+      expect((await lena.websites('Club')).find((r) => r.id === hosted.id)?.open ?? false).toBe(false);
     } finally {
       await martl.removeService('counter').catch(() => {});
       await api.close();

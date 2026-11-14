@@ -1,0 +1,6 @@
+{
+  "app": "my-weave-game",
+  "name": "Buzzer quiz",
+  "service": { "reads": "nothing", "writes": [], "website": true, "version": "1.0" },
+  "wasm": { "component": "game.wasm", "site": "site" }
+}

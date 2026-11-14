@@ -10,11 +10,13 @@ import { startApi } from '../src/api.ts';
 import { closeOpenStores, WeaveNode } from '../src/index.ts';
 import { readSecretJson } from '../src/vault.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease, shippedWeaveReleases } from './helpers/release.ts';
 
 /*
  * The starters (W4): what someone writing a WebAssembly service starts from. Made the way they'd make it
- * (weave service new, then the starter's own build command), and run the way it would run: the bot answers, the
- * quiz is played by its host and two players Weave vouches for.
+ * (weave service new, then the starter's own build command), released from its folder into a test project (Weave
+ * releases) and added from that release, then moved to the next one: the bot answers, the quiz is played by its host
+ * and two players Weave vouches for.
  */
 
 const root = join(import.meta.dirname, '..', '..', '..');
@@ -43,20 +45,22 @@ const sync = (all: WeaveNode[]) => {
 const tokenOf = (node: WeaveNode, name: string) => readSecretJson<Array<{ name: string; token: string }>>(node.home, join(node.home.dir, 'services.json'))!.find((s) => s.name === name)!.token;
 
 /** A starter made as someone would: weave service new, then its package.json's build command (jco componentize). */
-let bot: string;
+let starter: string;
 beforeAll(async () => {
   const home = tempDir('weave-starters-cli-');
   const folder = join(tempDir('weave-starters-made-'), 'hello-bot');
   const made = spawnSync(process.execPath, [join(root, 'packages', 'cli', 'src', 'main.ts'), '--home', home, 'service', 'new', folder], { encoding: 'utf8', env: { ...process.env, WEAVE_KEYSTORE: 'file' } });
   expect(made.status, made.stderr).toBe(0);
-  expect(made.stdout).toMatch(/npm run build[^]*weave service add hello-bot --wasm service\.wasm/);
+  expect(made.stdout).toMatch(/npm run build[^]*weave app release dev-1 --from \. -p <test project>[^]*weave service add hello-bot --artifact <test project>@dev-1/);
+  // Its weave.app.json, named after its folder: what releasing it reads.
+  expect(JSON.parse(readFileSync(join(folder, 'weave.app.json'), 'utf8'))).toMatchObject({ app: 'hello-bot', wasm: { component: 'service.wasm' }, env: [{ name: 'GREETING' }] });
   const script = (JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8')) as { scripts: { build: string } }).scripts.build;
   expect(script).toMatch(/^jco componentize /);
   const jco = join(root, 'node_modules', '@bytecodealliance', 'jco', 'dist', 'jco.js');
   const built = spawnSync(process.execPath, [jco, ...script.split(' ').slice(1)], { cwd: folder, encoding: 'utf8' });
   expect(built.status, built.stderr + built.stdout).toBe(0);
-  bot = join(folder, 'service.wasm');
-  expect(existsSync(bot)).toBe(true);
+  expect(existsSync(join(folder, 'service.wasm'))).toBe(true);
+  starter = folder;
 }, 240_000);
 
 /** A player's WebSocket, as the website service hands it on: with their X-Weave-Person (the host's own browser: none). JSON both ways. */
@@ -101,8 +105,9 @@ const vouch = (token: string, person: Record<string, unknown>) => {
 };
 
 describe('the starters', { timeout: 120_000 }, () => {
-  it('JavaScript service: made with weave service new, built with its own command, it answers and remembers', async () => {
+  it('JavaScript service: made with weave service new, built, released from its folder, it answers and remembers', async () => {
     const martl = person('martl');
+    martl.wasmSetup.shippedDir = await shippedWeaveReleases();
     const lena = person('Lena');
     await martl.createProject({ name: 'Bots' });
     await lena.joinSpace(await martl.invite('Bots'));
@@ -110,16 +115,37 @@ describe('the starters', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      await martl.addService({ name: 'hello-bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Bots'], wasm: bot, settings: { GREETING: 'Servus' } });
-      await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000 });
+      // The dev loop: Weave releases in the test project, the folder released, the service added from that release.
+      await martl.addService({ shipped: 'weave-releases', spaces: ['Bots'] });
+      await vi.waitFor(async () => expect((await martl.services()).find((s) => s.name === 'weave-releases')?.running).toBe(true), { timeout: 30_000 });
+      await martl.releaseArtifact({ project: 'Bots', tag: 'dev-1', from: starter });
+      await martl.addService({ name: 'hello-bot', artifact: { project: 'Bots', tag: 'dev-1' }, spaces: ['Bots'], approve: true, settings: { GREETING: 'Servus' } });
+      const running = async () => vi.waitFor(async () => expect((await martl.services()).find((s) => s.name === 'hello-bot')?.running).toBe(true), { timeout: 30_000 });
+      await running();
       sync([martl, lena]);
       await lena.askService({ space: 'Bots', service: 'martl/hello-bot', text: 'one' });
       await lena.askService({ space: 'Bots', service: 'martl/hello-bot', text: 'two' });
       await vi.waitFor(
         async () => {
           sync([martl, lena]);
-          const answers = (await lena.serviceRequests({ space: 'Bots' })).map((r) => r.results[0]?.text).sort();
+          const answers = (await lena.serviceRequests({ space: 'Bots', service: 'martl/hello-bot' })).filter((r) => r.text !== 'three').map((r) => r.results[0]?.text).sort();
           expect(answers).toEqual(['Servus from hello-bot! You asked "one" (that\'s 1 time now).', 'Servus from hello-bot! You asked "two" (that\'s 2 times now).']);
+        },
+        { timeout: 30_000, interval: 300 },
+      );
+
+      // Built again and released as the next tag: the service moves to it, and keeps what it remembered.
+      await martl.releaseArtifact({ project: 'Bots', tag: 'dev-2', from: starter });
+      await martl.setService({ name: 'hello-bot', artifact: { tag: 'dev-2' }, approve: true });
+      await martl.serviceReady('hello-bot');
+      expect((await martl.services()).find((s) => s.name === 'hello-bot')?.artifact).toMatchObject({ tag: 'dev-2', installed: true });
+      await running();
+      sync([martl, lena]);
+      await lena.askService({ space: 'Bots', service: 'martl/hello-bot', text: 'three' });
+      await vi.waitFor(
+        async () => {
+          sync([martl, lena]);
+          expect((await lena.serviceRequests({ space: 'Bots' })).find((r) => r.text === 'three')?.results[0]?.text).toBe('Servus from hello-bot! You asked "three" (that\'s 3 times now).');
         },
         { timeout: 30_000, interval: 300 },
       );
@@ -137,7 +163,8 @@ describe('the starters', { timeout: 120_000 }, () => {
     martl.runServices({ port: api.port });
     try {
       await martl.addService({ builtin: 'website', spaces: ['Club'] });
-      await martl.addService({ name: 'quiz', description: 'Buzzer quiz', contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, spaces: ['Club'], wasm: quiz, site: join(starters, 'js-website', 'site') });
+      const manifest = JSON.parse(readFileSync(join(starters, 'js-website', 'weave.app.json'), 'utf8')) as Record<string, unknown>;
+      await serviceFromRelease(martl, { name: 'quiz', manifest, component: quiz, site: join(starters, 'js-website', 'site'), project: 'Club', spaces: ['Club'] });
       const hosted = await vi.waitFor(
         async () => {
           const found = (await martl.websites('Club')).find((r) => r.name === 'Buzzer quiz' && r.url);

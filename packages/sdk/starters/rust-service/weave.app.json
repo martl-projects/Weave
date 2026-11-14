@@ -1,0 +1,7 @@
+{
+  "app": "my-weave-service",
+  "name": "My Weave service",
+  "service": { "reads": "addressed", "writes": [], "version": "1.0" },
+  "wasm": { "component": "target/wasm32-wasip2/release/my_weave_service.wasm" },
+  "env": [{ "name": "GREETING", "label": "Greeting", "optional": true, "hint": "What it says hello with" }]
+}

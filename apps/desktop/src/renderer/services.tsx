@@ -9,6 +9,7 @@ import { ask, attempt, AsyncButton, Modal } from './ui.tsx';
 import { ServiceList } from './lists.tsx';
 import { t, T, useTexts } from './texts.tsx';
 import { useServiceTexts } from './servicetexts.ts';
+import { AddServiceWizard } from './addwizard.tsx';
 
 /*
  * Services: code you run under a key of its own, with exactly the rights its contract declares. In Keys & devices
@@ -73,9 +74,6 @@ export function OriginBadge({ origin }: { origin: ServiceOriginInfo }) {
   );
 }
 
-/** Every kind name, comma or space separated. */
-const kinds = (text: string) => text.split(/[\s,]+/).map((k) => k.trim()).filter(Boolean);
-
 /** The spaces a service may be in: groups, projects and communities, not direct chats. */
 function useServiceSpaces(): SpaceInfo[] {
   const { data } = useApi(() => api<SpaceInfo[]>('spaces'), []);
@@ -100,114 +98,18 @@ function SpacePicker({ value, onChange }: { value: string[]; onChange(ids: strin
   );
 }
 
-/** Split a command line into its parts, keeping quoted ones together. */
-const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
-
-function AddServiceDialog({ nodes, onClose }: { nodes: KeyInfo[]; onClose(): void }) {
-  const { t } = useTexts();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [reads, setReads] = useState<'nothing' | 'addressed' | 'kinds' | 'space'>('addressed');
-  const [readKinds, setReadKinds] = useState('');
-  const [writes, setWrites] = useState('');
-  const [website, setWebsite] = useState(false);
-  const [spaces, setSpaces] = useState<string[]>([]);
-  const [where, setWhere] = useState('');
-  const [command, setCommand] = useState('');
-  const contract: ServiceContract = { reads: reads === 'kinds' ? { kinds: kinds(readKinds) } : reads, writes: kinds(writes), ...(website ? { website: true } : {}), version: '1.0' };
-  const add = async () => {
-    const done = await attempt(
-      () => api('addService', { name: name.trim(), description, contract, spaces, ...(command.trim() ? { command: commandParts(command) } : {}), ...(where ? { node: where } : {}) }).then(() => (bump(), true)),
-      t(where ? 'svc.set.up.on.node' : 'svc.set.up', { name, node: where }),
-    );
-    if (done !== undefined) onClose();
-  };
-  return (
-    <Modal title={t('svc.add.title')} onClose={onClose} wide>
-      <p className="small">{t('svc.add.intro', { name: name || t('svc.its.name') })}</p>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-name">{t('field.name')}</label>
-        <input id="svc-name" value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder={t('svc.name.placeholder')} spellCheck={false} />
-      </div>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-description">{t('svc.what.it.does')}</label>
-        <input id="svc-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('svc.description.placeholder')} />
-      </div>
-      <fieldset>
-        <legend>{t('svc.what.it.reads')}</legend>
-        <div className="field-row">
-          <input type="radio" id="svc-reads-nothing" checked={reads === 'nothing'} onChange={() => setReads('nothing')} />
-          <label htmlFor="svc-reads-nothing">{t('svc.reads.nothing')}</label>
-        </div>
-        <div className="field-row">
-          <input type="radio" id="svc-reads-addressed" checked={reads === 'addressed'} onChange={() => setReads('addressed')} />
-          <label htmlFor="svc-reads-addressed">{t('svc.reads.addressed')}</label>
-        </div>
-        <div className="field-row">
-          <input type="radio" id="svc-reads-kinds" checked={reads === 'kinds'} onChange={() => setReads('kinds')} />
-          <label htmlFor="svc-reads-kinds">{t('svc.reads.kinds')}</label>
-          <input className="grow" value={readKinds} onChange={(e) => (setReadKinds(e.target.value), setReads('kinds'))} placeholder={t('svc.kinds.placeholder')} spellCheck={false} />
-        </div>
-        <div className="field-row">
-          <input type="radio" id="svc-reads-space" checked={reads === 'space'} onChange={() => setReads('space')} />
-          <label htmlFor="svc-reads-space">{t('svc.reads.space')}</label>
-        </div>
-      </fieldset>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-writes">{t('svc.what.it.writes')}</label>
-        <input id="svc-writes" value={writes} onChange={(e) => setWrites(e.target.value)} placeholder={t('svc.writes.placeholder')} spellCheck={false} />
-      </div>
-      <div className="field-row">
-        <input type="checkbox" id="svc-website" checked={website} onChange={(e) => setWebsite(e.target.checked)} />
-        <label htmlFor="svc-website">{t('svc.serves.website')}</label>
-      </div>
-      <div className="field-row-stacked">
-        <label>{t('svc.in.spaces')}</label>
-        <SpacePicker value={spaces} onChange={setSpaces} />
-      </div>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-where">{t('svc.where.runs')}</label>
-        <select id="svc-where" value={where} onChange={(e) => setWhere(e.target.value)}>
-          <option value="">{t('svc.on.this.computer')}</option>
-          {nodes.map((n) => (
-            <option key={n.did} value={n.name!.slice(5)}>
-              {t('svc.on.node', { node: n.name!.slice(5) })}
-            </option>
-          ))}
-        </select>
-        {where && <span className="small muted">{t('svc.key.sent', { node: where })}</span>}
-      </div>
-      <div className="field-row-stacked">
-        <label htmlFor="svc-command">{t('svc.how.start')}</label>
-        <input id="svc-command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder={t('svc.command.placeholder')} spellCheck={false} />
-        <span className="small muted">{t('svc.command.note')}</span>
-      </div>
-      <p className="small">
-        <b>{t('svc.its.contract')}</b> {contractText(contract)}.
-      </p>
-      <div className="buttons">
-        <button onClick={onClose}>{t('button.cancel')}</button>
-        <AsyncButton className="default" onClick={add}>
-          {t('svc.add.button')}
-        </AsyncButton>
-      </div>
-    </Modal>
-  );
-}
-
-/** A service's settings: its spaces, how it starts, and secret settings (written here, never shown again). */
+/** A service's settings: its spaces, what it does, and secret settings (written here, never shown again). */
 function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onClose(): void }) {
   const { t } = useTexts();
   const [spaces, setSpaces] = useState(service.spaces.map((s) => s.id));
   const [description, setDescription] = useState(service.description);
-  const [command, setCommand] = useState(service.command?.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ') ?? '');
   const [settings, setSettings] = useState<Record<string, string | null>>({});
   const [key, setKey] = useState('');
   const [value, setValue] = useState('');
   const names = [...new Set([...service.settings, ...Object.keys(settings)])].filter((n) => settings[n] !== null).sort();
   const save = async () => {
     const done = await attempt(
-      () => api('setService', { name: service.name, spaces, description, command: command.trim() ? commandParts(command) : null, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
+      () => api('setService', { name: service.name, spaces, description, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
       t(service.node ? 'svc.is.set.node' : 'svc.is.set', { name: service.name, node: service.node?.name }),
     );
     if (done !== undefined) onClose();
@@ -222,12 +124,6 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         <label>{t('svc.in.spaces')}</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
-      {!service.builtin && !service.artifact && (
-        <div className="field-row-stacked">
-          <label htmlFor="svc-set-command">{t('svc.how.start')}</label>
-          <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
-        </div>
-      )}
       <fieldset>
         <legend>{t('svc.settings')}</legend>
         <p className="small">{t('svc.settings.about', { where: service.node ? service.node.name : t('svc.this.computer') })}</p>
@@ -376,14 +272,13 @@ export function ShippedUpdate({ service: s }: { service: ServiceInfo }) {
 export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const { t } = useTexts();
   const { data: services } = useApi(() => api<ServiceInfo[]>('services'), []);
-  const nodes = keys.filter((k) => k.name?.startsWith('node:') && k.revokedAfter === undefined);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ServiceInfo>();
   const state = (s: ServiceInfo) => {
     if (s.builtin === 'website') return t('svc.website.service', { state: s.enabled ? t('svc.websites.open', { n: s.websites?.length ?? 0 }) : t('svc.stopped') });
     if (s.node) return t('svc.on.node.short', { node: s.node.name });
-    if (!s.enabled) return t('svc.stopped');
-    return t(s.running ? 'svc.running.here' : s.command ? 'svc.starting' : 'svc.no.command');
+    if (!s.enabled || s.problem) return t('svc.stopped');
+    return t(s.running ? 'svc.running.here' : 'svc.starting');
   };
   return (
     <fieldset>
@@ -397,6 +292,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
               {state(s)} · {t('svc.in', { spaces: s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : t('svc.no.spaces.yet') })}
             </span>
             {s.description && <div className="small">{s.description}</div>}
+            {s.problem && <div className="small error-text">{s.problem}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
             {s.artifact && (
               <div className="small">
@@ -449,7 +345,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
       <div className="buttons">
         <button onClick={() => setAdding(true)}>{t('svc.add.a.service')}</button>
       </div>
-      {adding && <AddServiceDialog nodes={nodes} onClose={() => setAdding(false)} />}
+      {adding && <AddServiceWizard onClose={() => setAdding(false)} />}
       {editing && <ServiceSettingsDialog service={editing} onClose={() => setEditing(undefined)} />}
     </fieldset>
   );

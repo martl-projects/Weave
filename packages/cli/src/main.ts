@@ -214,16 +214,13 @@ github — repositories that follow a group, tier or project (members who give t
                              a bot (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), a client service that shows a
                              board its own way (a Kanban in JavaScript), or a mark service that labels people you list
                              (JavaScript); Weave runs it itself, nothing to install
-  service add <name>         run code under a key of its own, with exactly these rights:
-                             --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
-                             [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
-                             or [--wasm <component.wasm>]: your own WebAssembly component (packages/sdk/wit/service.wit), which
-                             Weave runs itself, sandboxed: nothing to install, only /data and its contract
-                             [--net <host,…>]: hosts it may reach over HTTPS (api.example.com, *.example.com), nothing else
-                             [--manifest weave.app.json]: its contract and the settings it asks for (env), from that file
+  service add [<name>] --artifact <project>[@tag]   run a project's release under a key of its own, with exactly the
+                             contract its manifest declares (asks you to approve it); every service comes from a release, one
+                             Weave ships, or is the website service. Code of your own: release it first (app release --from)
+                             [--spaces <space,…>] [--text <description>] [--node <always-on node>: run it there]
                              [--setting KEY=VALUE …] [--keep-in <project>]: keep them in the project, for its maintainers to change
-                             [--offers-website --site <folder>]: a game or page (the website world): Weave serves its files and
-                             holds its players' connections (/weave/socket), telling it who each player is
+                             one with a web page serves it as a website in its projects; a WebAssembly one with a site (the
+                             website world): Weave serves its files and holds its players' connections (/weave/socket)
   service add --shipped <name>     one Weave ships (packages/shipped), checked by its digest each time it starts
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
@@ -232,9 +229,6 @@ github — repositories that follow a group, tier or project (members who give t
                              keyvault (Keys & devices: your own GitHub App, made in one click; hand the project its repository
                              there, or let an agent ask you with weave_request_repository)  [--spaces <project,…>]
   service add --shipped github-access   gives the project's members access to its repositories, from the same keyvault
-  service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
-                             declares (asks you to approve it); one with a web page serves it as a website in its projects
-                             [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
   service artifacts <project>  a project's artifacts: services, websites, board views, files (what each is, where it's from)
   file release <tag> <file> -p <p>   maintainers: hand out a file of a GitHub release as the project's artifact (fingerprinted)
                              [--repo owner/name] [--name <shown name>] [--type application/pdf]
@@ -242,7 +236,7 @@ github — repositories that follow a group, tier or project (members who give t
   service release <image:tag> -p <p>   release a Weave service (maintainers): an image with its manifest in its
                              "dev.weave.service" label; Weave pins the tag to its digest and runs it in its sandbox (Docker)
   service list               the services this computer runs; service profiles: everyone's you know
-  service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
+  service set <name>         [--spaces <space,…>] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
                              [--update latest|<tag>]: an applet takes another release (asks you to approve it)
                              [--approve]: one Weave ships whose new version asks for more rights gets them (service list says)
@@ -371,6 +365,9 @@ artifacts and websites: a project's releases, and websites that run them (needs 
   app workflow <app> <entry> [owner]  a GitHub Actions workflow that builds a container image and releases it on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
+  app release <tag> --from <folder> -p <p>   release a folder of yours without GitHub (maintainers): what its weave.app.json
+                             names (a WebAssembly component, its site), kept as blobs in the project (at most 32 MB) and
+                             published by the project's Weave releases service (service add --shipped weave-releases)
   catalog <space>            the Weave services a space's maintainers list there, to install
   catalog add <space> --artifact <project>[@tag] [--text <summary>]   list a Weave service (maintainers of the space)
   catalog remove <space> <app>   take it off
@@ -478,17 +475,10 @@ const { values, positionals } = parseArgs({
     title: { type: 'string' },
     with: { type: 'string' },
     asset: { type: 'string', multiple: true },
-    reads: { type: 'string' },
-    writes: { type: 'string' },
-    'offers-website': { type: 'boolean', default: false },
-    'contract-version': { type: 'string' },
-    net: { type: 'string' },
     blind: { type: 'boolean', default: false },
     action: { type: 'string' },
     'keep-in': { type: 'string' },
     shipped: { type: 'string' },
-    manifest: { type: 'string' },
-    run: { type: 'string' },
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
@@ -507,7 +497,6 @@ const { values, positionals } = parseArgs({
     from: { type: 'string' },
     require: { type: 'boolean', default: false },
     input: { type: 'string' },
-    wasm: { type: 'string' },
     website: { type: 'boolean', default: false },
     rust: { type: 'boolean', default: false },
     lens: { type: 'boolean', default: false },
@@ -518,7 +507,6 @@ const { values, positionals } = parseArgs({
     app: { type: 'string' },
     gate: { type: 'boolean', default: false },
     settings: { type: 'string' },
-    site: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
     'write-board': { type: 'string' },
@@ -839,15 +827,15 @@ function newService(folder: string, kind: { website: boolean; rust: boolean; len
   cpSync(join(STARTERS, starter), into, { recursive: true, filter: (from) => !/[\\/](node_modules|target)([\\/]|$)/.test(from) });
   mkdirSync(join(into, 'wit'), { recursive: true });
   cpSync(SERVICE_WIT, join(into, 'wit', 'service.wit'));
-  // Named after its folder.
-  for (const file of ['package.json', 'Cargo.toml']) {
+  // Named after its folder (its weave.app.json too, and the component a Rust build makes).
+  for (const file of ['package.json', 'Cargo.toml', 'weave.app.json']) {
     const path = join(into, file);
-    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replace(/my-weave-(service|game)/, name));
+    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replace(/my-weave-(service|game)/, name).replace(/my_weave_service/, name.replace(/-/g, '_')));
   }
-  const wasm = kind.rust ? `target/wasm32-wasip2/release/${name.replace(/-/g, '_')}.wasm` : kind.website ? 'game.wasm' : 'service.wasm';
-  const add = kind.website ? `weave service add ${name} --wasm ${wasm} --site site --offers-website --reads nothing --spaces <project>` : `weave service add ${name} --wasm ${wasm} --reads addressed --spaces <project>`;
+  // Every service comes from a release: built, released from this folder into a test project, added from that release.
   const build = kind.rust ? ['  rustup target add wasm32-wasip2   (once)', '  cargo build --target wasm32-wasip2 --release'] : ['  npm install', '  npm run build'];
-  return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, `  ${add}`, `Its README says what it can do, and how to release it.`] };
+  const release = ['  weave service add --shipped weave-releases --spaces <test project>   (once a project)', '  weave app release dev-1 --from . -p <test project>', `  weave service add ${name} --artifact <test project>@dev-1 --spaces <test project>`, `Changed it? Build, weave app release dev-2 --from . -p <test project>, then weave service set ${name} --update dev-2`];
+  return { folder: into, starter, next: [`A ${kind.website ? 'buzzer quiz (a Weave website)' : kind.rust ? 'Weave service in Rust' : 'Weave service in JavaScript'} is in ${into}. Next:`, `  cd ${folder}`, ...build, ...release, `Its README says what it can do, and how to release it for others.`] };
 }
 
 /** The client service starter (a Kanban): built, released, and pinned to a board by the project's maintainers. */
@@ -1652,7 +1640,7 @@ async function main(): Promise<void> {
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
         [
-          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
+          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.problem ? 'not running' : 'starting') : 'stopped'}  in ${where(s.spaces)}`,
           `  ${s.did}`,
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
@@ -1661,8 +1649,7 @@ async function main(): Promise<void> {
           ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
           ...(s.artifact?.deliveredBy ? [`  delivered by ${s.artifact.deliveredBy}, checked against the release`] : []),
           ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
-          ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
-          ...(s.wasm ? [`  runs: ${s.wasm} (WebAssembly, in Weave)`] : []),
+          ...(s.problem ? [`  ${s.problem}`] : []),
           ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
           ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
         ].join('\n');
@@ -1713,15 +1700,7 @@ async function main(): Promise<void> {
 It ships with Weave: it runs only as exactly the component this Weave has.`);
       }
       if (sub === 'add' && ref) {
-        const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
-        // Its weave.app.json (--manifest): the settings it asks for, and its contract unless --reads says otherwise.
-        const manifest = values.manifest ? checkManifest(JSON.parse(readFileSync(values.manifest, 'utf8'))) : undefined;
-        if (manifest && !manifest.manifest) throw new Error(`${values.manifest}: ${manifest.problems.join('; ')}`);
-        const own = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), ...(values.net ? { net: list(values.net) } : {}), version: values['contract-version'] ?? '1.0' };
-        const contract = manifest?.manifest?.service && !values.reads ? manifest.manifest.service : own;
-        const settings = settingsOf();
-        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site ? { site: values.site } : {}), ...(values.node ? { node: values.node } : {}), ...(manifest?.manifest?.env ? { asks: manifest.manifest.env } : {}), ...(Object.keys(settings).length ? { settings: settings as Record<string, string> } : {}), ...(values['keep-in'] ? { settingsIn: values['keep-in'] } : {}) });
-        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : s.wasm ? ' Weave runs its component itself, sandboxed: its log is weave service log.' : ' Give it a command with --run (or a WebAssembly component with --wasm), or let a process use its token.'}`);
+        throw new Error(`a service comes from a release: weave service add ${ref} --artifact <project>[@tag] (code of your own: weave app release <tag> --from <folder> -p <project> first), --shipped <name>, or --builtin website`);
       }
       if (sub === 'list') {
         const all = await b.services();
@@ -1736,7 +1715,7 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
         const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
         const s = await approving((approve) =>
-          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site !== undefined ? { site: values.site || null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : values.approve ? { approve: true } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
+          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : values.approve ? { approve: true } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
         );
         return out(s, () => line(s));
       }
@@ -2774,6 +2753,11 @@ ${postLine(p)}`);
         const w = releaseWorkflow(args[1], args[2], args[3]);
         return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "image": ${JSON.stringify(w.startImage)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
       }
+      if (sub === 'release' && args[1] && values.from) {
+        const app = await b.releaseArtifact({ project: needProject(), tag: args[1], from: resolvePath(process.env.INIT_CWD ?? process.cwd(), values.from) });
+        const files = Object.entries(app.install?.assets ?? {});
+        return out(app, () => `${app.name} ${app.install?.tag} is released from Weave: its files are blobs in the project\n${files.map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  ${a.size ?? '?'} bytes  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}\n  first time: weave service add --artifact ${values.project}@${app.install?.tag} --spaces <project,…>\n  after that: weave service set <name> --update ${app.install?.tag}`);
+      }
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));
         const app = await b.releaseArtifact({ project: needProject(), tag: args[1], ...(values.artifact ? { artifact: values.artifact } : {}), ...(values.repo ? { source: values.repo } : {}), assets });
@@ -2826,7 +2810,7 @@ ${postLine(p)}`);
       const sub = given === 'join' ? 'visit' : given === 'end' ? 'close' : given;
       const b = await backend({ needsDaemon: sub !== 'chat' });
       if (sub === 'open' && ref) {
-        if (values.artifact || values.run) throw new Error('the website service runs nothing: install a release as a service (weave service add --artifact <project>) and it serves its web page, or start your program and give its --port');
+        if (values.artifact) throw new Error('the website service runs nothing: install a release as a service (weave service add --artifact <project>) and it serves its web page, or start your program and give its --port');
         const r = await b.openWebsite({
           project: needProject(),
           name: [ref, ...words].join(' '),

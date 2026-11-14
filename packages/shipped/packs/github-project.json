@@ -1,7 +1,7 @@
 {
   "pack": "github-project",
   "title": "GitHub for this project",
-  "about": "Its releases handed out (members install them without access to the code), and access to its repositories for members who want to work on it: all through a GitHub App of your own, made in one click.",
+  "about": "Connects the project to GitHub: members install its releases, and whoever works on it gets access to its repositories. Runs through a GitHub App of your own, made in one click.",
   "steps": [
     {"keyvault": "github-keyvault", "why": "Holds your GitHub access, so the services don't"},
     {"app": "github-keyvault", "why": "Your own GitHub App: one click on GitHub"},

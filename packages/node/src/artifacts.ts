@@ -22,6 +22,8 @@ export interface Located {
   /** A grant for the fetcher its contract names, which this node runs. */
   grant?: Json;
   fetcher?: string;
+  /** The file itself, already checked against the release (a release from Weave: its blobs, put together). */
+  body?: Uint8Array;
   /** The provider, for messages. */
   by: string;
 }
@@ -79,6 +81,7 @@ export class Releases {
     const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
     const located = await this.#locate(a, platform);
     if (!located) throw new Error(`nothing in its project hands out ${a.manifest.name} ${a.tag}: its maintainers add a provider (GitHub releases)`);
+    if (located.body) return { body: new Blob([located.body as Uint8Array<ArrayBuffer>]).stream(), size: located.body.length, from: located.by };
     if (located.fetcher) {
       // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
       if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);

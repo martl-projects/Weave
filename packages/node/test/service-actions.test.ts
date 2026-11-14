@@ -6,6 +6,7 @@ import { contractWords, mayAct, parseContract, tightens, type Did } from '@weave
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
+import { serviceFromRelease } from './helpers/release.ts';
 
 /*
  * Actions: what a service's contract says people may ask it to do, each with who may. The node that runs it checks
@@ -81,7 +82,7 @@ describe('a service’s actions', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      const bot = await martl.addService({ name: 'bot', contract: CONTRACT as never, spaces: ['Weave'], wasm: component });
+      const bot = await serviceFromRelease(martl, { name: 'bot', manifest: { app: 'bot', name: 'Bot', service: CONTRACT }, component, project: 'Weave', spaces: ['Weave'] });
       await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
       sync([martl, lena]);
       // Answers as someone sees them: each is for who asked (and martl, whose service it is).
@@ -140,7 +141,7 @@ describe('requests while a service is off', { timeout: 120_000 }, () => {
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      const bot = await martl.addService({ name: 'bot', contract: { ...CONTRACT, expires: { hello: 60 } } as never, spaces: ['Later'], wasm: component });
+      const bot = await serviceFromRelease(martl, { name: 'bot', manifest: { app: 'bot', name: 'Bot', service: { ...CONTRACT, expires: { hello: 60 } } }, component, project: 'Later', spaces: ['Later'] });
       await martl.setService({ name: 'bot', enabled: false });
       sync([martl, lena]);
       // Asked while it's off: one that waits, one that counts a minute (the contract's), one Lena wants within 10s.

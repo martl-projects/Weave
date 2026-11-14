@@ -33,3 +33,7 @@ Spotlight's say which boards and people stand out (it shows nothing until they d
 A folder whose manifest says `fetcher` instead of `service` is a fetcher: a client app of each person, not a project's
 service (`weave fetcher add <name> --spaces <project>`). A provider names it in its contract (`"fetcher":
 "github-checkout"`); what the provider answers is a grant for it, which the asker's Weave hands to their fetcher.
+
+Weave releases (`weave-releases`) publishes a project's releases from a maintainer's folder, without GitHub: `weave app
+release <tag> --from <folder> -p <project>` keeps what the folder's `weave.app.json` names as blobs in the project
+(at most 32 MB), and members' Weave fetches and checks them itself (its source's provider is `weave`).

@@ -6,6 +6,7 @@ import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { WASM_LIMITS } from '../src/runtime.ts';
 import { buildComponent } from './helpers/components.ts';
+import { placeholderComponent, serviceFromRelease } from './helpers/release.ts';
 
 /*
  * WebAssembly services (W1): a service's own code as a component that Weave runs itself, in a worker of its own,
@@ -46,14 +47,16 @@ describe('WebAssembly services', { timeout: 120_000 }, () => {
     await martl.createProject({ name: 'Weave' });
     await lena.joinSpace(await martl.invite('Weave'));
     sync([martl, lena]);
-    await expect(martl.addService({ name: 'bad', contract: { reads: 'addressed', writes: [], version: '1.0' }, wasm: join(tmpdir(), 'nothing-here.wasm') })).rejects.toThrow(/isn't a WebAssembly component/);
-    await expect(martl.addService({ name: 'bad', contract: { reads: 'addressed', writes: [], version: '1.0' }, wasm: component, command: ['node', 'x.js'] })).rejects.toThrow(/one of them/);
-
     const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
     martl.runServices({ port: api.port });
     try {
-      const bot = await martl.addService({ name: 'bot', contract: { reads: 'addressed', writes: [], version: '1.0' }, spaces: ['Weave'], wasm: component, settings: { GREETING: 'hello' } });
-      expect(bot).toMatchObject({ name: 'bot', wasm: component });
+      // A release whose component isn't one: it says so, and doesn't run.
+      await serviceFromRelease(martl, { name: 'bad', manifest: { app: 'bad', name: 'Bad', service: { reads: 'addressed', writes: [], version: '1.0' } }, component: placeholderComponent(), project: 'Weave' });
+      await vi.waitFor(async () => expect((await martl.services()).find((s) => s.name === 'bad')?.artifact?.error).toMatch(/doesn't run as a Weave service/), { timeout: 30_000, interval: 200 });
+      await martl.removeService('bad');
+
+      const bot = await serviceFromRelease(martl, { name: 'bot', manifest: { app: 'bot', name: 'Bot', service: { reads: 'addressed', writes: [], version: '1.0' }, env: [{ name: 'GREETING', label: 'Greeting', optional: true }] }, component, project: 'Weave', spaces: ['Weave'], settings: { GREETING: 'hello' } });
+      expect(bot).toMatchObject({ name: 'bot', artifact: { name: 'Bot', project: { name: 'Weave' } } });
       const answers = async () => {
         sync([martl, lena]);
         return Object.fromEntries((await lena.serviceRequests({ space: 'Weave', service: 'martl/bot' })).map((r) => [r.text, r.results.map((x) => x.text)[0]]));
