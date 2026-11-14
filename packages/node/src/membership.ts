@@ -1,4 +1,4 @@
-import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
+import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, parseBlobRef, open, openKnock, parseVisitorRule, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
 import { type Admission, type CommunityInfo, type InviteLook, type InviteOptions, type KnockInfo, type MemberInfo, type ProjectInfo, type SpaceInfo, noAgentError } from './backend.ts';
 import type { StoredSpace } from './spacestore.ts';
 import type { Recipient } from '@weave/core';
@@ -387,19 +387,32 @@ export class Membership {
   async community(ref: string): Promise<CommunityInfo> {
     const community = this.core.kernel.space(ref, 'community');
     const state = this.core.kernel.state(community);
+    const page = this.core.kernel.page(community, state);
     return {
       ...this.core.kernel.spaceInfo(community),
       kind: 'community',
-      description: this.core.kernel.page(community, state).description,
+      description: page.description,
+      ...(page.banner ? { banner: page.banner } : {}),
       moderators: [...state.maintainers].map((did) => this.core.kernel.actor(did, did)),
       moderator: state.maintainers.has(this.node.identity.author),
     };
   }
 
-  async setCommunity(input: { community: string; description: string }): Promise<CommunityInfo> {
+  /**
+   * A community's page: its description, icon and banner, in the one event a project's page is (the last one by a
+   * moderator counts, whole). Left out stays as it is; an empty icon or banner removes it.
+   */
+  async setCommunity(input: { community: string; description?: string; icon?: string; banner?: string; as?: string }): Promise<CommunityInfo> {
     const community = this.core.kernel.space(input.community, 'community');
-    this.core.kernel.maintainerState(community);
-    this.node.replica.write(this.node.identity, sealFor(this.core.managed.cipher(community), { kind: KIND_PAGE, body: { description: input.description ?? '' } }));
+    const state = this.core.kernel.maintainerState(community);
+    if (input.as) this.core.agentMay(input.as, KIND_PAGE);
+    for (const image of [input.icon, input.banner]) if (image && !parseBlobRef(image)) throw new Error('icons and banners are uploaded images (wblob: references)');
+    const before = this.core.kernel.page(community, state);
+    // A community's description is its page's body (what it read as before it had pictures).
+    const description = input.description ?? before.body;
+    const icon = input.icon === undefined ? before.icon : input.icon || undefined;
+    const banner = input.banner === undefined ? before.banner : input.banner || undefined;
+    await this.node.publish({ kind: KIND_PAGE, body: { description, ...(icon ? { icon } : {}), ...(banner ? { banner } : {}) }, space: community.id, as: input.as });
     return this.community(community.id);
   }
 

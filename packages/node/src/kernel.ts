@@ -931,6 +931,8 @@ export class Kernel {
 
   spaceInfo(space: StoredSpace): SpaceInfo {
     const state = this.state(space);
+    // A project's or a community's icon, from its page.
+    const icon = space.kind === 'project' || space.kind === 'community' ? this.page(space, state).icon : undefined;
     return {
       id: space.id,
       kind: space.kind,
@@ -940,7 +942,7 @@ export class Kernel {
       members: state.members.size,
       epoch: currentEpoch(space),
       ...(space.kind !== 'direct' ? { channels: channelsOf(this.entries(space)) } : {}),
-      ...(space.kind === 'project' && this.page(space, state).icon ? { icon: this.page(space, state).icon } : {}),
+      ...(icon ? { icon } : {}),
       ...this.#spacePhoto(space, state),
       ...(state.closed ? { closed: true as const } : {}),
       history: state.history?.value ?? 'all',

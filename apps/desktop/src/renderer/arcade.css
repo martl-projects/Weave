@@ -303,7 +303,7 @@
   margin: 0; padding: 16px 18px 34px; min-height: 120px;
   color: var(--ar-text); border-bottom: 2px solid var(--ar-line);
 }
-:root[data-skin='arcade'] :is(.hero:not(.has-banner), .banner) {
+:root[data-skin='arcade'] :is(.hero, .banner):not(.has-banner) {
   background:
     linear-gradient(90deg, var(--t-i) 0 18px, var(--t-i) 18px 36px, var(--t-t) 36px 54px, var(--t-o) 54px 90px, var(--t-z) 90px 108px, transparent 108px 144px, var(--t-s) 144px 180px, var(--t-j) 180px 198px, var(--t-l) 198px 252px, transparent 252px) left bottom / 100% 18px no-repeat,
     linear-gradient(90deg, var(--t-l) 0 36px, var(--t-j) 36px 72px, var(--t-z) 72px 90px, transparent 90px 126px, var(--t-t) 126px 162px, var(--t-s) 162px 180px, var(--t-i) 180px 252px, transparent 252px) left calc(100% - 18px) / 100% 18px no-repeat,
@@ -321,7 +321,7 @@
 :root[data-skin='arcade'] :is(.hero, .banner) :is(h1, .hero-text h1, .banner-text h1) { font: 18px/1.4 var(--ar-pixel); color: var(--t-o); text-shadow: 3px 3px 0 var(--t-z), 0 0 12px #ffd40080; }
 :root[data-skin='arcade'] :is(.hero, .banner) .hero-subtitle { text-shadow: none; font-size: 18px; }
 :root[data-skin='arcade'] :is(.hero, .banner) a { color: var(--t-i); }
-:root[data-skin='arcade'] .hero.has-banner::before { background: linear-gradient(90deg, #05050bdd, #05050b66); }
+:root[data-skin='arcade'] :is(.hero, .banner).has-banner::before { background: linear-gradient(90deg, #05050bdd, #05050b66); }
 :root[data-skin='arcade'] :is(.hero-art, .banner-art) { border: 2px solid var(--t-i); box-shadow: 0 0 12px #00e5ff80; background: #000; }
 :root[data-skin='arcade'] .banner-side .votes { padding: 4px 6px; background: #000; color: var(--ar-text); border: 2px solid var(--ar-line); }
 :root[data-skin='arcade'] .board-strip { padding: 8px; gap: 6px; border-bottom: 2px dotted var(--ar-line); }

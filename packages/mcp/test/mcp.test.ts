@@ -266,6 +266,31 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it("lets an agent give a community its icon and banner, with the page permission and only where its person moderates", async () => {
+    const { node, call, close } = await setup();
+    await node.createCommunity({ name: 'Birdwatchers', description: 'Who saw what' });
+    const png = join(node.home.dir, 'bird.png');
+    writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const icon = (await call('weave_upload_image', { file: png })).data.ref;
+    const banner = (await call('weave_upload_image', { file: png })).data.ref;
+
+    expect((await call('weave_set_community_page', { community: 'Birdwatchers', icon })).error).toMatch(/may not sign weave\.project\.page/);
+    await node.updateAgent({ name: 'forge', permissions: ['weave.post', 'weave.project.page'] });
+    expect((await call('weave_set_community_page', { community: 'Birdwatchers', icon, banner })).data).toMatchObject({ name: 'Birdwatchers', description: 'Who saw what', icon, banner });
+    expect(await node.community('Birdwatchers')).toMatchObject({ icon, banner });
+    expect((await call('weave_set_community_page', { community: 'Birdwatchers', icon: '' })).data).not.toHaveProperty('icon');
+    expect((await call('weave_set_community_page', { community: 'Birdwatchers', banner: 'https://example.com/b.png' })).error).toMatch(/uploaded images/);
+
+    // In a community its person only belongs to, the agent can't either.
+    const lena = WeaveNode.init('Lena', mkdtempSync(join(tmpdir(), 'weave-mcp-')));
+    dirs.push(lena.home.dir);
+    await lena.createCommunity({ name: 'Synths' });
+    await node.joinSpace(await lena.invite('Synths'));
+    for (let round = 0; round < 2; round++) for (const [from, to] of [[node, lena], [lena, node]]) from.replica.events().forEach((e) => to.replica.ingest(e));
+    expect((await call('weave_set_community_page', { community: 'Synths', icon })).error).toMatch(/only moderators of Synths/);
+    close();
+  });
+
   it('attaches a file to a message and gets it back', async () => {
     const { node, call, close } = await setup();
     const log = join(node.home.dir, 'build.log');

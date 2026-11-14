@@ -191,13 +191,13 @@ export interface FeedQuery {
 export interface SpaceInfo extends SpaceRef {
   /** Its chat channels, with when each was last written in: the sidebar shows unread marks from this without asking per space. */
   channels?: ChannelInfo[];
-  /** Projects: the icon from the project's page (wblob: reference), if it has one. */
+  /** Projects and communities: the icon from their page (wblob: reference), if it has one. */
   icon?: string;
   /** A photo of its own (wblob: reference) instead of everyone's avatars as a group photo. */
   photo?: string;
   /** The text on its group photo's banner (its name when not set). */
   bannerText?: string;
-  /** A picture behind its group photo (wblob: reference); a project's banner too, unless its page has one. */
+  /** A picture behind its group photo (wblob: reference); a project's or community's banner too, unless its page has one. */
   background?: string;
   /** Projects: their members stand on the banner, as a group. */
   membersOnBanner?: true;
@@ -682,6 +682,8 @@ export interface PublicProject {
 export interface CommunityInfo extends SpaceInfo {
   kind: 'community';
   description: string;
+  /** Wide image (wblob: reference) behind its header; its icon is the space's (`icon`). */
+  banner?: string;
   moderators: Actor[];
   /** You may pin posts, remove members and appoint moderators. */
   moderator: boolean;
@@ -2267,7 +2269,8 @@ export interface Backend {
   createCommunity(input: { name: string; description?: string }): Promise<CommunityInfo>;
   community(ref: string): Promise<CommunityInfo>;
   /** Moderators: change the description. */
-  setCommunity(input: { community: string; description: string }): Promise<CommunityInfo>;
+  /** Moderators: its description, icon and banner (wblob: references). Left out stays; an empty icon or banner removes it. */
+  setCommunity(input: { community: string; description?: string; icon?: string; banner?: string; as?: string }): Promise<CommunityInfo>;
   setModerator(input: { community: string; who: string; on: boolean }): Promise<void>;
 
   // posts, boards and upvotes

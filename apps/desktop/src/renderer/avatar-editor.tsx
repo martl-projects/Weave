@@ -384,7 +384,7 @@ export function SpacePhotoSettings({ space, members, canSet }: { space: SpaceInf
           {own && canSet && <ImagePicker value={photo} onChange={setPhoto} label={t('photo.legend')} wide />}
           {!own && canSet && (
             <div className="field-row-stacked">
-              <label>{t(space.kind === 'project' ? 'photo.background.project' : 'photo.background')}</label>
+              <label>{t(space.kind === 'project' ? 'photo.background.project' : space.kind === 'community' ? 'photo.background.community' : 'photo.background')}</label>
               <ImagePicker value={background} onChange={setBackground} label={t('photo.background.pick')} wide />
             </div>
           )}

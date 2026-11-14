@@ -278,7 +278,7 @@
   border-bottom: 2px solid var(--cz-line);
   color: var(--cz-ink);
 }
-:root[data-skin='cozy'] :is(.hero:not(.has-banner), .banner) {
+:root[data-skin='cozy'] :is(.hero, .banner):not(.has-banner) {
   background:
     linear-gradient(transparent calc(100% - 14px), #4a8fd8 calc(100% - 14px) calc(100% - 10px), #6fb3f0 calc(100% - 10px)),
     radial-gradient(60% 46px at 18% 100%, #4ea65a 98%, transparent 100%),
@@ -295,11 +295,11 @@
     radial-gradient(22px 22px at 88% 24%, #ffd86b 96%, transparent 100%),
     linear-gradient(#ffd9b8, #fff1dc 85%);
 }
-:root[data-skin='cozy'] :is(.hero:not(.has-banner), .banner) :is(h1, .hero-text h1, .banner-text h1) { color: var(--cz-line); text-shadow: 2px 2px 0 #fff; }
-:root[data-skin='cozy'] :is(.hero:not(.has-banner), .banner) .hero-subtitle { text-shadow: 1px 1px 0 #fff; }
-:root[data-skin='cozy'] :is(.hero:not(.has-banner), .banner) a { color: var(--link); }
-:root[data-skin='cozy'] .hero.has-banner { color: #fff; }
-:root[data-skin='cozy'] .hero.has-banner::before { background: linear-gradient(90deg, #121a4ccc, #121a4c55); }
+:root[data-skin='cozy'] :is(.hero, .banner):not(.has-banner) :is(h1, .hero-text h1, .banner-text h1) { color: var(--cz-line); text-shadow: 2px 2px 0 #fff; }
+:root[data-skin='cozy'] :is(.hero, .banner):not(.has-banner) .hero-subtitle { text-shadow: 1px 1px 0 #fff; }
+:root[data-skin='cozy'] :is(.hero, .banner):not(.has-banner) a { color: var(--link); }
+:root[data-skin='cozy'] :is(.hero, .banner).has-banner { color: #fff; }
+:root[data-skin='cozy'] :is(.hero, .banner).has-banner::before { background: linear-gradient(90deg, #121a4ccc, #121a4c55); }
 :root[data-skin='cozy'] .hero-text h1, :root[data-skin='cozy'] .banner-text h1 { font: 700 26px var(--cz-pixel); }
 :root[data-skin='cozy'] :is(.hero-art, .banner-art) { border: 2px solid var(--cz-line); border-radius: 12px; overflow: hidden; box-shadow: 0 3px 0 var(--cz-line); }
 :root[data-skin='cozy'] .banner-side .votes { padding: 4px 6px; border: 2px solid var(--cz-line); border-radius: 10px; background: var(--cz-paper); }
