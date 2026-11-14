@@ -767,6 +767,30 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .window.modal, .window.modal.wide { width: calc(100vw - 12px) !important; max-width: none; max-height: calc(100dvh - 24px); overflow-y: auto; }
 }
 
+/* Phones: a project's hero folds into a slim bar (icon, title, status, the banner behind), and a post and its chat
+   scroll as one page, the chat under a bar that folds it. On a wider screen nothing of this shows. */
+.post-chat { display: contents; }
+@media (max-width: 700px) {
+  .hero.folded { display: none; }
+  :root .project-split > button.hero-bar {
+    position: relative; flex: none; gap: 8px; justify-content: flex-start; margin: 2px; padding: 6px 10px; min-height: 44px; overflow: hidden;
+    border: 0; border-radius: 0; box-shadow: none; background: #1f3a7a; color: #fff; font-family: var(--content-font); font-size: 14px; text-align: left;
+  }
+  .hero-bar.has-banner::before { content: ''; position: absolute; inset: 0; z-index: 1; background: #00104099; }
+  .hero-bar > :not(.hero-bg) { position: relative; z-index: 2; }
+  .hero-bar-art { flex: none; width: 28px; height: 28px; overflow: hidden; border: 1px solid #fff; background: #fff; }
+  .hero-bar-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .hero-bar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 1px 1px 0 #0008; }
+  .hero-bar .tag { flex: none; }
+  .hero-bar-more { margin-left: auto; font-size: 16px; }
+  .hero > .hero-fold { position: absolute; top: 4px; right: 4px; z-index: 3; min-width: 32px; padding: 0 8px; }
+  .post-split { overflow-y: auto; container-type: size; }
+  .post-split > .post-full { max-height: none; overflow: visible; }
+  .post-chat { display: flex; flex-direction: column; flex: none; }
+  .post-chat.open { flex: 1 0 0; min-height: 75cqh; }
+  :root .post-chat > button.post-chat-bar { flex: none; gap: 6px; justify-content: flex-start; margin: 2px; padding: 6px 10px; min-height: 40px; font-size: 14px; text-align: left; }
+}
+
 /* ---------- co-authors */
 .coauthors .coauthor.asked, .coauthors .coauthor.declined { color: #808080; }
 .coauthors .agent-tag { margin-left: 3px; }
@@ -1048,3 +1072,10 @@ button.session-title:hover { text-decoration: underline; }
 
 /* Add a service, in Keys & devices (addwizard.tsx) */
 .wizard-question { margin: 4px 0 8px; font-size: 1.1em; }
+
+/* Phones: a project's boards in one row that scrolls sideways, not three rows of chips. */
+@media (max-width: 700px) {
+  .board-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 4px 8px; }
+  .board-strip::-webkit-scrollbar { display: none; }
+  .board-chip { flex: none; white-space: nowrap; scroll-snap-align: start; }
+}

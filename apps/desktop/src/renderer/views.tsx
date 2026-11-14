@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
@@ -583,6 +583,30 @@ export function AdmissionCard({ admission }: { admission: Admission }) {
 
 // ---------------------------------------------------------------- projects
 
+/** On a phone a project's hero starts folded into a slim bar; whether it's unfolded is kept per project, in this browser only. */
+const HERO_KEY = (project: string) => `weave.hero.open.${project}`;
+function readHeroOpen(project: string): boolean {
+  try {
+    return localStorage.getItem(HERO_KEY(project)) === '1';
+  } catch {
+    return false;
+  }
+}
+function useHeroOpen(project: string): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(() => readHeroOpen(project));
+  useEffect(() => setOpen(readHeroOpen(project)), [project]);
+  return [
+    open,
+    (next: boolean) => {
+      setOpen(next);
+      try {
+        if (next) localStorage.setItem(HERO_KEY(project), '1');
+        else localStorage.removeItem(HERO_KEY(project));
+      } catch {}
+    },
+  ];
+}
+
 /**
  * A project's front page: a hero card (icon, banner, title, subtitle, votes)
  * over its boards and general chat. The card expands into the project's page.
@@ -594,7 +618,10 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
   const [sharing, setSharing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [heroOpen, setHeroOpen] = useHeroOpen(project.id);
   const page = info?.page;
+  const banner = page?.banner || project.background;
+  const title = page?.title || project.name;
   return (
     <section className="pane-main">
       <header className="pane-head">
@@ -609,12 +636,29 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
         </span>
       </header>
       <div className="project-split">
+        {/* On a phone: the hero folded into a slim bar (icon, title, status, the banner behind them); a tap unfolds it. */}
+        {!heroOpen && (
+          <button className={`hero-bar mobile-only${banner ? ' has-banner' : ''}`} aria-expanded={false} onClick={() => setHeroOpen(true)}>
+            {banner && <BlobImage src={banner} className="hero-bg" />}
+            <span className="hero-bar-art">{page?.icon ? <BlobImage src={page.icon} alt="" /> : <Sprite seed={project.id} size={28} />}</span>
+            <b className="hero-bar-title">{title}</b>
+            {page && <span className={`tag status-${page.status}`}>{t(`pstatus.${page.status}`)}</span>}
+            <span className="hero-bar-more" aria-hidden>
+              ▾
+            </span>
+          </button>
+        )}
         {/* Its page's banner, or else the background of its group photo. */}
-        <div className={`hero${page?.banner || project.background ? ' has-banner' : ''}${project.membersOnBanner && members.length ? ' has-members' : ''}`}>
-          {(page?.banner || project.background) && <BlobImage src={(page?.banner || project.background)!} className="hero-bg" />}
+        <div className={`hero${banner ? ' has-banner' : ''}${project.membersOnBanner && members.length ? ' has-members' : ''}${heroOpen ? '' : ' folded'}`}>
+          {banner && <BlobImage src={banner} className="hero-bg" />}
+          {heroOpen && (
+            <button className="hero-fold mobile-only" aria-expanded title={t('phome.hero.fold')} aria-label={t('phome.hero.fold')} onClick={() => setHeroOpen(false)}>
+              ▴
+            </button>
+          )}
           <div className="hero-art">{page?.icon ? <BlobImage src={page.icon} alt="" /> : <Sprite seed={project.id} size={88} />}</div>
           <div className="hero-text">
-            <h1>{page?.title || project.name}</h1>
+            <h1>{title}</h1>
             <div className="hero-meta">
               {page && <span className={`tag status-${page.status}`}>{t(`pstatus.${page.status}`)}</span>} <span className="small">{t('phome.participants.by', { n: members.length, by: info?.founderName ?? '…' })}</span>
             </div>
