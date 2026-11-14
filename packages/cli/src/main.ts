@@ -371,6 +371,9 @@ artifacts and websites: a project's releases, and websites that run them (needs 
   app workflow <app> <entry> [owner]  a GitHub Actions workflow that builds a container image and releases it on each version tag
   app release <tag> -p <p>   point the app at a GitHub release (maintainers): reads weave.app.json at the tag, fingerprints each file
                              [--repo owner/name] [--asset win32-x64=<file> …] when names don't say the platform
+  app release <tag> --from <folder> -p <p>   release a folder of yours without GitHub (maintainers): what its weave.app.json
+                             names (a WebAssembly component, its site), kept as blobs in the project (at most 32 MB) and
+                             published by the project's Weave releases service (service add --shipped weave-releases)
   catalog <space>            the Weave services a space's maintainers list there, to install
   catalog add <space> --artifact <project>[@tag] [--text <summary>]   list a Weave service (maintainers of the space)
   catalog remove <space> <app>   take it off
@@ -2773,6 +2776,11 @@ ${postLine(p)}`);
       if (sub === 'workflow' && args[1] && args[2]) {
         const w = releaseWorkflow(args[1], args[2], args[3]);
         return out(w, () => `# ${w.file}\n${w.content}\n# weave.app.json: "start": { …, "image": ${JSON.stringify(w.startImage)} }\n${w.notes.map((n) => `# - ${n}`).join('\n')}`);
+      }
+      if (sub === 'release' && args[1] && values.from) {
+        const app = await b.releaseArtifact({ project: needProject(), tag: args[1], from: resolvePath(process.env.INIT_CWD ?? process.cwd(), values.from) });
+        const files = Object.entries(app.install?.assets ?? {});
+        return out(app, () => `${app.name} ${app.install?.tag} is released from Weave: its files are blobs in the project\n${files.map(([platform, a]) => `  ${platform.padEnd(13)} ${a.file}  ${a.size ?? '?'} bytes  sha256 ${a.sha256.slice(0, 16)}…`).join('\n')}\n  first time: weave service add --artifact ${values.project}@${app.install?.tag} --spaces <project,…>\n  after that: weave service set <name> --update ${app.install?.tag}`);
       }
       if (sub === 'release' && args[1]) {
         const assets = Object.fromEntries((values.asset ?? []).map((a) => a.split('=')).filter((kv) => kv.length === 2));

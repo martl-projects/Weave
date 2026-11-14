@@ -2533,8 +2533,8 @@ export interface Backend {
   artifactLines(project: string): Promise<ArtifactLine[]>;
   /** The releases one of a project's artifacts could publish (or a new source's), as its provider sees them. */
   artifactReleases(input: { project: string; artifact?: string; source?: string }): Promise<AppReleases>;
-  /** Maintainers: release one of a project's artifacts (or a new one, from a new source), by tag: fingerprinted by its provider. */
-  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; as?: string }): Promise<AppManifest>;
+  /** Maintainers: release one of a project's artifacts (or a new one, from a new source), by tag: fingerprinted by its provider. `from`: a folder of this computer, released from Weave itself (its files as blobs, published by the project's Weave releases). */
+  releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; from?: string; texts?: unknown; as?: string }): Promise<AppManifest>;
   /** Maintainers: describe one of a project's artifacts (its weave.app.json): a new one, or the next description of one. */
   publishArtifact(input: { project: string; manifest: unknown; as?: string }): Promise<AppManifest>;
   /**

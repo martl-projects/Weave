@@ -3577,6 +3577,11 @@ export class WeaveNode implements Backend {
       get releases() {
         return n.#releases;
       },
+      /** Blobs kept here, and asking peers for those that aren't (a release from Weave's files). */
+      get blobs() {
+        return n.blobs;
+      },
+      wantBlobs: (hashes: string[]) => n.#swarm?.want(hashes),
       get replica() {
         return n.replica;
       },
@@ -4058,6 +4063,15 @@ export class WeaveNode implements Backend {
 
   set locateWait(ms: number) {
     this.#services.locateWait = ms;
+  }
+
+  /** How long installing a release from Weave waits for each of its blobs (tests shorten it). */
+  get blobWait(): number {
+    return this.#services.blobWait;
+  }
+
+  set blobWait(ms: number) {
+    this.#services.blobWait = ms;
   }
 
   /** Open a website in a project, and (unless announce is false) say so in its chat: people find it there. */

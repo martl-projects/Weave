@@ -485,7 +485,15 @@ export interface AppAsset {
   sha256: string;
   /** In bytes. */
   size?: number;
+  /**
+   * A release from Weave (its source's provider is "weave"): the file as encrypted blobs in the project, in order,
+   * each by its hash and key. Not wblob: references, so members' Weave doesn't fetch them all ahead of time.
+   */
+  parts?: Array<{ hash: string; key: string }>;
 }
+
+/** A blob's hash or key (base64url, 32 bytes). */
+const BLOB_PART = /^[A-Za-z0-9_-]{43}$/;
 
 const PLATFORM = /^((win32|darwin|linux)-(x64|arm64|ia32|arm)|wasm|file)$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$/;
@@ -504,7 +512,9 @@ export function parseInstall(input: unknown): AppInstall | undefined {
       const sha256 = text(a.sha256, 64).toLowerCase();
       if (!PLATFORM.test(platform) || !file || /[\\/]/.test(file) || !/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`install.assets.${platform}: needs "file" (a name in the release) and its "sha256"`);
       const size = Number(a.size);
-      assets[platform] = { file, sha256, ...(Number.isInteger(size) && size > 0 ? { size } : {}) };
+      const parts = a.parts === undefined ? undefined : Array.isArray(a.parts) ? a.parts.slice(0, 64) : [];
+      if (parts && (!parts.length || parts.some((p) => !p || typeof p !== 'object' || !BLOB_PART.test(String((p as { hash?: unknown }).hash)) || !BLOB_PART.test(String((p as { key?: unknown }).key))))) throw new Error(`install.assets.${platform}: "parts" are its blobs, each {hash, key}`);
+      assets[platform] = { file, sha256, ...(Number.isInteger(size) && size > 0 ? { size } : {}), ...(parts ? { parts: parts.map((p) => ({ hash: (p as { hash: string }).hash, key: (p as { key: string }).key })) } : {}) };
     }
   }
   let image: AppImage | undefined;

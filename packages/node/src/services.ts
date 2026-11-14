@@ -14,6 +14,7 @@ import { prepareWasm, programConsent, publicHost, releaseApproval } from './runt
 import { readJson, writeJson } from './home.ts';
 import { imageDigest, imageLabels } from './registry.ts';
 import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
+import { assembleFile, WEAVE_SOURCE } from './weavereleases.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -1483,6 +1484,9 @@ export class Services {
   /** How long to wait for a provider's answer (it has to reach the node the provider runs on, and back). */
   locateWait = 60_000;
 
+  /** How long to wait for each blob of a release from Weave, from whoever holds it. */
+  blobWait = 60_000;
+
   /** How long publishing through a provider may take: it fingerprints every file of the release. */
   publishWait = 10 * 60_000;
 
@@ -1513,6 +1517,13 @@ export class Services {
     if (!this.h.spaces.has(a.project)) return undefined;
     // One that hands out artifacts from where this one's files are (any source, if its contract names none).
     const source = artifactSourceOf(a.manifest)?.provider;
+    // A release from Weave: its blobs, from whoever holds them, put together and checked here. No provider asked.
+    if (source === WEAVE_SOURCE) {
+      const asset = a.manifest.install?.assets?.[platform];
+      if (!asset) return undefined;
+      const body = await assembleFile(a.manifest, asset, (hash) => this.h.blobs.fetch(hash, (hashes) => this.h.wantBlobs(hashes), this.blobWait));
+      return { body, by: 'Weave, from the project' };
+    }
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
     // Open code: the fetcher gets it as it is, with nobody's grant (the provider needn't be there).
     const asset = a.manifest.install?.assets?.[platform];

@@ -1,5 +1,8 @@
 import { type AppManifest, type Artifact, IMAGE_REF, type Json, KIND_APP, KIND_APP_TEXTS, KIND_SERVICE_REQUEST, SERVICE_LABEL, artifactKindOf, artifactsOf, checkServiceLabel, checkServicePackage, compareVersions, formatVersion, mayDo, parseManifest, parseVersion } from '@weave/core';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { platformKey } from './appinstall.ts';
+import { packFolder, storeFiles, WEAVE_SOURCE } from './weavereleases.ts';
 import { type AppReleases, type ArtifactLine, type UpdateFile, type UpdateInfo, type UpdateReady, type UpdateState } from './backend.ts';
 import { saveConfig } from './config.ts';
 import { publicReleases } from './github.ts';
@@ -18,6 +21,13 @@ import { UPDATE_SOURCE } from './node.ts';
  * own updates. It sees the node's internals only through AppsCore; the node
  * delegates the Backend methods to it.
  */
+
+/** The text packages next to a folder's manifest (weave.texts.<lang>.json), if there are any. */
+function textsIn(folder: string): unknown[] | undefined {
+  if (!existsSync(folder)) return undefined;
+  const files = readdirSync(folder).filter((f) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)?\.json$/.test(f)).sort();
+  return files.length ? files.map((f) => JSON.parse(readFileSync(join(folder, f), 'utf8')) as unknown) : undefined;
+}
 
 /** A promise that gives up after `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -243,10 +253,11 @@ export class Apps {
    * Publish a GitHub release as the project's artifact (maintainers): asked of the project's provider (github-releases),
    * which reads it, fingerprints its files and publishes it with its own access. Nobody's GitHub sign-in is needed.
    */
-  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; texts?: unknown; announce?: boolean; as?: string }): Promise<AppManifest> {
+  async releaseArtifact(input: { project: string; tag: string; artifact?: string; source?: string; assets?: Record<string, string>; from?: string; texts?: unknown; announce?: boolean; as?: string }): Promise<AppManifest> {
     if (input.as) this.core.agentMay(input.as, KIND_SERVICE_REQUEST);
     const project = this.core.project(input.project);
     this.core.maintainerState(project);
+    if (input.from !== undefined) return this.#releaseFromFolder(project, { ...input, from: input.from });
     const from = this.releaseLine(project, input);
     // Its texts are checked against the manifest once the provider has read it; that an agent may publish them, now.
     if (Array.isArray(input.texts) && input.texts.length && input.as) this.core.agentMay(input.as, KIND_APP_TEXTS);
@@ -255,6 +266,26 @@ export class Apps {
     if (data.id) await this.#publishTexts(project, data.id, this.#checkedTexts(manifest, input.texts, input.as), input.as);
     // Offered: said in the project's chat, as a card to get it from (unless announce is false).
     if (input.announce !== false && data.id) await this.core.announce(project.id, { kind: 'release', id: data.id }, `${manifest.name} ${manifest.install?.tag ?? input.tag} is available`);
+    return manifest;
+  }
+
+  /**
+   * Publish a folder of this computer as the project's release (maintainers), without GitHub: what its weave.app.json
+   * names, packed and kept as encrypted blobs here, published by the project's Weave releases service. Members' Weave
+   * fetches the blobs from whoever holds them and checks the file against what was published.
+   */
+  async #releaseFromFolder(project: StoredSpace, input: { tag: string; from: string; texts?: unknown; announce?: boolean; as?: string }): Promise<AppManifest> {
+    const tag = input.tag.trim();
+    const packed = packFolder(input.from);
+    // Its texts: given, or the packages next to its manifest (weave.texts.<lang>.json).
+    const texts = input.texts ?? textsIn(input.from);
+    if (Array.isArray(texts) && texts.length && input.as) this.core.agentMay(input.as, KIND_APP_TEXTS);
+    this.#checkedTexts(parseManifest(packed.manifest), texts, input.as);
+    const assets = storeFiles(packed.files, (data) => void this.node.blobs.put(data));
+    const data = (await this.core.services.askProvider(project, 'publish', { source: project.id, tag, manifest: packed.manifest as Json, assets: assets as unknown as Json }, input.as, WEAVE_SOURCE)) as { id?: string; manifest?: unknown };
+    const manifest = parseManifest(data.manifest);
+    if (data.id) await this.#publishTexts(project, data.id, this.#checkedTexts(manifest, texts, input.as), input.as);
+    if (input.announce !== false && data.id) await this.core.announce(project.id, { kind: 'release', id: data.id }, `${manifest.name} ${manifest.install?.tag ?? tag} is available`);
     return manifest;
   }
 
