@@ -1072,3 +1072,10 @@ button.session-title:hover { text-decoration: underline; }
 
 /* Add a service, in Keys & devices (addwizard.tsx) */
 .wizard-question { margin: 4px 0 8px; font-size: 1.1em; }
+
+/* Phones: a project's boards in one row that scrolls sideways, not three rows of chips. */
+@media (max-width: 700px) {
+  .board-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 4px 8px; }
+  .board-strip::-webkit-scrollbar { display: none; }
+  .board-chip { flex: none; white-space: nowrap; scroll-snap-align: start; }
+}
