@@ -152,6 +152,8 @@ export class Replica {
   append(identity: SigningIdentity, fields: EventFields): WeaveEvent {
     const event = signEvent(identity, this.store.head(identity.did), fields);
     const result = this.ingest(event);
+    // What we refuse to write ourselves doesn't wait to be taken later: only what peers send does.
+    if (result.status === 'pending') this.#unpark(pendingKey(event));
     if (result.status !== 'accepted') throw new Error(`local event not accepted: ${'reason' in result ? result.reason : result.status}`);
     return event;
   }
@@ -177,6 +179,7 @@ export class Replica {
     const content = (fields.class ?? classOf(fields.kind)) === 'content' && !fields.legacy;
     const { event, body } = signEventV2(identity, this.store.chainHead(identity.did, space), { ...fields, space, n: this.number(identity.did) + 1, ...(content ? { cs: this.store.contentCount(identity.did, space) + 1 } : {}) });
     const result = this.ingest({ e: event, ...(body !== undefined ? { b: body } : {}) });
+    if (result.status === 'pending') this.#unpark(`v2 ${eventIdV2(event)}`);
     if (result.status !== 'accepted') throw new Error(`local event not accepted: ${'reason' in result ? result.reason : result.status}`);
     return recordOfV2(canonicalIdV2(event), event, body);
   }

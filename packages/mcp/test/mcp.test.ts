@@ -177,6 +177,30 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('lets an agent ask for the kinds a board’s client service writes, and for nothing no service there writes', async () => {
+    const { node, client, call, close } = await setup();
+    // A board shown by a client service, pinned as its maintainer does (its code isn't needed to ask for its kinds).
+    const manifest = { app: 'tiles', name: 'Word Tiles', client: { component: 'board.wasm', writes: ['weave.post', 'tiles.move'] }, install: { tag: '1.0', image: { ref: 'ghcr.io/martl/tiles', tag: '1.0', digest: `sha256:${'a'.repeat(64)}`, packaged: true } } };
+    await node.publish({ kind: 'weave.board.lens', body: { board: 'ideas', origin: { project: 'p1', release: 'r1' }, manifest: manifest as unknown as Json, mode: 'require' }, space: 'Weave' });
+    expect(await node.lensKinds()).toEqual([{ kind: 'tiles.move', lenses: ['Word Tiles'] }]);
+
+    // Neither everything nor a kind no service here writes; the error names what there is.
+    expect((await call('weave_request_permission', { kinds: ['*'], reason: 'x' })).error).toMatch(/can't ask for \*/);
+    expect((await call('weave_request_permission', { kinds: ['tiles.pass'], reason: 'x' })).error).toMatch(/can't ask for tiles\.pass: .*\(here: tiles\.move\)/);
+    expect(await node.permissionRequests()).toEqual([]);
+
+    const asked = (await call('weave_request_permission', { kinds: ['tiles.move'], reason: 'to play my turns' })).data;
+    expect(asked).toMatchObject({ agent: 'forge', kinds: ['tiles.move'], lenses: { 'tiles.move': ['Word Tiles'] }, state: 'pending', reason: 'to play my turns' });
+    await node.answerPermission({ id: asked.id, allow: true });
+    expect((await call('weave_whoami')).data.actingAs.permissions).toContain('tiles.move');
+    expect((await call('weave_request_permission', { kinds: ['tiles.move'], reason: 'x' })).data.state).toBe('allowed');
+
+    // The tool says which kinds can be asked for.
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === 'weave_request_permission')!.description).toMatch(/client service writes itself.*lens\.writes/);
+    close();
+  });
+
   it('brings the app to the front at a space, without it landing in the agent inbox', async () => {
     const { node, call, close } = await setup();
     const seen: Array<{ kind: string; body: unknown }> = [];
