@@ -226,7 +226,6 @@ export interface Handover {
   description?: string;
   icon?: string;
   spaces: string[];
-  command?: string[];
   enabled?: boolean;
   settingNames?: string[];
   /** For the node only: the service's key (when new) and changed settings (null removes one). */
@@ -257,11 +256,6 @@ export interface StoredService {
   contract: ServiceContract;
   /** Space ids it was added to. */
   spaces: string[];
-  command?: string[];
-  /** Its own code as a WebAssembly component: the .wasm file Weave runs itself. */
-  wasm?: string;
-  /** Its website's files (a WebAssembly service with a website): the folder Weave serves. */
-  site?: string;
   /** When it came to this node: what it reads counts from then (a WebAssembly service starts there). */
   since?: string;
   settings: Record<string, string>;
@@ -273,7 +267,7 @@ export interface StoredService {
   builtin?: Builtin;
   /** The room service's rooms: room id → room, kept across restarts. */
   hosted?: Record<string, StoredRoom>;
-  /** The settings your own code asks for (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
+  /** The settings one Weave ships asks for, as it ships it (a release's come from its manifest): its profile lists them for its spaces' maintainers. */
   asks?: AppSetting[];
   /** Its sign-ins as you (settings it asks for as yours), by name: for every project it's in. */
   grants?: Record<string, ServiceGrant>;
@@ -281,7 +275,7 @@ export interface StoredService {
   registered?: Record<string, ServiceRegistered>;
   /** One Weave ships (shipped.ts): its name, and the digest it ran last. */
   shipped?: { name: string; digest: string };
-  /** What you approved it (or its rooms) to run: fingerprints of a release, or of a command in a folder. */
+  /** What you approved it (or its rooms) to run: fingerprints of a release. */
   approved?: string[];
   /** An applet: the release it runs, pinned (its manifest as released). */
   artifact?: StoredArtifact;

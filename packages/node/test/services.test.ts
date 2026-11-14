@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { startApi } from '../src/api.ts';
 import { WeaveNode, closeOpenStores } from '../src/index.ts';
 import { parseOrigin } from '@weave/core';
-import { readSecretJson } from '../src/vault.ts';
+import { readSecretJson, writeSecretJson } from '../src/vault.ts';
 import { placeholderComponent, releaseService, serviceFromRelease } from './helpers/release.ts';
 
 /*
@@ -132,6 +132,32 @@ describe('services', () => {
       expect(await martl.services()).toEqual([]);
       sync([martl, lena]);
       expect(await lena.serviceProfiles()).toEqual([]);
+    } finally {
+      await api.close();
+    }
+  });
+
+  it('comes from a release only: own code from before stays there, says why, and doesn’t run', async () => {
+    const martl = person('martl');
+    await martl.createProject({ name: 'Weave' });
+    // Nothing but a release, one Weave ships, or the website service.
+    await expect(martl.addService({ name: 'mine', spaces: ['Weave'] })).rejects.toThrow(/a service comes from a release/);
+    await expect(martl.addService({ name: 'mine', spaces: ['Weave'], command: ['node', 'bot.js'] } as never)).rejects.toThrow(/a service comes from a release/);
+    // A service of martl's own code, as Weave kept one before: a command, and one with only its token.
+    await serviceFromRelease(martl, { name: 'old', manifest: ECHO, component: placeholderComponent(), project: 'Weave', spaces: ['Weave'] });
+    const file = join(martl.home.dir, 'services.json');
+    const kept = readSecretJson<Array<Record<string, unknown>>>(martl.home, file)!;
+    writeSecretJson(martl.home, file, kept.map(({ artifact: _artifact, approved: _approved, ...s }) => ({ ...s, command: [process.execPath, 'bot.js'] })));
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const [old] = await martl.services();
+      expect(old).toMatchObject({ name: 'old', enabled: true, running: false, problem: expect.stringMatching(/^No longer runs: services come from releases now\. Release it in a project/) });
+      expect(old).not.toHaveProperty('command');
+      // It can still be removed (its key revoked).
+      await martl.removeService('old');
+      expect(await martl.services()).toEqual([]);
     } finally {
       await api.close();
     }

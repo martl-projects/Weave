@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath, sep } from 'node:path';
 import { type AppAsset, type AppManifest, checkManifest, decryptBlob, encryptBlob, MAX_BLOB } from '@weave/core';
@@ -68,7 +68,8 @@ export function packFolder(from: string): PackedRelease {
     }
   }
   if (!parts.size) throw new Error(`${manifest.name}: a release from Weave brings a WebAssembly component ("wasm": {"component": …} in weave.app.json); a container image is released with weave service release`);
-  const staging = mkdtempSync(join(tmpdir(), 'weave-release-'));
+  const staging = join(tmpdir(), `weave-release-${randomBytes(6).toString('hex')}`);
+  mkdirSync(staging, { recursive: true });
   try {
     const content = join(staging, 'content');
     mkdirSync(content);
@@ -87,6 +88,13 @@ export function packFolder(from: string): PackedRelease {
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
+}
+
+/** The text packages next to a folder's manifest (weave.texts.<lang>.json), if there are any. */
+export function textsIn(folder: string): unknown[] | undefined {
+  if (!existsSync(folder)) return undefined;
+  const files = readdirSync(folder).filter((f) => /^weave\.texts\.[a-z]{2,3}(-[A-Za-z0-9]+)?\.json$/.test(f)).sort();
+  return files.length ? files.map((f) => JSON.parse(readFileSync(join(folder, f), 'utf8')) as unknown) : undefined;
 }
 
 /**

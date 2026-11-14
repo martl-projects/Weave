@@ -98,22 +98,18 @@ function SpacePicker({ value, onChange }: { value: string[]; onChange(ids: strin
   );
 }
 
-/** Split a command line into its parts, keeping quoted ones together. */
-const commandParts = (text: string) => [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
-
-/** A service's settings: its spaces, how it starts, and secret settings (written here, never shown again). */
+/** A service's settings: its spaces, what it does, and secret settings (written here, never shown again). */
 function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onClose(): void }) {
   const { t } = useTexts();
   const [spaces, setSpaces] = useState(service.spaces.map((s) => s.id));
   const [description, setDescription] = useState(service.description);
-  const [command, setCommand] = useState(service.command?.map((p) => (/\s/.test(p) ? `"${p}"` : p)).join(' ') ?? '');
   const [settings, setSettings] = useState<Record<string, string | null>>({});
   const [key, setKey] = useState('');
   const [value, setValue] = useState('');
   const names = [...new Set([...service.settings, ...Object.keys(settings)])].filter((n) => settings[n] !== null).sort();
   const save = async () => {
     const done = await attempt(
-      () => api('setService', { name: service.name, spaces, description, command: command.trim() ? commandParts(command) : null, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
+      () => api('setService', { name: service.name, spaces, description, ...(Object.keys(settings).length ? { settings } : {}) }).then(() => (bump(), true)),
       t(service.node ? 'svc.is.set.node' : 'svc.is.set', { name: service.name, node: service.node?.name }),
     );
     if (done !== undefined) onClose();
@@ -128,12 +124,6 @@ function ServiceSettingsDialog({ service, onClose }: { service: ServiceInfo; onC
         <label>{t('svc.in.spaces')}</label>
         <SpacePicker value={spaces} onChange={setSpaces} />
       </div>
-      {!service.builtin && !service.artifact && (
-        <div className="field-row-stacked">
-          <label htmlFor="svc-set-command">{t('svc.how.start')}</label>
-          <input id="svc-set-command" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} />
-        </div>
-      )}
       <fieldset>
         <legend>{t('svc.settings')}</legend>
         <p className="small">{t('svc.settings.about', { where: service.node ? service.node.name : t('svc.this.computer') })}</p>
@@ -287,8 +277,8 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
   const state = (s: ServiceInfo) => {
     if (s.builtin === 'website') return t('svc.website.service', { state: s.enabled ? t('svc.websites.open', { n: s.websites?.length ?? 0 }) : t('svc.stopped') });
     if (s.node) return t('svc.on.node.short', { node: s.node.name });
-    if (!s.enabled) return t('svc.stopped');
-    return t(s.running ? 'svc.running.here' : s.command ? 'svc.starting' : 'svc.no.command');
+    if (!s.enabled || s.problem) return t('svc.stopped');
+    return t(s.running ? 'svc.running.here' : 'svc.starting');
   };
   return (
     <fieldset>
@@ -302,6 +292,7 @@ export function ServicesBox({ keys }: { keys: KeyInfo[] }) {
               {state(s)} · {t('svc.in', { spaces: s.spaces.length ? s.spaces.map((x) => x.name).join(', ') : t('svc.no.spaces.yet') })}
             </span>
             {s.description && <div className="small">{s.description}</div>}
+            {s.problem && <div className="small error-text">{s.problem}</div>}
             <div className="small muted">{contractText(s.contract)}</div>
             {s.artifact && (
               <div className="small">

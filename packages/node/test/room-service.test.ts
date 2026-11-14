@@ -94,7 +94,7 @@ describe('the website service', { timeout: 60_000 }, () => {
     // It takes no requests: its key may sign its profile and its websites, not even answers.
     expect(lena.replica.authority.grant(service.did)?.permissions.sort()).toEqual(['weave.room', 'weave.room.*', 'weave.service.profile']);
     expect((await lena.servicesIn('Party')).map((p) => [p.name, p.builtin])).toEqual([['website', 'website']]);
-    await expect(lena.addService({ name: 'other', builtin: 'website', command: ['node', 'x.js'] })).rejects.toThrow(/runs in Weave/);
+    await expect(lena.addService({ name: 'other', builtin: 'website', artifact: { project: 'Horses' } })).rejects.toThrow(/a release, or is the website service: one of them/);
 
     const api = await startApi(lena, 0, { service: (token) => lena.serviceGate(token) });
     try {

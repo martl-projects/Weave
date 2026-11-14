@@ -214,16 +214,13 @@ github — repositories that follow a group, tier or project (members who give t
                              a bot (JavaScript, or Rust), a website (a buzzer quiz in JavaScript), a client service that shows a
                              board its own way (a Kanban in JavaScript), or a mark service that labels people you list
                              (JavaScript); Weave runs it itself, nothing to install
-  service add <name>         run code under a key of its own, with exactly these rights:
-                             --reads nothing|addressed|space|<kind,…> --writes <kind,…> [--offers-website] [--contract-version 1.0]
-                             [--spaces <space,…>] [--run "<command>"] [--text <description>] [--node <always-on node>: run it there]
-                             or [--wasm <component.wasm>]: your own WebAssembly component (packages/sdk/wit/service.wit), which
-                             Weave runs itself, sandboxed: nothing to install, only /data and its contract
-                             [--net <host,…>]: hosts it may reach over HTTPS (api.example.com, *.example.com), nothing else
-                             [--manifest weave.app.json]: its contract and the settings it asks for (env), from that file
+  service add [<name>] --artifact <project>[@tag]   run a project's release under a key of its own, with exactly the
+                             contract its manifest declares (asks you to approve it); every service comes from a release, one
+                             Weave ships, or is the website service. Code of your own: release it first (app release --from)
+                             [--spaces <space,…>] [--text <description>] [--node <always-on node>: run it there]
                              [--setting KEY=VALUE …] [--keep-in <project>]: keep them in the project, for its maintainers to change
-                             [--offers-website --site <folder>]: a game or page (the website world): Weave serves its files and
-                             holds its players' connections (/weave/socket), telling it who each player is
+                             one with a web page serves it as a website in its projects; a WebAssembly one with a site (the
+                             website world): Weave serves its files and holds its players' connections (/weave/socket)
   service add --shipped <name>     one Weave ships (packages/shipped), checked by its digest each time it starts
   service add website --builtin website   the website service Weave ships: a way to join in with a project's participants
                              [--spaces <project,…>]: where it makes websites reachable (services serve theirs; weave website open)
@@ -232,9 +229,6 @@ github — repositories that follow a group, tier or project (members who give t
                              keyvault (Keys & devices: your own GitHub App, made in one click; hand the project its repository
                              there, or let an agent ask you with weave_request_repository)  [--spaces <project,…>]
   service add --shipped github-access   gives the project's members access to its repositories, from the same keyvault
-  service add [<name>] --artifact <project>[@tag]   install a project's release as a service with the contract its manifest
-                             declares (asks you to approve it); one with a web page serves it as a website in its projects
-                             [--spaces <space,…>] [--setting KEY=VALUE] [--node <always-on node>]
   service artifacts <project>  a project's artifacts: services, websites, board views, files (what each is, where it's from)
   file release <tag> <file> -p <p>   maintainers: hand out a file of a GitHub release as the project's artifact (fingerprinted)
                              [--repo owner/name] [--name <shown name>] [--type application/pdf]
@@ -242,7 +236,7 @@ github — repositories that follow a group, tier or project (members who give t
   service release <image:tag> -p <p>   release a Weave service (maintainers): an image with its manifest in its
                              "dev.weave.service" label; Weave pins the tag to its digest and runs it in its sandbox (Docker)
   service list               the services this computer runs; service profiles: everyone's you know
-  service set <name>         [--spaces <space,…>] [--run "<command>" ("" for none)] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
+  service set <name>         [--spaces <space,…>] [--setting KEY=VALUE (KEY= removes it)] [--text <description>]
                              [--in <space> --setting KEY=VALUE]: a setting for one space only
                              [--update latest|<tag>]: an applet takes another release (asks you to approve it)
                              [--approve]: one Weave ships whose new version asks for more rights gets them (service list says)
@@ -481,17 +475,10 @@ const { values, positionals } = parseArgs({
     title: { type: 'string' },
     with: { type: 'string' },
     asset: { type: 'string', multiple: true },
-    reads: { type: 'string' },
-    writes: { type: 'string' },
-    'offers-website': { type: 'boolean', default: false },
-    'contract-version': { type: 'string' },
-    net: { type: 'string' },
     blind: { type: 'boolean', default: false },
     action: { type: 'string' },
     'keep-in': { type: 'string' },
     shipped: { type: 'string' },
-    manifest: { type: 'string' },
-    run: { type: 'string' },
     spaces: { type: 'string' },
     setting: { type: 'string', multiple: true },
     node: { type: 'string' },
@@ -510,7 +497,6 @@ const { values, positionals } = parseArgs({
     from: { type: 'string' },
     require: { type: 'boolean', default: false },
     input: { type: 'string' },
-    wasm: { type: 'string' },
     website: { type: 'boolean', default: false },
     rust: { type: 'boolean', default: false },
     lens: { type: 'boolean', default: false },
@@ -521,7 +507,6 @@ const { values, positionals } = parseArgs({
     app: { type: 'string' },
     gate: { type: 'boolean', default: false },
     settings: { type: 'string' },
-    site: { type: 'string' },
     accept: { type: 'boolean', default: false },
     'read-board': { type: 'string' },
     'write-board': { type: 'string' },
@@ -1655,7 +1640,7 @@ async function main(): Promise<void> {
       const where = (spaces: SpaceRef[]) => (spaces.length ? spaces.map((s) => s.name).join(', ') : 'no spaces yet');
       const line = (s: ServiceInfo) =>
         [
-          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.command ? 'starting' : 'no command: something else uses its token') : 'stopped'}  in ${where(s.spaces)}`,
+          `${s.name}  ${s.node ? `on ${s.node.name}${s.enabled ? '' : ', stopped'}` : s.enabled ? (s.builtin ? 'on' : s.running ? 'running' : s.problem ? 'not running' : 'starting') : 'stopped'}  in ${where(s.spaces)}`,
           `  ${s.did}`,
           ...(s.description ? [`  ${s.description}`] : []),
           `  ${contractLine(s.contract)}`,
@@ -1664,8 +1649,7 @@ async function main(): Promise<void> {
           ...(s.artifact ? [`  applet: ${s.artifact.name} ${s.artifact.tag} from ${s.artifact.project.name ?? s.artifact.project.id}${s.artifact.latest ? ` (${s.artifact.latest} is out: weave service set ${s.name} --update latest)` : ''}${s.artifact.progress ? ', fetching' : ''}`] : []),
           ...(s.artifact?.deliveredBy ? [`  delivered by ${s.artifact.deliveredBy}, checked against the release`] : []),
           ...(s.artifact?.error ? [`  ${s.artifact.error}`] : []),
-          ...(s.command ? [`  runs: ${s.command.join(' ')}`] : []),
-          ...(s.wasm ? [`  runs: ${s.wasm} (WebAssembly, in Weave)`] : []),
+          ...(s.problem ? [`  ${s.problem}`] : []),
           ...(s.settings.length ? [`  settings: ${s.settings.join(', ')}`] : []),
           ...s.spaces.filter((x) => x.settings?.length).map((x) => `  settings in ${x.name}: ${x.settings!.join(', ')}`),
         ].join('\n');
@@ -1716,15 +1700,7 @@ async function main(): Promise<void> {
 It ships with Weave: it runs only as exactly the component this Weave has.`);
       }
       if (sub === 'add' && ref) {
-        const reads: ServiceContract['reads'] = values.reads === 'nothing' || values.reads === 'addressed' || values.reads === 'space' ? values.reads : values.reads ? { kinds: list(values.reads)! } : 'addressed';
-        // Its weave.app.json (--manifest): the settings it asks for, and its contract unless --reads says otherwise.
-        const manifest = values.manifest ? checkManifest(JSON.parse(readFileSync(values.manifest, 'utf8'))) : undefined;
-        if (manifest && !manifest.manifest) throw new Error(`${values.manifest}: ${manifest.problems.join('; ')}`);
-        const own = { reads, writes: list(values.writes) ?? [], ...(values['offers-website'] ? { website: true } : {}), ...(values.net ? { net: list(values.net) } : {}), version: values['contract-version'] ?? '1.0' };
-        const contract = manifest?.manifest?.service && !values.reads ? manifest.manifest.service : own;
-        const settings = settingsOf();
-        const s = await b.addService({ name: ref, description: values.text, contract, spaces: list(values.spaces), ...(values.run ? { command: words(values.run) } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site ? { site: values.site } : {}), ...(values.node ? { node: values.node } : {}), ...(manifest?.manifest?.env ? { asks: manifest.manifest.env } : {}), ...(Object.keys(settings).length ? { settings: settings as Record<string, string> } : {}), ...(values['keep-in'] ? { settingsIn: values['keep-in'] } : {}) });
-        return out(s, () => `${line(s)}\n\nIt signs as you · ${s.name}, with these rights only.${s.node ? ` Its key went to ${s.node.name}, sealed for that node: it starts there once the node has it.` : s.command ? '' : s.wasm ? ' Weave runs its component itself, sandboxed: its log is weave service log.' : ' Give it a command with --run (or a WebAssembly component with --wasm), or let a process use its token.'}`);
+        throw new Error(`a service comes from a release: weave service add ${ref} --artifact <project>[@tag] (code of your own: weave app release <tag> --from <folder> -p <project> first), --shipped <name>, or --builtin website`);
       }
       if (sub === 'list') {
         const all = await b.services();
@@ -1739,7 +1715,7 @@ It ships with Weave: it runs only as exactly the component this Weave has.`);
         const given = Object.keys(settings).length ? (values.in ? { spaceSettings: { [values.in]: settings } } : { settings }) : {};
         const update = values.update !== undefined ? { artifact: values.update && values.update !== 'latest' ? { tag: values.update } : {} } : {};
         const s = await approving((approve) =>
-          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...(values.run !== undefined ? { command: values.run ? words(values.run) : null } : {}), ...(values.wasm ? { wasm: values.wasm } : {}), ...(values.site !== undefined ? { site: values.site || null } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : values.approve ? { approve: true } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
+          b.setService({ name: ref, ...(values.spaces !== undefined ? { spaces: list(values.spaces) ?? [] } : {}), ...given, ...update, ...(values.update !== undefined ? { approve } : values.approve ? { approve: true } : {}), ...(values.text !== undefined ? { description: values.text } : {}) }),
         );
         return out(s, () => line(s));
       }
@@ -2834,7 +2810,7 @@ ${postLine(p)}`);
       const sub = given === 'join' ? 'visit' : given === 'end' ? 'close' : given;
       const b = await backend({ needsDaemon: sub !== 'chat' });
       if (sub === 'open' && ref) {
-        if (values.artifact || values.run) throw new Error('the website service runs nothing: install a release as a service (weave service add --artifact <project>) and it serves its web page, or start your program and give its --port');
+        if (values.artifact) throw new Error('the website service runs nothing: install a release as a service (weave service add --artifact <project>) and it serves its web page, or start your program and give its --port');
         const r = await b.openWebsite({
           project: needProject(),
           name: [ref, ...words].join(' '),

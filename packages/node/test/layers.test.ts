@@ -85,6 +85,8 @@ const MAY_USE_NODE = [
   'vault.ts',
   'verifiers.ts',
   'wasmworker.ts',
+  // Releases from Weave: a maintainer's folder packed (tar) and kept as blobs, put together again on members' nodes.
+  'weavereleases.ts',
   'website.ts',
   'websocket.ts',
 ];

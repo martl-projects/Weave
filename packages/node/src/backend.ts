@@ -250,12 +250,6 @@ export interface ServiceInfo {
   contract: ServiceContract;
   /** The spaces it was added to: the only ones it reads and writes in; with the names of the settings given for each. */
   spaces: Array<SpaceRef & { settings?: string[] }>;
-  /** What runs it on this node, if anything does (else something else uses its token). */
-  command?: string[];
-  /** Or its own code as a WebAssembly component, which Weave runs itself, sandboxed: the .wasm file. */
-  wasm?: string;
-  /** Its website's files, which Weave serves next to its players' connections: the folder. */
-  site?: string;
   /** One Weave ships and runs itself: the room service, with the rooms it runs here. */
   builtin?: Builtin;
   websites?: HostedWebsiteInfo[];
@@ -2168,7 +2162,7 @@ export interface Backend {
    * A service: your code under a key of its own, an applet (a project's release, `artifact`, with the contract its
    * manifest declares; running it needs `approve`), or one Weave ships (`builtin: 'website'`).
    */
-  addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string; shipped?: string }): Promise<ServiceInfo>;
+  addService(input: { name?: string; description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; settingsIn?: string; shipped?: string }): Promise<ServiceInfo>;
   /** A project's releases, newest first: what a room can run. */
   artifacts(project: string): Promise<ArtifactInfo[]>;
   /**
@@ -2188,7 +2182,7 @@ export interface Backend {
   unlistFromCatalog(input: { catalog: string; app: string; as?: string }): Promise<void>;
   /** Change a service: its spaces, command, settings (null removes one), whether it runs. */
   /** Change a service; `artifact: {tag}` moves an applet to another release (the latest without a tag), which needs `approve`. */
-  setService(input: { name: string; spaces?: string[]; command?: string[] | null; wasm?: string; site?: string | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
+  setService(input: { name: string; spaces?: string[]; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo>;
   /** Stop a service for good: its key is revoked, so nothing it signs counts any more. */
   removeService(name: string): Promise<void>;
   /** Services people run, from their public profiles. */

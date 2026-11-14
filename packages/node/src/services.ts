@@ -1,5 +1,5 @@
 import { mayDo, releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
-import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, appSettingsOf, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo, type ProgramConsentInfo, type ProgramInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -7,14 +7,14 @@ import { SHIPPED_DIR, shippedProblem, shippedServices } from './shipped.ts';
 import { platformKey } from './appinstall.ts';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { signWith } from './register.ts';
-import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join as joinPath, resolve as resolvePath } from 'node:path';
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join as joinPath } from 'node:path';
 import { createAndSaveAgent, saveAgent, type AgentKey } from './keystore.ts';
 import { prepareWasm, programConsent, publicHost, releaseApproval } from './runtime.ts';
 import { readJson, writeJson } from './home.ts';
 import { imageDigest, imageLabels } from './registry.ts';
 import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
-import { assembleFile, WEAVE_SOURCE } from './weavereleases.ts';
+import { assembleFile, packFolder, storeFiles, textsIn, WEAVE_SOURCE, type PackedRelease } from './weavereleases.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -37,9 +37,9 @@ export interface StoredProgramConsent {
 /*
  * Services: code you run under keys of their own. A service has its own key ("martl · github"), a contract that
  * says what it reads and writes (its key may sign exactly that), the spaces you add it to, and settings sealed on the
- * node that runs it. It runs here, or on an always-on node it was handed over to; it's a command, an applet (a
- * project's release), or Weave's website service (see website.ts). Its process reaches Weave through its own token on
- * the local API (serviceGate).
+ * node that runs it. It runs here, or on an always-on node it was handed over to; it's a project's release (pinned by
+ * its fingerprint), one Weave ships, or Weave's website service (see website.ts). It reaches Weave through its own
+ * token on the local API (serviceGate).
  */
 
 /**
@@ -60,6 +60,15 @@ const BUILTIN: Partial<Record<Builtin, { contract: ServiceContract; description:
   website: { contract: { reads: 'nothing', writes: [], website: true, version: '1.0' }, description: 'Websites: runs websites for the project, open to everyone in it' },
 };
 
+/**
+ * A service of its person's own code from before (a command, a WebAssembly file of theirs, or only a contract for a
+ * program of theirs): every service comes from a release now, so it no longer runs, and says how to bring it back.
+ */
+export const OWN_CODE_GONE = 'No longer runs: services come from releases now. Release it in a project (weave app release <tag> --from <folder> -p <project>) and add it from that release';
+
+/** Whether a stored service is own code from before: no release, nothing Weave ships, not the website service. */
+export const isOwnCode = (s: Pick<StoredService, 'artifact' | 'builtin' | 'shipped' | 'launchedBy'>): boolean => !s.artifact && !s.builtin && !s.shipped && !s.launchedBy;
+
 /** What replaced Weave's own GitHub service. */
 export const GITHUB_SERVICE_GONE = "Weave's GitHub service is gone: add GitHub releases (it hands out releases) and GitHub access (it gives repository access) instead, each with its own GitHub access";
 
@@ -68,7 +77,7 @@ const builtinSpec = (builtin: Builtin) => ({ name: `the ${builtin} service`, env
 
 /** A service's public profile: what it is, its contract, and where it comes from (a release, by ids only). */
 
-/** The settings a service asks for: its release's, the one Weave ships's, or what its person said for their own code. */
+/** The settings a service asks for: its release's, the one Weave ships's (kept as it ships it), or a builtin's. */
 const asksOf = (s: Pick<StoredService, 'builtin' | 'artifact' | 'asks'>): AppSetting[] | undefined => s.artifact?.manifest.env ?? (s.builtin ? BUILTIN[s.builtin]?.settings : s.asks);
 
 /** A service that hosts its projects' websites: Weave's built-in one, or one whose contract says websites: host. */
@@ -177,9 +186,6 @@ export class Services {
         const given = Object.keys(stored.spaceSettings?.[id] ?? {}).sort();
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space), ...(given.length ? { settings: given } : {}) }] : [];
       }),
-      ...(stored.command ? { command: stored.command } : {}),
-      ...(stored.wasm ? { wasm: stored.wasm } : {}),
-      ...(stored.site ? { site: stored.site } : {}),
       ...(stored.builtin ? { builtin: stored.builtin } : {}),
       ...(hostsWebsites(stored) ? { websites: Object.values(stored.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r)), launching: this.launching(stored.name) } : {}),
       ...(stored.artifact ? { artifact: this.serviceArtifactInfo(stored.name, stored.artifact, true) } : {}),
@@ -187,7 +193,7 @@ export class Services {
       enabled: stored.enabled,
       running: stored.builtin ? stored.enabled : this.h.runtime.running(`service:${stored.name}`),
       // Why it doesn't run (a shipped component that isn't what Weave ships, say); a release says so in its artifact.
-      ...(!stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
+      ...(isOwnCode(stored) ? { problem: OWN_CODE_GONE } : !stored.artifact && this.h.releases.jobs.get(`service:${stored.name}`)?.error ? { problem: this.h.releases.jobs.get(`service:${stored.name}`)!.error } : {}),
       ...(stored.shipped ? { shipped: stored.shipped.name } : {}),
       ...(this.shippedUpdate(stored) ? { update: this.shippedUpdate(stored)! } : {}),
     };
@@ -381,7 +387,7 @@ export class Services {
     }
   }
 
-  /** Settings checked against what's allowed: an artifact's own (or a builtin's), or any variable-like name for a command. */
+  /** Settings checked against what's allowed: an artifact's own (or a builtin's), or (per space) any variable-like name. */
   checkSettings(app: { name: string; env?: AppSetting[] } | undefined, settings: Record<string, string | null>): void {
     for (const key of Object.keys(settings)) {
       if (app) {
@@ -399,29 +405,22 @@ export class Services {
   }
 
   /**
-   * A service: code under a key of its own, in the spaces you add it to, running a command. Or one Weave ships
-   * (`builtin`: 'website' or 'github'): the node runs it itself, and it gets its contract from Weave.
+   * A service: code under a key of its own, in the spaces you add it to. Its code is a project's release (`artifact`,
+   * or one a catalog lists: `from`), pinned by its fingerprint once you approve it; or one Weave ships (`shipped`); or
+   * the website service (`builtin`). Nothing else: code of your own is released first (weave app release --from).
    */
-  async addService(input: { name?: string; description?: string; icon?: string; contract?: ServiceContract; spaces?: string[]; command?: string[]; wasm?: string; site?: string; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; asks?: AppSetting[]; settingsIn?: string; shipped?: string }): Promise<ServiceInfo> {
+  async addService(input: { name?: string; description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: Builtin; artifact?: { project: string; tag?: string }; from?: { catalog: string; app: string }; approve?: boolean; settings?: Record<string, string>; settingsIn?: string; shipped?: string }): Promise<ServiceInfo> {
     if (this.h.isLinkedNode) throw new Error("an always-on node can't issue keys: add the service on one of your computers, with --node for this one");
-    const command = input.command?.filter((part) => typeof part === 'string' && part.length);
     const builtin = isBuiltin(input.builtin) ? input.builtin : undefined;
-    if (builtin && command?.length) throw new Error(`the ${builtin} service runs in Weave: it runs no command`);
-    // Its own code as a WebAssembly component: Weave runs it itself, sandboxed.
-    const wasm = input.wasm ? this.wasmFile(input.wasm) : undefined;
-    if (wasm && (command?.length || builtin || input.artifact || input.from)) throw new Error('a service runs a WebAssembly component, a command, a release, or is one Weave ships: one of them');
-    if (wasm && input.node) throw new Error('a WebAssembly service of your own runs on this computer for now (its file is here): release it to run it on an always-on node');
-    // Its website's files: a folder Weave serves next to its players' connections.
-    const site = input.site ? this.siteFolder(input.site) : undefined;
-    if (site && !wasm) throw new Error('a site folder goes with a WebAssembly service (--wasm): Weave serves it next to its players');
+    if (!builtin && !input.artifact && !input.from && !input.shipped) throw new WeaveError('daemon.service.release.only', undefined, 'a service comes from a release: a project\'s (artifact), one a catalog lists (from), or one Weave ships (shipped). Release your own code first: weave app release <tag> --from <folder> -p <project>');
     // An applet: a release whose manifest declares its contract. Running it needs your yes, once per release.
     // Or a Weave service listed in a catalog: what it is comes from its image, not from the catalog.
     const found: { project: { id: string; name: string }; artifact: { id: string; tag: string; manifest: AppManifest } } | undefined = input.artifact ? this.artifact(input.artifact.project, input.artifact.tag) : input.from ? await this.fromCatalog(input.from) : undefined;
-    if (found && (command?.length || builtin)) throw new Error('a service runs an applet, a command, or is the website service: one of them');
+    if (found && builtin) throw new Error('a service runs a release, or is the website service: one of them');
     // One Weave ships: its component, checked against its digest whenever it starts.
     const shipped = input.shipped ? shippedHere(this.h).get(input.shipped) : undefined;
     if (input.shipped && !shipped) throw new Error(`this Weave ships no service named ${input.shipped}${shippedHere(this.h).size ? ` (it ships ${[...shippedHere(this.h).keys()].join(', ')})` : ''}`);
-    if (shipped && (found || command?.length || builtin || wasm)) throw new Error('a service Weave ships runs its own component: nothing else with it');
+    if (shipped && (found || builtin)) throw new Error('a service Weave ships runs its own component: nothing else with it');
     if (shipped && input.node) throw new Error('a service Weave ships runs on this computer for now');
     if (shipped?.manifest.fetcher) throw new Error(`${shipped.manifest.name} is a fetcher: yours, not a project's (weave fetcher add ${shipped.name})`);
     if (shipped?.manifest.verifier) throw new Error(`${shipped.manifest.name} is a verifier: every Weave runs it when it checks accounts, nobody's service`);
@@ -443,9 +442,9 @@ export class Services {
     const approved = found ? releaseApproval(found.artifact) : undefined;
     if (found && !input.approve) throw new Error(`approve it first: Weave would run "${this.h.runtime.runText(manifest!)}" from ${manifest!.name} ${found.artifact.tag}, released in ${found.project.name}, as a service that ${contractWords(this.artifactContract(manifest!))}`);
     const given = Object.fromEntries(Object.entries(input.settings ?? {}).map(([k, v]) => [k, String(v)]));
-    // What it asks for: its manifest's settings, or (your own code) what you say it asks for.
-    const asks = manifest?.env ?? (builtin ? undefined : appSettingsOf(input.asks));
-    this.checkSettings(manifest ?? (builtin ? builtinSpec(builtin) : asks?.length ? { name: 'it', env: asks } : undefined), given);
+    // What it asks for: its manifest's settings (a builtin's, for the website service).
+    const asks = manifest?.env;
+    this.checkSettings(manifest ?? builtinSpec(builtin!), given);
     if (builtin === 'github') throw new Error(GITHUB_SERVICE_GONE);
     // Kept in a project (settingsIn): its maintainers' settings for it there, rather than yours.
     const keptIn = input.settingsIn ? this.h.space(input.settingsIn) : undefined;
@@ -468,13 +467,13 @@ export class Services {
     if (this.reservedName(name) && shipped?.name !== name) throw new WeaveError('daemon.service.name.reserved', { name }, `"${name}" is the name of one Weave ships: give ${manifest ? manifest.name : 'yours'} another (--name)`);
     if (this.h.agents.some((a) => a.name === name) || this.storedServices().some((s) => s.name === name)) throw new WeaveError('daemon.service.name.taken', { name }, `you already have an agent or service named "${name}"`);
     // The website service reads nothing and writes its websites. A release: its manifest's contract.
-    const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : manifest ? this.artifactContract(manifest) : input.contract);
-    if (!contract) throw new Error('a contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)');
+    const contract = parseContract(builtin ? BUILTIN[builtin]?.contract : this.artifactContract(manifest!));
+    if (!contract) throw new Error(`${manifest?.name ?? 'it'}: its contract says what the service reads (addressed, space, or {kinds: [...]}), which kinds it writes, and its version (like 1.0)`);
     const artifact: StoredArtifact | undefined = found && { project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest: found.artifact.manifest };
     const description = input.description?.trim().slice(0, 1000) ?? (builtin ? (BUILTIN[builtin]?.description ?? '') : found ? `${manifest!.name} ${found.artifact.tag}, from ${found.project.name}` : shipped ? (shipped.about?.split(/(?<=\.)\s/)[0] ?? manifest!.name) : '');
     if (input.node) {
       if (this.handedOver().has(name)) throw new WeaveError('daemon.service.name.taken', { name }, `you already have a service named "${name}"`);
-      return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings }, command);
+      return this.addNodeService(name, contract, { ...input, artifact, description, ...(builtin ? { builtin } : {}), ...(artifact ? { approved: [approved!] } : {}), settings });
     }
     const stored: StoredService = {
       name,
@@ -483,12 +482,9 @@ export class Services {
       contract,
       // Settings kept in a project go with the service being there.
       spaces: this.serviceSpaces([...new Set([...(input.spaces ?? []), ...(keptIn ? [keptIn.id] : [])])]),
-      ...(command?.length ? { command } : {}),
-      ...(wasm ? { wasm } : {}),
-      ...(site ? { site } : {}),
       ...(builtin ? { builtin } : {}),
       ...(artifact ? { artifact, approved: [approved!] } : {}),
-      ...((!manifest || shipped) && asks?.length ? { asks } : {}),
+      ...(shipped && asks?.length ? { asks } : {}),
       ...(shipped ? { shipped: { name: shipped.name, digest: shipped.digest } } : {}),
       settings,
       token: b64u.encode(randomBytes(24)),
@@ -554,7 +550,6 @@ export class Services {
         const space = this.h.spaces.get(id);
         return space ? [{ id, kind: space.kind, name: this.h.spaceName(space) }] : [];
       }),
-      ...(h.command ? { command: h.command } : {}),
       ...(h.builtin ? { builtin: h.builtin, websites: Object.values(h.hosted ?? {}).map((r) => this.web.hostedRoomInfo(r, false)) } : {}),
       ...(h.artifact ? { artifact: this.serviceArtifactInfo(h.service, h.artifact, false) } : {}),
       settings: h.settingNames ?? [],
@@ -564,7 +559,7 @@ export class Services {
     };
   }
 
-  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: Builtin; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }, command?: string[]): Promise<ServiceInfo> {
+  async addNodeService(name: string, contract: ServiceContract, input: { description?: string; icon?: string; spaces?: string[]; node?: string; builtin?: Builtin; artifact?: StoredArtifact; approved?: string[]; settings?: Record<string, string> }): Promise<ServiceInfo> {
     const node = this.nodeKey(input.node!);
     const key = createSubKey(this.h.identity.author);
     const permissions = servicePermissions(contract);
@@ -581,7 +576,6 @@ export class Services {
       description,
       ...(icon ? { icon } : {}),
       spaces: this.serviceSpaces(input.spaces ?? []),
-      ...(command?.length ? { command } : {}),
       ...(input.builtin ? { builtin: input.builtin, hosted: {}, approved: [] } : {}),
       ...(input.artifact ? { artifact: input.artifact, approved: input.approved ?? [] } : {}),
       enabled: true,
@@ -595,9 +589,9 @@ export class Services {
   }
 
   /** A change to a service on a node: a new handover; settings travel as changes, boxed for that node only. */
-  changeNodeService(before: Handover, change: { spaces?: string[]; command?: string[] | null; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true; hosted?: Record<string, StoredRoom>; approved?: string[]; artifact?: StoredArtifact; contract?: ServiceContract }): void {
-    const { id: _id, box: _box, command: _command, ...rest } = before;
-    const command = change.command === null ? undefined : (change.command ?? before.command);
+  changeNodeService(before: Handover, change: { spaces?: string[]; settings?: Record<string, string | null>; enabled?: boolean; description?: string; removed?: true; hosted?: Record<string, StoredRoom>; approved?: string[]; artifact?: StoredArtifact; contract?: ServiceContract }): void {
+    // A command from before goes with the next change: the node runs releases only.
+    const { id: _id, box: _box, command: _command, ...rest } = before as Handover & { command?: unknown };
     const names = new Set(before.settingNames ?? []);
     for (const [key, value] of Object.entries(change.settings ?? {})) {
       if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(key) || key.startsWith('WEAVE_')) throw new Error(`a setting is named like an environment variable (A-Z, 0-9, _), not starting with WEAVE_: ${key}`);
@@ -610,7 +604,6 @@ export class Services {
     const after: Omit<Handover, 'id'> = {
       ...rest,
       spaces,
-      ...(command?.length ? { command } : {}),
       ...(change.enabled !== undefined ? { enabled: change.enabled } : {}),
       ...(change.description !== undefined ? { description: change.description.trim().slice(0, 1000) } : {}),
       settingNames: [...names].sort(),
@@ -679,7 +672,6 @@ export class Services {
         ...(h.icon ? { icon: h.icon } : {}),
         contract: h.contract,
         spaces: h.spaces,
-        ...(h.command?.length ? { command: h.command } : {}),
         ...(h.builtin ? { builtin: h.builtin, approved: h.approved ?? [] } : {}),
         ...(h.artifact ? { artifact: h.artifact, approved: h.approved ?? [] } : {}),
         settings,
@@ -718,8 +710,8 @@ export class Services {
     }
   }
 
-  /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), command, or whether it runs. */
-  async setService(input: { name: string; spaces?: string[]; command?: string[] | null; wasm?: string; site?: string | null; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
+  /** Change a service: its spaces, settings (once, or per space: `spaceSettings`, by space), its release, or whether it runs. */
+  async setService(input: { name: string; spaces?: string[]; settings?: Record<string, string | null>; spaceSettings?: Record<string, Record<string, string | null>>; enabled?: boolean; description?: string; artifact?: { tag?: string }; approve?: boolean }): Promise<ServiceInfo> {
     const away = this.h.isLinkedNode ? undefined : this.handedOver().get(input.name);
     if (away && !this.storedServices().some((s) => s.name === input.name)) {
       if (input.spaceSettings) throw new Error('per-space settings work on this computer for now: always-on nodes come next');
@@ -734,8 +726,6 @@ export class Services {
     }
     const before = this.storedService(input.name);
     if (before.launchedBy) throw new Error(`${before.artifact?.manifest.name ?? before.name} is a website ${before.launchedBy} launched, no service: close the website to end it`);
-    if (before.builtin && input.command) throw new Error(`${before.name} runs in Weave: its websites say what they run`);
-    if (before.artifact && input.command) throw new Error(`${before.name} runs ${before.artifact.manifest.name}: its release says what it runs`);
     if (input.artifact && !before.artifact) throw new Error(`${before.name} isn't an applet: it runs no release`);
     const next = input.artifact && before.artifact ? this.nextRelease(before.name, before.artifact, input.artifact.tag, before.approved ?? [], input.approve) : undefined;
     // A shipped one whose new version asks for more: yes gives it the contract this Weave ships now.
@@ -762,20 +752,12 @@ export class Services {
       if (Object.keys(mine).length) spaceSettings[id] = mine;
       else delete spaceSettings[id];
     }
-    const command = input.command === null ? undefined : input.command !== undefined ? input.command.filter((part) => typeof part === 'string' && part.length) : before.command;
-    // Its own WebAssembly component (and its site): another build of it, read on its next start.
-    if ((input.wasm || input.site) && !before.wasm) throw new Error(`${before.name} isn't a WebAssembly service of your own: it has no component to replace`);
-    const wasm = input.wasm ? this.wasmFile(input.wasm) : before.wasm;
-    const site = input.site === null ? undefined : input.site ? this.siteFolder(input.site) : before.site;
-    const { command: _command, spaceSettings: _spaceSettings, wasm: _wasm, site: _site, ...rest } = before;
+    const { spaceSettings: _spaceSettings, ...rest } = before;
     const after: StoredService = {
       ...rest,
-      ...(wasm ? { wasm } : {}),
-      ...(site ? { site } : {}),
       ...(next ? { artifact: next.artifact, approved: next.approved, contract: next.contract } : {}),
       ...(update ? { contract: update } : {}),
       spaces,
-      ...(command?.length ? { command } : {}),
       settings,
       ...(Object.keys(spaceSettings).length ? { spaceSettings } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
@@ -795,7 +777,7 @@ export class Services {
       if (after.enabled) this.serveRunning();
       return this.serviceInfo(this.storedService(after.name));
     }
-    // Settings and commands take effect on a fresh start.
+    // Settings and another release take effect on a fresh start.
     this.stopService(after.name);
     if (this.serviceApi) await this.web.startAppApi();
     this.startService(after);
@@ -1512,6 +1494,17 @@ export class Services {
     }
   }
 
+  /** A folder of this computer to release from Weave: its manifest, what it names packed for "wasm", and its texts. */
+  readReleaseFolder(from: string): PackedRelease & { texts?: unknown[] } {
+    const texts = textsIn(from);
+    return { ...packFolder(from), ...(texts ? { texts } : {}) };
+  }
+
+  /** A folder's files kept here as encrypted blobs (at most 32 MB): each one's size, SHA-256 and blobs, to publish. */
+  keepReleaseFiles(folder: PackedRelease): Json {
+    return storeFiles(folder.files, (data) => void this.h.blobs.put(data)) as unknown as Json;
+  }
+
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
   async locateArtifact(a: StoredArtifact, platform = platformKey()): Promise<Located | undefined> {
     if (!this.h.spaces.has(a.project)) return undefined;
@@ -1655,7 +1648,7 @@ export class Services {
       setInterval(() => {
         const running = this.storedServices().filter((x) => x.enabled && this.h.runtime.running(`service:${x.name}`));
         // A WebAssembly service asks for its settings as it goes; a process got them when it started.
-        void this.settings.renew(running).then((names) => names.forEach((name) => !this.storedService(name).wasm && !this.storedService(name).artifact?.manifest.wasm && restart(name)));
+        void this.settings.renew(running).then((names) => names.forEach((name) => !this.storedService(name).artifact?.manifest.wasm && !this.storedService(name).shipped && restart(name)));
       }, 60_000).unref();
     }
     void this.web.startAppApi().then(async () => {
@@ -1688,8 +1681,8 @@ export class Services {
     if (!this.serviceApi || !this.web.appApiPort || !stored.enabled || this.h.runtime.running(`service:${stored.name}`)) return;
     const a = stored.artifact;
     if (stored.shipped) return this.startShipped(stored);
-    if (!a && stored.wasm) return void this.spawnWasm(stored, stored.wasm);
-    if (!a) return stored.command?.length ? this.spawnService(stored) : undefined;
+    // Own code from before (a command, a component file, a program using its token): it no longer runs (serviceInfo says so).
+    if (!a) return;
     // An applet: only the release you approved, fetched and checked against its fingerprints first.
     if (!(stored.approved ?? []).includes(releaseApproval(a))) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: 'approve what it runs first' });
     // A release's program: only a launched website runs one, and only under a consent given in the app for exactly
@@ -1740,31 +1733,29 @@ export class Services {
     return this.serviceInfo(this.storedService(name));
   }
 
-  /** Run a service's process: its command (in its own folder), or its release (in the release's folder, or its container). */
+  /** Run a service's release: its WebAssembly in Weave, its container, or (a launched website) its program, in the release's folder. */
   spawnService(stored: StoredService): void {
     if (!this.serviceApi || !this.web.appApiPort || this.h.runtime.running(`service:${stored.name}`)) return;
     const dir = joinPath(this.h.home.dir, 'services', stored.name);
     const a = stored.artifact;
+    if (!a) return;
     // A WebAssembly release: its component (and its site) from the release's folder, run in Weave.
-    if (a?.manifest.wasm && this.h.runtime.runs(a.manifest) === 'wasm') {
+    if (a.manifest.wasm && this.h.runtime.runs(a.manifest) === 'wasm') {
       const folder = this.h.releases.folder(stored.name, a);
       return void this.spawnWasm(stored, joinPath(folder, a.manifest.wasm.component), a.manifest.wasm.site ? joinPath(folder, a.manifest.wasm.site) : undefined);
     }
-    const runs = a ? this.h.runtime.runs(a.manifest) : undefined;
+    const runs = this.h.runtime.runs(a.manifest);
     const container = runs === 'container' ? `weave-service-${stored.name}` : undefined;
-    let run: string[] | undefined = stored.command;
     let cwd = dir;
-    if (a) {
-      run = this.h.runtime.command(container ?? 'weave', a.manifest);
-      if (!run || (!container && runs !== 'program')) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: this.h.runtime.whyNot(a.manifest) });
-      // A program: in the folder its release file was unpacked into, once it matched the release's SHA-256 (ensure);
-      // one that got here any other way doesn't run.
-      if (runs === 'program') {
-        if (!this.h.releases.has(stored.name, a)) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} isn't here yet, checked against the release's fingerprints` });
-        cwd = this.h.releases.folder(stored.name, a);
-      }
+    const run = this.h.runtime.command(container ?? 'weave', a.manifest);
+    if (!run || (!container && runs !== 'program')) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: this.h.runtime.whyNot(a.manifest) });
+    // A program: in the folder its release file was unpacked into, once it matched the release's SHA-256 (ensure);
+    // one that got here any other way doesn't run.
+    if (runs === 'program') {
+      if (!this.h.releases.has(stored.name, a)) return void this.h.releases.jobs.set(`service:${stored.name}`, { error: `${a.manifest.name} ${a.tag} isn't here yet, checked against the release's fingerprints` });
+      cwd = this.h.releases.folder(stored.name, a);
     }
-    if (!run?.length) return;
+    if (!run.length) return;
     const project = stored.spaces.filter((id) => this.h.spaces.get(id)?.kind === 'project');
     // An applet gets the settings its manifest names, nothing else; in a container, the local APIs are the host's.
     const given = this.settings.effective(stored);
@@ -1852,13 +1843,6 @@ export class Services {
   /** What a WebAssembly service reads, while it runs: stopped with it. */
   #watching = new Map<string, AbortController>();
 
-  /** A website's files for a WebAssembly service: a folder that is there. */
-  siteFolder(path: string): string {
-    const folder = resolvePath(path);
-    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`${path} isn't a folder on this computer`);
-    return folder;
-  }
-
   /**
    * Who a request to a WebAssembly service's website comes from: the player the website service vouches for in
    * X-Weave-Person (signed with the service's own token, lately), or, without one, the host (only this computer
@@ -1888,12 +1872,10 @@ export class Services {
   #sitePorts = new Map<string, number>();
 
   /**
-   * The ports a service of code from others may serve as a website: a release's, as its manifest names them (its
-   * process or its container listens there); a WebAssembly site's, as Weave opened it. Your own code (a command, or
-   * a component of yours): undefined, any (it runs with your rights).
+   * The ports a service may serve as a website: a release's, as its manifest names them (its process or its container
+   * listens there); a WebAssembly site's, as Weave opened it. Never another port of this computer.
    */
-  servesOn(stored: StoredService): Set<number> | undefined {
-    if (!stored.artifact && !stored.shipped) return stored.wasm ? new Set([this.#sitePorts.get(stored.name)].filter((p): p is number => !!p)) : undefined;
+  servesOn(stored: StoredService): Set<number> {
     const ports = new Set<number>();
     for (const s of stored.artifact?.manifest.services ?? []) ports.add(s.port);
     const site = this.#sitePorts.get(stored.name);
@@ -1916,13 +1898,6 @@ export class Services {
     if (errors.length) this.h.releases.jobs.set(`service:${stored.name}`, { error: errors.join('; ') });
   }
 
-  /** A component file given for a service: a .wasm file that is there. */
-  wasmFile(path: string): string {
-    const file = resolvePath(path);
-    if (!/\.wasm$/i.test(file) || !existsSync(file)) throw new Error(`${path} isn't a WebAssembly component (a .wasm file) on this computer`);
-    return file;
-  }
-
   /**
    * Run a WebAssembly service: transpiled once, then in a worker of its own, answered through its gate, and handed
    * what it may read, one item at a time: first what came while it was off (from where it got to), then as it comes.
@@ -1930,7 +1905,7 @@ export class Services {
   /** What each running WebAssembly service watches with, by its key. */
   #watchers = new Map<string, AbortController>();
 
-  async spawnWasm(stored: StoredService, component: string, site = stored.site): Promise<void> {
+  async spawnWasm(stored: StoredService, component: string, site?: string): Promise<void> {
     const name = stored.name;
     const key = `service:${name}`;
     if (this.h.runtime.running(key)) return;
