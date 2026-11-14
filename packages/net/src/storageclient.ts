@@ -247,6 +247,25 @@ export class StorageClient {
     return (await this.#ask({ t: 'relay', ...(hours ? { hours } : {}) })).ticket as string;
   }
 
+  /** Web Push (docs/web-push.md): the storage node's VAPID key, which a browser subscribes with. */
+  async pushKey(): Promise<string> {
+    return (await this.#ask({ t: 'push.key' })).key as string;
+  }
+
+  /** A browser's subscription in, the address senders push to out (the same one again for the same browser). */
+  async pushSubscribe(subscription: { endpoint: string; p256dh: string; auth: string }): Promise<string> {
+    return (await this.#ask({ t: 'push.subscribe', ...subscription })).address as string;
+  }
+
+  async pushDrop(address: string): Promise<void> {
+    await this.#ask({ t: 'push.drop', address });
+  }
+
+  /** A push to one of this account's own addresses: what was sealed to that browser's push key. */
+  async pushSelf(address: string, sealed: unknown): Promise<void> {
+    await this.#ask({ t: 'push.self', address, sealed: sealed as Record<string, unknown> });
+  }
+
   async usage(): Promise<StorageUsage> {
     const { used, quota, over } = await this.#ask({ t: 'usage' });
     return { used: used as number, quota: quota as number, ...(over ? { over: true } : {}) };

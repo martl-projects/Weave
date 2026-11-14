@@ -78,7 +78,7 @@ const echo = new WebSocketServer({ noServer: true });
 app.on('upgrade', (req, socket, head) => echo.handleUpgrade(req, socket, head, (ws) => ws.on('message', (data) => ws.send(`echo: ${String(data)}`))));
 await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
 await person.createProject({ name: 'Party' });
-const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network: onDht ? swarmNetwork() : Object.assign(standIn, { dht: () => relayDht! }) });
+const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network: onDht ? swarmNetwork() : Object.assign(standIn, { dht: () => relayDht! }), push: { subject: `http://localhost:${port}` } });
 keepReconciling(person);
 await person.goOnline();
 await person.addService({ builtin: 'website', spaces: ['Party'] });

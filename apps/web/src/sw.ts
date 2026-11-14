@@ -62,6 +62,57 @@ async function answer(request: Request, path: string): Promise<Response> {
   }
 }
 
+/*
+ * Web Push (docs/web-push.md): what a sender sealed to this browser's push key, opened here with it, shown. iOS takes
+ * away a page's pushes if one comes and nothing is shown, so even one that doesn't open shows something.
+ */
+interface PushWorker {
+  registration: { showNotification(title: string, options: NotificationOptions & { data?: unknown }): Promise<void> };
+  clients: { matchAll(o: { type: 'window'; includeUncontrolled: boolean }): Promise<Array<{ url: string; visibilityState?: string; focused?: boolean; focus(): Promise<unknown>; navigate(url: string): Promise<unknown>; postMessage(m: unknown): void }>>; openWindow(url: string): Promise<unknown> };
+  addEventListener(type: 'push', listener: (event: { data?: { json(): unknown }; waitUntil(work: Promise<unknown>): void }) => void): void;
+  addEventListener(type: 'notificationclick', listener: (event: { notification: { data?: { open?: string }; close(): void }; waitUntil(work: Promise<unknown>): void }) => void): void;
+}
+const pushing = self as unknown as PushWorker;
+
+pushing.addEventListener('push', (event) => {
+  event.waitUntil(
+    (async () => {
+      const { loadPushKey, openNotice } = await import('./pushkey.ts');
+      let notice: { title: string; text?: string; open?: string; tag?: string } = { title: 'Weave', text: 'Something new for you' };
+      try {
+        const message = event.data?.json() as { from?: string; sealed?: unknown } | undefined;
+        const key = await loadPushKey();
+        if (key && message?.sealed) notice = openNotice(key, message.sealed as Parameters<typeof openNotice>[1]);
+      } catch (error) {
+        // Not for this key (an old subscription), or altered: the plain line above.
+        console.warn('weave: a push that does not open here:', (error as Error).message);
+      }
+      // Weave open where it's seen: its node tells it itself (and on a computer shows its own); none on top of it.
+      const windows = await pushing.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const seen = windows.filter((w) => w.focused || w.visibilityState === 'visible');
+      if (seen.length) return seen.forEach((w) => w.postMessage({ type: 'weave-push', notice }));
+      await pushing.registration.showNotification(notice.title, { body: notice.text ?? '', icon: '/icon-192.png', badge: '/icon-192.png', tag: notice.tag, data: { open: notice.open } }).catch((error: Error) => windows.forEach((w) => w.postMessage({ type: 'weave-push-failed', why: error.message })));
+    })(),
+  );
+});
+
+pushing.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const open = event.notification.data?.open ?? '#/';
+  event.waitUntil(
+    (async () => {
+      const windows = await pushing.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const there = windows[0];
+      if (there) {
+        await there.focus();
+        there.postMessage({ type: 'weave-open', open });
+        return;
+      }
+      await pushing.clients.openWindow(`/${open.startsWith('#') ? open : `#${open}`}`);
+    })(),
+  );
+});
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/dev/')) return;

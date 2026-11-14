@@ -512,6 +512,37 @@ function HintServices() {
   );
 }
 
+/**
+ * Weave Web: pushes to this device while Weave is closed (docs/web-push.md). Whoever writes to you seals them to this
+ * device's push key; your storage node only passes them on.
+ */
+function WebPushBox() {
+  const { t } = useTexts();
+  const { data: state, reload } = useApi(() => bridge.web!.push.state(), []);
+  return (
+    <fieldset>
+      <legend>{t('push.legend')}</legend>
+      <p className="small">{state ? t(`push.state.${state}`) : '…'}</p>
+      <p className="small muted">{t('push.why')}</p>
+      <div className="buttons">
+        {state === 'off' && (
+          <AsyncButton className="push-on" onClick={() => attempt(() => bridge.web!.push.enable().then(reload), t('push.on.done'))}>
+            {t('push.on')}
+          </AsyncButton>
+        )}
+        {state === 'on' && (
+          <>
+            <AsyncButton className="push-test" onClick={() => attempt(() => bridge.web!.push.test({ title: t('push.test.title'), text: t('push.test.text') }), t('push.test.sent'))}>
+              {t('push.test')}
+            </AsyncButton>
+            <AsyncButton onClick={() => attempt(() => bridge.web!.push.disable().then(reload))}>{t('push.off')}</AsyncButton>
+          </>
+        )}
+      </div>
+    </fieldset>
+  );
+}
+
 /** View → Notifications…: which kinds of notices show on this computer. */
 export function NotificationSettings({ onClose }: { onClose(): void }) {
   const { t } = useTexts();
@@ -524,6 +555,7 @@ export function NotificationSettings({ onClose }: { onClose(): void }) {
   };
   return (
     <Modal title={t('notify.title')} onClose={onClose}>
+      {bridge.web && <WebPushBox />}
       <p>{t('notify.show.for')}</p>
       {NOTICE_CATEGORIES.map((category) => (
         <div className="field-row notify-row" key={category}>

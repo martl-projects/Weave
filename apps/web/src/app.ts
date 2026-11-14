@@ -4,7 +4,8 @@ import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
-import { openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
+import { b64u, openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
+import { clearPushKey, loadPushKey, makePushKey, savePushKey, sealNotice } from './pushkey.ts';
 import { StorageClient } from '@weave/net/browser';
 import { joinLinkFor } from '../../desktop/src/renderer/joinlink.ts';
 
@@ -337,6 +338,40 @@ const web: Bridge['web'] = {
       overlay.remove();
     }
   },
+  // Web Push (docs/web-push.md): this browser subscribes at its storage node, with a push key only it holds.
+  push: {
+    state: async () => {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') {
+        // An iPhone has Web Push only for Weave on its home screen.
+        return /iPhone|iPad/.test(navigator.userAgent) && !matchMedia('(display-mode: standalone)').matches ? 'home-screen' : 'unsupported';
+      }
+      if (Notification.permission === 'denied') return 'denied';
+      const registration = await navigator.serviceWorker.ready;
+      const [key, subscription] = await Promise.all([loadPushKey(), registration.pushManager.getSubscription()]);
+      return key && subscription ? 'on' : 'off';
+    },
+    enable: async () => {
+      if ((await Notification.requestPermission()) !== 'granted') throw new Error('the browser says no to notifications: allow them for Weave in its settings');
+      const registration = await navigator.serviceWorker.ready;
+      const serverKey = await own<string>('pushKey');
+      const subscription = (await registration.pushManager.getSubscription()) ?? (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u.decode(serverKey) as BufferSource }));
+      const keys = subscription.toJSON().keys ?? {};
+      const address = await own<string>('pushSubscribe', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
+      const kept = await loadPushKey();
+      if (kept?.address !== address) await savePushKey(makePushKey(address));
+    },
+    disable: async () => {
+      const kept = await loadPushKey();
+      if (kept) await own('pushDrop', kept.address).catch(() => undefined);
+      await (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe();
+      await clearPushKey();
+    },
+    test: async (notice) => {
+      const kept = await loadPushKey();
+      if (!kept) throw new Error('notifications are off on this device');
+      await own('pushSelf', kept.address, sealNotice(kept.did, notice));
+    },
+  },
   // Empty this browser, and come back to the start (or straight to linking it with a computer).
   reset: async (then) => {
     if (then) sessionStorage.setItem(START_KEY, then);
@@ -445,5 +480,13 @@ window.weave = {
   onEvent: (listener) => void listeners.push(listener),
   onLink: (listener) => void (linkListener = listener),
 };
+
+// A notification tapped while Weave is open: the service worker says where it leads.
+// One that came while Weave was in front isn't shown (the node here tells it): it's said to the page.
+navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: string; notice?: unknown }>) => {
+  if (event.data?.type === 'weave-push') return void window.dispatchEvent(new CustomEvent('weave-push', { detail: event.data.notice }));
+  if (event.data?.type === 'weave-push-failed') return void console.warn('a push could not be shown:', (event.data as { why?: string }).why);
+  if (event.data?.type === 'weave-open' && event.data.open) location.hash = event.data.open.startsWith('#') ? event.data.open : `#${event.data.open}`;
+});
 
 await import('../../desktop/src/renderer/main.tsx');

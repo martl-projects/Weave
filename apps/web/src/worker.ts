@@ -2,7 +2,7 @@ import './host/globals.ts';
 import { b64u, errorToWire } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
-import { handOnAgain, relayTicket, useStorage } from './host/net.ts';
+import { handOnAgain, relayTicket, useStorage, withStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
@@ -128,6 +128,20 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   /** A ticket for the relay, for a website's tab this page opened. */
   relayTicket(hours?: number) {
     return relayTicket(hours);
+  },
+
+  /** Web Push (docs/web-push.md): the storage node's key, this browser's subscription in and out, a push to itself. */
+  pushKey() {
+    return withStorage((client) => client.pushKey());
+  },
+  pushSubscribe(subscription: { endpoint: string; p256dh: string; auth: string }) {
+    return withStorage((client) => client.pushSubscribe(subscription));
+  },
+  pushDrop(address: string) {
+    return withStorage((client) => client.pushDrop(address));
+  },
+  pushSelf(address: string, sealed: unknown) {
+    return withStorage((client) => client.pushSelf(address, sealed));
   },
 
   ways() {

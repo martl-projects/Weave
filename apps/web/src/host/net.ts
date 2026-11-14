@@ -52,18 +52,21 @@ export function socketTo(url: string): Promise<TextSocket> {
   });
 }
 
-/** A ticket for the storage node's relay, for a website's tab (docs/web-stage2.md, step 9): over a short connection of its own. */
-export async function relayTicket(hours?: number): Promise<string> {
+/** Something of this account's at its storage node, over a short connection of its own, signed in. */
+export async function withStorage<T>(ask: (client: StorageClient) => Promise<T>): Promise<T> {
   const account = link?.account();
   if (!link || !account) throw new Error('not connected to a storage node yet');
   const client = await StorageClient.connect(await socketTo(link.url));
   try {
     await client.signIn(account);
-    return await client.relayTicket(hours);
+    return await ask(client);
   } finally {
     client.close();
   }
 }
+
+/** A ticket for the storage node's relay, for a website's tab (docs/web-stage2.md, step 9). */
+export const relayTicket = (hours?: number): Promise<string> => withStorage((client) => client.relayTicket(hours));
 
 /** The node's blob store, as far as this uses it. */
 type Blobs = BlobSource & { put(data: Uint8Array): string };

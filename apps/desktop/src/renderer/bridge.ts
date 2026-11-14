@@ -114,6 +114,16 @@ export interface Bridge {
     linkWaiting(): boolean;
     /** A link from a computer, pasted (the home-screen app on an iPhone, which no scanned code reaches). */
     pasteLink(text: string): void;
+    /**
+     * Web Push on this device (docs/web-push.md). `home-screen`: an iPhone, where only Weave on the home screen gets
+     * pushes; `denied`: the browser was told no.
+     */
+    push: {
+      state(): Promise<'on' | 'off' | 'denied' | 'unsupported' | 'home-screen'>;
+      enable(): Promise<void>;
+      disable(): Promise<void>;
+      test(notice: { title: string; text?: string; open?: string }): Promise<void>;
+    };
     /** Empty this browser of its account and start again: at the start, or straight at linking it with a computer. */
     reset(then?: 'link'): Promise<void>;
     /** After a reset: where to start (once). */

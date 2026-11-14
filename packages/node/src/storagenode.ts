@@ -7,6 +7,7 @@ import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
 import { PlanStore } from './storageplans.ts';
 import type HyperDHT from 'hyperdht';
+import type { PushSubscriptionData, VapidKeys } from './webpush.ts';
 
 /*
  * A storage node (docs/web-stage2.md): always on, it holds people's spaces without being able to open them. Each
@@ -62,7 +63,18 @@ export interface StorageOptions {
   dir: string;
   network: StorageNetworks;
   quota?: number;
+  /**
+   * Web Push (docs/web-push.md): the contact push services see on this node's requests (its page's address), and for
+   * tests the fetch and the endpoints taken besides the real push services.
+   */
+  push?: { subject: string; fetch?: typeof fetch; endpoints?: string[] };
 }
+
+/** Pushes to one address in an hour: from one sender, and in all. */
+export const PUSH_PER_SENDER = 30;
+export const PUSH_PER_ADDRESS = 120;
+const MAX_PUSH_ADDRESSES = 16;
+const MAX_PUSH = 3 * 1024;
 
 interface HeldRecord {
   space: string;
@@ -87,6 +99,8 @@ interface AccountFile {
   spaces: HeldRecord[];
   /** Sealed boxes by the hash of their token. */
   boxes: Record<string, string>;
+  /** Its browsers' push subscriptions, by the address senders push to (docs/web-push.md). */
+  push?: Record<string, PushSubscriptionData & { created: string }>;
 }
 
 interface Account {
@@ -159,6 +173,11 @@ export class StorageNode {
   readonly #dir: string;
   readonly #accounts = new Map<Did, Account>();
   readonly #boxes = new Map<string, Did>();
+  /** Push addresses, whose account each is. */
+  readonly #pushes = new Map<string, Did>();
+  /** Pushes in the last hour, per address and per sender at an address. */
+  readonly #pushed = new Map<string, number[]>();
+  #vapid?: VapidKeys;
   readonly #options: StorageOptions;
   /** Onboarding links' plans, sealed, and their previews (storageplans.ts). */
   readonly plans: PlanStore;
@@ -212,6 +231,7 @@ export class StorageNode {
     account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)), publicFor: (shared) => this.#publicFor(account, shared) }, this.#fromPeers(account));
     this.#accounts.set(file.id, account);
     for (const hash of Object.keys(file.boxes)) this.#boxes.set(hash, file.id);
+    for (const address of Object.keys(file.push ?? {})) this.#pushes.set(address, file.id);
     this.measure(file.id);
     if (!account.over) await joinAll(account.network, topicsOf(file.spaces));
     return account;
@@ -274,6 +294,51 @@ export class StorageNode {
 
   #save(account: Account): void {
     writeJson(join(account.dir, 'account.json'), account.file);
+  }
+
+  /** This node's VAPID keys, made once and kept in its folder. Loaded when first needed: Web Push is Node's crypto. */
+  async #vapidKeys(): Promise<VapidKeys> {
+    if (this.#vapid) return this.#vapid;
+    const path = join(this.#dir, 'vapid.json');
+    if (existsSync(path)) return (this.#vapid = JSON.parse(readFileSync(path, 'utf8')) as VapidKeys);
+    const { makeVapidKeys } = await import('./webpush.ts');
+    this.#vapid = makeVapidKeys();
+    writeJson(path, this.#vapid);
+    return this.#vapid;
+  }
+
+  /** Within the limits: a sender (its key) to an address, and the address in all, per hour. */
+  #mayPush(address: string, from: string): boolean {
+    const hour = Date.now() - 3600_000;
+    const recent = (key: string) => (this.#pushed.get(key) ?? []).filter((t) => t > hour);
+    const all = recent(address);
+    const theirs = recent(`${address} ${from}`);
+    if (all.length >= PUSH_PER_ADDRESS || theirs.length >= PUSH_PER_SENDER) return false;
+    this.#pushed.set(address, [...all, Date.now()]);
+    this.#pushed.set(`${address} ${from}`, [...theirs, Date.now()]);
+    return true;
+  }
+
+  /**
+   * Push to an address: what a sender sealed to that browser's push key, as it is, with `from` (the sender's key) so
+   * the browser can say who and the limits can count. A subscription the push service says is gone goes from here too.
+   */
+  async push(address: string, message: { from: string; sealed: unknown }): Promise<'sent' | 'unknown' | 'limit' | 'failed'> {
+    const id = this.#pushes.get(address);
+    const account = id && this.#accounts.get(id);
+    const subscription = account && account.file.push?.[address];
+    if (!account || !subscription || !this.#options.push) return 'unknown';
+    const payload = Buffer.from(JSON.stringify({ from: message.from, sealed: message.sealed }));
+    if (payload.length > MAX_PUSH) return 'failed';
+    if (!this.#mayPush(address, message.from)) return 'limit';
+    const { sendPush } = await import('./webpush.ts');
+    const sent = await sendPush(subscription, payload, await this.#vapidKeys(), this.#options.push.subject, { fetch: this.#options.push.fetch }).catch(() => ({ ok: false, gone: false, status: 0 }));
+    if (sent.gone) {
+      delete account.file.push![address];
+      this.#pushes.delete(address);
+      this.#save(account);
+    }
+    return sent.ok ? 'sent' : 'failed';
   }
 
   /** A new invitation: for one account, or for `accounts` of them (one link to share). Only its hash is kept. */
@@ -348,6 +413,7 @@ export class StorageNode {
   async #delete(account: Account): Promise<void> {
     this.#accounts.delete(account.file.id);
     for (const hash of Object.keys(account.file.boxes)) this.#boxes.delete(hash);
+    for (const address of Object.keys(account.file.push ?? {})) this.#pushes.delete(address);
     for (const session of account.sessions) session.close();
     await account.network.destroy().catch(() => {});
     account.store.close();
@@ -504,6 +570,40 @@ export class StorageNode {
           const hours = typeof m.hours === 'number' && m.hours > 0 ? Math.min(12, m.hours) : undefined;
           this.#tickets.set(tokenHash(ticket), { id: mine.file.id, until: now + (hours ? hours * 3600_000 : TICKET_MS), ...(hours ? { again: true } : {}) });
           return channel.send({ t: 'ok', ticket });
+        }
+        // Web Push (docs/web-push.md): this node's key to subscribe with, a browser's subscription in (an address out),
+        // an address dropped, and a push to one of this account's own addresses (a test, or its own node telling it).
+        case 'push.key': {
+          if (!this.#options.push) return no('this storage node sends no pushes');
+          return channel.send({ t: 'ok', key: (await this.#vapidKeys()).publicKey });
+        }
+        case 'push.subscribe': {
+          if (!this.#options.push) return no('this storage node sends no pushes');
+          const { isPushEndpoint } = await import('./webpush.ts');
+          if (!isText(m.endpoint, 1024) || !isText(m.p256dh, 200) || !isText(m.auth, 100) || !isPushEndpoint(m.endpoint, this.#options.push.endpoints)) return no("that isn't a browser's push subscription");
+          const push = (mine.file.push ??= {});
+          // The same browser again: the address it has.
+          const again = Object.entries(push).find(([, s]) => s.endpoint === m.endpoint);
+          if (again) return channel.send({ t: 'ok', address: again[0] });
+          if (Object.keys(push).length >= MAX_PUSH_ADDRESSES) return no('this account has as many push addresses as it may: drop one first');
+          const address = randomBytes(18).toString('base64url');
+          push[address] = { endpoint: m.endpoint, p256dh: m.p256dh, auth: m.auth, created: new Date().toISOString() };
+          this.#pushes.set(address, mine.file.id);
+          this.#save(mine);
+          return channel.send({ t: 'ok', address });
+        }
+        case 'push.drop': {
+          if (isText(m.address, 64) && mine.file.push?.[m.address]) {
+            delete mine.file.push[m.address];
+            this.#pushes.delete(m.address);
+            this.#save(mine);
+          }
+          return channel.send({ t: 'ok' });
+        }
+        case 'push.self': {
+          if (!isText(m.address, 64) || !mine.file.push?.[m.address]) return no('that is no push address of this account');
+          const sent = await this.push(m.address, { from: mine.file.id, sealed: m.sealed });
+          return sent === 'sent' ? channel.send({ t: 'ok' }) : no(sent === 'limit' ? 'too many pushes in the last hour' : "the push service didn't take it");
         }
         case 'usage': {
           const { used, quota, over } = this.measure(mine.file.id);

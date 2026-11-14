@@ -57,7 +57,8 @@ if (command === 'invite') {
     console.error('say where pages may connect from: --origin https://…');
     process.exit(1);
   }
-  const node = await StorageNode.open({ dir: resolve(dir), network: swarmNetwork() });
+  // Web Push (docs/web-push.md): push services see the page's address as this node's contact.
+  const node = await StorageNode.open({ dir: resolve(dir), network: swarmNetwork(), push: { subject: values.origin[0] } });
   const server = storageServer(node, { origins: values.origin, relayOrigins: values['relay-origin'], web: values.web && resolve(values.web), behindProxy: values['behind-proxy'] });
   server.listen(Number(values.port), values.host, () => console.log(`weave-storage on ${values.host}:${values.port}, for ${values.origin.join(', ')}`));
   const stop = async () => {

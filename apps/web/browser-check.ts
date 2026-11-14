@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decodeContact } from '@weave/core';
+import { b64u, boxTo, decodeContact, didFromPublicKey, generateKeyPair } from '@weave/core';
 import bundle from '../../weave.bundle.json' with { type: 'json' };
 
 const PORT = 8795;
@@ -38,8 +38,11 @@ async function devtools(url: string) {
   await new Promise((resolve) => socket.addEventListener('open', resolve));
   let next = 1;
   const waiting = new Map<number, { resolve(value: Record<string, unknown>): void; reject(error: Error): void }>();
+  // What Chrome says by itself (with a domain enabled), kept for a step to look at.
+  const events: Array<{ method: string; params: Record<string, unknown> }> = [];
   socket.addEventListener('message', ({ data }) => {
-    const message = JSON.parse(String(data)) as { id?: number; result?: Record<string, unknown>; error?: { message: string } };
+    const message = JSON.parse(String(data)) as { id?: number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: { message: string } };
+    if (message.method) events.push({ method: message.method, params: message.params ?? {} });
     const call = message.id === undefined ? undefined : waiting.get(message.id);
     if (message.error) call?.reject(new Error(message.error.message));
     else call?.resolve(message.result ?? {});
@@ -55,7 +58,7 @@ async function devtools(url: string) {
     if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text);
     return answer.result.value;
   };
-  return { send, run, close: () => socket.close() };
+  return { send, run, events, close: () => socket.close() };
 }
 
 const steps: Array<[string, unknown]> = [];
@@ -77,7 +80,7 @@ try {
     const tabs = (await (await fetch(`http://127.0.0.1:${DEBUG}/json/list`)).json()) as Array<{ type: string; webSocketDebuggerUrl: string }>;
     return tabs.find((tab) => tab.type === 'page');
   });
-  const { send, run, close } = await devtools(target.webSocketDebuggerUrl);
+  const { send, run, events, close } = await devtools(target.webSocketDebuggerUrl);
   await send('Page.enable');
   await send('Runtime.enable');
   await send('WebAuthn.enable');
@@ -287,6 +290,36 @@ try {
   const { installabilityErrors } = (await send('Page.getInstallabilityErrors')) as { installabilityErrors: Array<{ errorId: string }> };
   if (installabilityErrors.length) throw new Error(`not installable: ${installabilityErrors.map((e) => e.errorId).join(', ')}`);
   passed('Chrome can install it as an app of its own');
+
+  // Push on this device (docs/web-push.md), this browser's side: a push sealed to its push key, delivered to its
+  // service worker, opened there. Chrome without a window says no to notifications, so the way through the storage node
+  // and the push service is tested on its own (storagepush.test.ts, webpush.test.ts); here Chrome hands the push to the
+  // service worker itself. Weave is in front, so the service worker gives it to the page rather than showing it.
+  {
+    await send('Runtime.enable');
+    await send('ServiceWorker.enable');
+    type Registration = { registrationId: string; scopeURL: string; isDeleted?: boolean };
+    const registrationId = await until('the service worker registration', async () =>
+      events
+        .filter((e) => e.method === 'ServiceWorker.workerRegistrationUpdated')
+        .flatMap((e) => e.params.registrations as Registration[])
+        .find((r) => r.scopeURL.startsWith(ORIGIN) && !r.isDeleted)?.registrationId,
+    );
+    const pair = generateKeyPair();
+    const key = { address: 'check', did: didFromPublicKey(pair.publicKey), secretKey: b64u.encode(pair.secretKey), publicKey: b64u.encode(pair.publicKey) };
+    const putKey = (value: unknown) =>
+      run(`new Promise((done, fail) => { const r = indexedDB.open('weave-push', 1); r.onupgradeneeded = () => r.result.createObjectStore('keys'); r.onerror = () => fail(r.error); r.onsuccess = () => { const tx = r.result.transaction('keys', 'readwrite'); const s = tx.objectStore('keys'); ${value === null ? `s.delete('current')` : `s.put(${JSON.stringify(value)}, 'current')`}; tx.oncomplete = () => (r.result.close(), done(true)); tx.onerror = () => fail(tx.error); }; })`);
+    await putKey(key);
+    await run(`(window.__pushes = [], addEventListener('weave-push', (e) => window.__pushes.push(e.detail)))`);
+    const sealed = boxTo(key.did, { title: 'Probe', text: 'from the check', open: '#/' });
+    await send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: JSON.stringify({ from: 'did:key:check', sealed }) });
+    await until('the push, opened by the service worker', () => run<boolean>(`window.__pushes.some((p) => p.title === 'Probe' && p.text === 'from the check')`), 20_000).catch((error: Error) => {
+      const said = events.filter((e) => e.method === 'Runtime.consoleAPICalled').map((e) => JSON.stringify((e.params.args as Array<{ value?: unknown }>).map((a) => a.value))).filter((line) => /push/i.test(line));
+      throw new Error(`${error.message}; the page said: ${said.join(' | ') || 'nothing about it'}`);
+    });
+    await putKey(null);
+    passed('push: one sealed to this browser is opened by its service worker');
+  }
 
   // On a phone's width: what the menu bar has on a computer is under Settings.
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
