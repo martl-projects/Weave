@@ -56,6 +56,38 @@ async function start(web?: string) {
 }
 
 describe('onboarding links on a storage node', { timeout: 60_000 }, () => {
+  it('lets anyone put plans with "*", within limits that the planners the operator named do not have', async () => {
+    const { node, dir, connect } = await start();
+    const [stranger, martl] = [createIdentity(), createIdentity()];
+    await expect((await connect()).putPlan(stranger, { sealed: 'x', check: 'c' })).rejects.toThrow(/operator decides/);
+    PlanStore.allowIn(dir, '*');
+    PlanStore.allowIn(dir, martl.did);
+
+    // Anyone: 20 links at once.
+    const client = await connect();
+    const codes: string[] = [];
+    for (let i = 0; i < 20; i++) codes.push(await client.putPlan(stranger, { sealed: `p${i}`, check: 'c' }));
+    await expect(client.putPlan(stranger, { sealed: 'one more', check: 'c' })).rejects.toThrow(/at most 20 links at once/);
+    // A link taken back makes room.
+    await client.revokePlan(stranger, codes.pop()!);
+    codes.push(await client.putPlan(stranger, { sealed: 'again', check: 'c' }));
+
+    // 20 new accounts a day through their links; who has Weave already still comes in.
+    for (let i = 0; i < 20; i++) expect((await client.takePlan(codes[i % codes.length], 'c', true)).invite).toBeTruthy();
+    await expect(client.takePlan(codes[0], 'c', true)).rejects.toThrow(/all the new accounts it may today/);
+    expect(await client.takePlan(codes[0], 'c', false)).toEqual({});
+
+    // Named by the operator: none of those limits.
+    for (let i = 0; i < 21; i++) await client.putPlan(martl, { sealed: `m${i}`, check: 'c' });
+    const mine = await client.putPlan(martl, { sealed: 'm', check: 'c' });
+    for (let i = 0; i < 21; i++) expect((await client.takePlan(mine, 'c', true)).invite).toBeTruthy();
+    expect(node.plans.mayPlan(createIdentity().did)).toBe(true);
+
+    // "*" taken off: strangers no longer.
+    PlanStore.allowIn(dir, '*', false);
+    await expect(client.putPlan(stranger, { sealed: 'x', check: 'c' })).rejects.toThrow(/operator decides/);
+  });
+
   it('lets only planners the operator named put plans, as themselves', async () => {
     const { dir, connect } = await start();
     const martl = createIdentity();
