@@ -73,8 +73,8 @@ export interface StorageOptions {
 /** Pushes to one address in an hour: from one sender, and in all. */
 export const PUSH_PER_SENDER = 30;
 export const PUSH_PER_ADDRESS = 120;
-// One per place and browser (docs/web-push.md, stage 3): a person in many places with a few browsers.
-const MAX_PUSH_ADDRESSES = 512;
+// One per place, sender and browser (docs/web-push.md, stage 3): a person in many places with a few browsers.
+const MAX_PUSH_ADDRESSES = 1024;
 const MAX_PUSH = 3 * 1024;
 
 interface HeldRecord {

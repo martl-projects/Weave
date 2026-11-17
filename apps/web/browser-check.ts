@@ -353,7 +353,12 @@ try {
     // Off: every address goes back, and Lena can't open one any more.
     await call('pushPlaces');
     await until('the address taken back', async () => (await dev<string[]>('/dev/push-targets')).length === 0, 30_000);
-    passed('push off takes back every place\'s address');
+    // A relay that doesn't forget sends it again: the key is gone, so it isn't shown.
+    await send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: JSON.stringify({ from: message.from, to: address, sealed: message.sealed }) });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const shownTimes = await run<number>(`window.__pushes.filter((p) => p.text === 'push from Lena').length`);
+    if (shownTimes !== 1) throw new Error(`a push to an address taken back was shown (${shownTimes} times in all)`);
+    passed("push off takes back every place's address, and what still comes to one isn't shown");
   }
 
   // On a phone's width: what the menu bar has on a computer is under Settings.

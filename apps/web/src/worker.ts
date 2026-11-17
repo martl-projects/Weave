@@ -80,28 +80,32 @@ async function startPushes(opened: WeaveNode, off = false): Promise<void> {
   const device = await keys.deviceName();
   await opened.pushTargets.setHost({
     device,
-    targetFor: async (space) => {
-      const address = await keys.loadPlace(space);
+    targetFor: async (space, to) => {
+      const address = (await keys.loadPlace(space))[to];
       const key = address ? await keys.loadKeyFor(address) : undefined;
       const here = storageUrl();
       return key && here ? { relay: relayOf(here), address: key.address, key: key.did } : undefined;
     },
-    make: async (space) => {
+    givenIn: async (space) => Object.keys(await keys.loadPlace(space)) as Array<`did:key:z${string}`>,
+    make: async (space, to) => {
       const here = storageUrl();
       const sub = await keys.loadSubscription();
       if (!here || !sub) throw new Error('pushes are off in this browser');
       const address = await withStorage((client) => client.pushSubscribe(sub, true));
       const key = keys.makePushKey(address);
       await keys.saveKeyFor(key);
-      await keys.savePlace(space, address);
+      await keys.savePlace(space, { ...(await keys.loadPlace(space)), [to]: address });
       return { relay: relayOf(here), address, key: key.did };
     },
-    drop: async (space) => {
-      const address = await keys.loadPlace(space);
+    drop: async (space, to) => {
+      const given = await keys.loadPlace(space);
+      const address = given[to];
       if (!address) return;
-      await withStorage((client) => client.pushDrop(address)).catch(() => undefined);
+      // The key first: whatever still comes to that address, from wherever, isn't shown.
       await keys.dropKeyFor(address);
-      await keys.dropPlace(space);
+      await withStorage((client) => client.pushDrop(address)).catch(() => undefined);
+      delete given[to];
+      await keys.savePlace(space, given);
     },
   });
 }

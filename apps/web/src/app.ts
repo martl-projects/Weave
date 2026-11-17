@@ -380,6 +380,13 @@ const web: Bridge['web'] = {
       await clearPushKey();
     },
     counted: async (total) => void (await saveBadge(total).catch(() => undefined)),
+    relay: () => new URL(STORAGE_AT).host,
+    // All anew: the subscription at the push service goes (whatever any relay still holds of it reaches nothing), and a
+    // new one with new addresses and keys for every place takes its place.
+    renew: async () => {
+      await web!.push.disable();
+      await web!.push.enable();
+    },
     resume: async () => {
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
       const subscription = await (await navigator.serviceWorker.ready).pushManager?.getSubscription();

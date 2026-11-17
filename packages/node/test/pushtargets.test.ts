@@ -5,7 +5,7 @@ import { people, sync } from './helpers/people.ts';
 
 const { person } = people('pushtargets');
 
-/** A browser with pushes on, as the node sees it: an address and a key per place. */
+/** A browser with pushes on, as the node sees it: an address and a key per place and per one who may push there. */
 function browser(device: string) {
   const targets = new Map<string, PushTarget>();
   const keys = new Map<string, { secretKey: Uint8Array; publicKey: Uint8Array }>();
@@ -13,25 +13,27 @@ function browser(device: string) {
   const dropped: string[] = [];
   const host: PushHost = {
     device,
-    targetFor: async (space) => targets.get(space),
-    make: async (space) => {
+    targetFor: async (space, to) => targets.get(`${space} ${to}`),
+    givenIn: async (space) => [...targets.keys()].filter((k) => k.startsWith(`${space} `)).map((k) => k.split(' ')[1] as Did),
+    make: async (space, to) => {
       const pair = generateKeyPair();
       const target = { relay: 'https://storage.example', address: `${device}-${++n}`, key: didFromPublicKey(pair.publicKey) };
-      targets.set(space, target);
+      targets.set(`${space} ${to}`, target);
       keys.set(target.address, pair);
       return target;
     },
-    drop: async (space) => {
-      const t = targets.get(space);
+    drop: async (space, to) => {
+      const t = targets.get(`${space} ${to}`);
       if (t) dropped.push(t.address);
-      targets.delete(space);
+      targets.delete(`${space} ${to}`);
     },
   };
+  const at = (space: string, to: { identity: { author: Did } }) => targets.get(`${space} ${to.identity.author}`);
   const open = (address: string, sealed: Json) => {
     const pair = keys.get(address)!;
     return openBox(pair.secretKey, pair.publicKey, sealed as unknown as Box) as unknown as PushNotice;
   };
-  return { host, targets, dropped, open };
+  return { host, targets, dropped, open, at };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 30));
@@ -56,9 +58,11 @@ describe('pushes to a closed browser (docs/web-push.md, stage 3)', () => {
     const phone = browser('phone');
     await lena.pushTargets.setHost(phone.host);
     await lena.pushTargets.reconcile();
-    expect(phone.targets.get(studio.id)).toBeDefined();
-    expect(phone.targets.get(chat.id)).toBeDefined();
-    expect(phone.targets.get(studio.id)!.address).not.toBe(phone.targets.get(chat.id)!.address);
+    expect(phone.at(studio.id, martl)).toBeDefined();
+    expect(phone.at(chat.id, martl)).toBeDefined();
+    expect(phone.at(studio.id, martl)!.address).not.toBe(phone.at(chat.id, martl)!.address);
+    // Only those who run it: not Nic, a member.
+    expect(phone.at(studio.id, nic)).toBeUndefined();
     // Nothing new to say a second time.
     const said = (await lena.feed({ kinds: [KIND_PUSH_TARGET], limit: 0 })).length;
     await lena.pushTargets.reconcile();
@@ -67,7 +71,7 @@ describe('pushes to a closed browser (docs/web-push.md, stage 3)', () => {
     for (const to of [martl, nic]) sync(lena, to);
     const studioHere = (n: typeof martl) => n.pushTargets.targetsIn(studio.id);
     // martl maintains Studio: he can open her address there. Nic, a member, can't.
-    expect(studioHere(martl).map((t) => t.target.address)).toEqual([phone.targets.get(studio.id)!.address]);
+    expect(studioHere(martl).map((t) => t.target.address)).toEqual([phone.at(studio.id, martl)!.address]);
     expect(studioHere(nic)).toEqual([]);
 
     // martl writes: in the chat and in Studio, a notice sealed to her phone's key for that place.
@@ -78,18 +82,31 @@ describe('pushes to a closed browser (docs/web-push.md, stage 3)', () => {
     await martl.say({ space: studio.id, text: 'release is out' });
     await nic.say({ space: studio.id, text: 'nice' });
     await settle();
-    expect(sent.map((s) => s.target.address)).toEqual([phone.targets.get(chat.id)!.address, phone.targets.get(studio.id)!.address]);
+    expect(sent.map((s) => s.target.address)).toEqual([phone.at(chat.id, martl)!.address, phone.at(studio.id, martl)!.address]);
     expect(sent.every((s) => s.from === martl.identity.author)).toBe(true);
     const [dm, project] = sent.map((s) => phone.open(s.target.address, s.sealed));
     expect(dm).toMatchObject({ title: 'martl', text: 'are you coming tonight?', open: { space: { id: chat.id, kind: 'direct' } }, tag: chat.id });
     expect(project).toMatchObject({ title: 'martl · Studio', text: 'release is out', open: { space: { id: studio.id, kind: 'project' } } });
 
-    // Nic becomes a maintainer: her phone seals Studio's address to him too (same address: nobody left).
+    // Nic becomes a maintainer: an address of his own; martl's stays.
+    const martls = phone.at(studio.id, martl)!.address;
     await martl.setMaintainer({ project: studio.id, who: nic.identity.author, on: true });
     sync(martl, lena);
     await lena.pushTargets.reconcile();
     sync(lena, nic);
-    expect(studioHere(nic).map((t) => t.target.address)).toEqual([phone.targets.get(studio.id)!.address]);
+    sync(lena, martl);
+    expect(studioHere(nic).map((t) => t.target.address)).toEqual([phone.at(studio.id, nic)!.address]);
+    expect(studioHere(martl).map((t) => t.target.address)).toEqual([martls]);
+
+    // And not any more: his address alone goes back, martl's stays.
+    const nics = phone.at(studio.id, nic)!.address;
+    await martl.setMaintainer({ project: studio.id, who: nic.identity.author, on: false });
+    sync(martl, lena);
+    await lena.pushTargets.reconcile();
+    sync(lena, nic);
+    expect(phone.dropped).toEqual([nics]);
+    expect(studioHere(nic)).toEqual([]);
+    expect(phone.at(studio.id, martl)!.address).toBe(martls);
 
     // Pushes off: every address goes back, and nobody can open one any more.
     await lena.pushTargets.setHost(undefined);

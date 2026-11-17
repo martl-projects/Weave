@@ -67,9 +67,9 @@ export const saveBadge = (count: number): Promise<unknown> => run('readwrite', (
 export const loadKeyFor = (address: string): Promise<PushKey | undefined> => run<PushKey | undefined>('readonly', (s) => s.get(`addr:${address}`));
 export const saveKeyFor = (key: PushKey): Promise<unknown> => run('readwrite', (s) => s.put(key, `addr:${key.address}`));
 export const dropKeyFor = (address: string): Promise<unknown> => run('readwrite', (s) => s.delete(`addr:${address}`));
-export const loadPlace = (space: string): Promise<string | undefined> => run<string | undefined>('readonly', (s) => s.get(`place:${space}`));
-export const savePlace = (space: string, address: string): Promise<unknown> => run('readwrite', (s) => s.put(address, `place:${space}`));
-export const dropPlace = (space: string): Promise<unknown> => run('readwrite', (s) => s.delete(`place:${space}`));
+/** A place's addresses, by whom each was given to (its maintainers, the other one in a direct chat). */
+export const loadPlace = async (space: string): Promise<Record<string, string>> => (await run<Record<string, string> | undefined>('readonly', (s) => s.get(`place:${space}`))) ?? {};
+export const savePlace = (space: string, given: Record<string, string>): Promise<unknown> => run('readwrite', (s) => (Object.keys(given).length ? s.put(given, `place:${space}`) : s.delete(`place:${space}`)));
 
 export interface Subscribed {
   endpoint: string;

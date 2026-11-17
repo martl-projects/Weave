@@ -585,11 +585,17 @@ function WebPushBox() {
             <AsyncButton className="push-test" onClick={() => attempt(() => bridge.web!.push.test({ title: t('push.test.title'), text: t('push.test.text') }), t('push.test.sent'))}>
               {t('push.test')}
             </AsyncButton>
+            <AsyncButton className="push-renew" onClick={() => attempt(() => bridge.web!.push.renew().then(reload), t('push.renew.done'))}>
+              {t('push.renew')}
+            </AsyncButton>
             <AsyncButton onClick={() => attempt(() => bridge.web!.push.disable().then(reload))}>{t('push.off')}</AsyncButton>
           </>
         )}
       </div>
       <p className="small muted">{t('push.why')}</p>
+      <p className="small muted push-relay">
+        {t('push.relay', { host: bridge.web!.push.relay() })} {t('push.relay.own')}
+      </p>
     </fieldset>
   );
 }

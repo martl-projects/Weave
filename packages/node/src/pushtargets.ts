@@ -29,16 +29,22 @@ export interface PushNotice {
   tag?: string;
 }
 
-/** A browser with pushes on: its own addresses and keys, one per place, made and taken back there. */
+/**
+ * A browser with pushes on: its own addresses and keys, one for each place and each one who may push there (a
+ * maintainer, the other one in a direct chat), made and taken back there. One person's address taken back is theirs
+ * alone: nobody else's changes, and what still comes to it isn't shown.
+ */
 export interface PushHost {
   /** This browser, among its person's (each says its targets apart). */
   device: string;
-  /** The target this browser has for a place, if any. */
-  targetFor(space: string): Promise<PushTarget | undefined>;
-  /** A new address and key for a place (a new one each time: the old one goes with drop). */
-  make(space: string): Promise<PushTarget>;
-  /** Take a place's address back: the relay forgets it, the key goes. */
-  drop(space: string): Promise<void>;
+  /** The target this browser gave someone in a place, if any. */
+  targetFor(space: string, to: Did): Promise<PushTarget | undefined>;
+  /** Everyone this browser gave a target in a place. */
+  givenIn(space: string): Promise<Did[]>;
+  /** A new address and key for someone in a place. */
+  make(space: string, to: Did): Promise<PushTarget>;
+  /** Take someone's address in a place back: the relay forgets it, the key goes. */
+  drop(space: string, to: Did): Promise<void>;
 }
 
 /** Hand a sealed notice to a target's relay. */
@@ -153,15 +159,19 @@ export class PushTargets {
         continue;
       }
       const said = this.#said(space, host.device);
-      const target = await host.targetFor(space.id);
       const sealedTo = (said && !said.off ? Object.keys(said.boxes ?? {}) : []) as Did[];
-      if (target && sealedTo.length === recipients.length && recipients.every((d) => sealedTo.includes(d))) continue;
-      // Someone who managed it no more knows the old address: a new one, then.
-      const gone = sealedTo.some((d) => !recipients.includes(d));
-      if (target && gone) await host.drop(space.id);
-      const now = target && !gone ? target : await host.make(space.id);
+      // Whoever runs it no more: their address goes, and only theirs.
+      for (const did of await host.givenIn(space.id)) if (!recipients.includes(did)) await host.drop(space.id, did);
+      const targets = new Map<Did, PushTarget>();
+      let made = false;
+      for (const did of recipients) {
+        const kept = await host.targetFor(space.id, did);
+        targets.set(did, kept ?? (await host.make(space.id, did)));
+        made ||= !kept;
+      }
+      if (!made && sealedTo.length === recipients.length && recipients.every((d) => sealedTo.includes(d))) continue;
       const boxes: Record<string, Json> = {};
-      for (const did of recipients) boxes[did] = boxTo(this.h.encryptionKeyOf(did), now as unknown as Json) as unknown as Json;
+      for (const [did, target] of targets) boxes[did] = boxTo(this.h.encryptionKeyOf(did), target as unknown as Json) as unknown as Json;
       await this.h.publish({ kind: KIND_PUSH_TARGET, body: { device: host.device, boxes }, space: space.id });
     }
   }
@@ -187,7 +197,7 @@ export class PushTargets {
 
   async #takeBack(host: PushHost, space: StoredSpace): Promise<void> {
     const said = this.#said(space, host.device);
-    if (await host.targetFor(space.id)) await host.drop(space.id);
+    for (const did of await host.givenIn(space.id)) await host.drop(space.id, did);
     if (said && !said.off) await this.h.publish({ kind: KIND_PUSH_TARGET, body: { device: host.device, off: true }, space: space.id });
   }
 
