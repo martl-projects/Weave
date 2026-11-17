@@ -112,10 +112,12 @@ jobs:
           # Only for the release job: the release keeps them, and old ones fill the storage quota.
           retention-days: 2
 
-  # The Microsoft Store's package: unsigned, the Store signs it when it's submitted in Partner Center.
+  # The Microsoft Store's package: unsigned, the Store signs it when it's submitted in Partner Center. By hand
+  # (store: true) to try one; for a release too once the Store identity is set (repository variables STORE_IDENTITY,
+  # STORE_PUBLISHER, STORE_PUBLISHER_NAME, STORE_NAME), and then submitted to Partner Center when its app is set up.
   store:
     name: microsoft-store
-    if: ${{ inputs.store }}
+    if: ${{ inputs.store || (inputs.release && vars.STORE_IDENTITY) }}
     runs-on: ${{ fromJSON(vars.WINDOWS_RUNNER || '["self-hosted","windows-vm"]') }}
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -128,13 +130,33 @@ jobs:
       - run: npm run package -- --store
         env:
           GH_TOKEN: ${{ secrets.WEAVE_SERVICES_TOKEN }}
-          WEAVE_STORE_IDENTITY: ${{ inputs.store_identity }}
-          WEAVE_STORE_PUBLISHER: ${{ inputs.store_publisher }}
-          WEAVE_STORE_PUBLISHER_NAME: ${{ inputs.store_publisher_name }}
-          WEAVE_STORE_NAME: ${{ inputs.store_name }}
+          WEAVE_STORE_IDENTITY: ${{ inputs.store_identity || vars.STORE_IDENTITY }}
+          WEAVE_STORE_PUBLISHER: ${{ inputs.store_publisher || vars.STORE_PUBLISHER }}
+          WEAVE_STORE_PUBLISHER_NAME: ${{ inputs.store_publisher_name || vars.STORE_PUBLISHER_NAME }}
+          WEAVE_STORE_NAME: ${{ inputs.store_name || vars.STORE_NAME }}
       - uses: actions/upload-artifact@v4
         with:
           name: installers-microsoft-store
           path: apps/desktop/release/*.appx
           if-no-files-found: error
           retention-days: 2
+      # For a release: a new submission in Partner Center with this package, through its Entra app (Manager). Microsoft
+      # certifies it, then Windows updates every Store install. Without the secrets the package stays an artifact.
+      - uses: microsoft/setup-msstore-cli@v1
+        if: ${{ inputs.release }}
+      - name: Submit to the Microsoft Store
+        if: ${{ inputs.release }}
+        # A Store problem mustn't hold the release back: it shows here, and the submission can be redone by hand.
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TENANT: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          SELLER: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          CLIENT: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+          PRODUCT: ${{ vars.MSSTORE_PRODUCT_ID }}
+        run: |
+          if (-not $env:CLIENT_SECRET -or -not $env:PRODUCT) { Write-Host "Partner Center isn't set up for this repository: the package stays a workflow artifact"; exit 0 }
+          msstore reconfigure --tenantId $env:TENANT --sellerId $env:SELLER --clientId $env:CLIENT --clientSecret $env:CLIENT_SECRET
+          $package = Get-ChildItem apps/desktop/release/*.appx | Select-Object -First 1
+          msstore publish $package.FullName -id $env:PRODUCT

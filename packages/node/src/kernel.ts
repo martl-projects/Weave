@@ -1,4 +1,4 @@
-import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts } from '@weave/core';
+import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_WIDGET, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts } from '@weave/core';
 import type { HeldSpace, SpaceAccess, SwarmNode } from '@weave/net';
 import { type Actor, type Admission, type BoardInfo, type FeedItem, type HomeSource, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type ProjectPage, type ProjectStatus, type ProposalInfo, type ReactionInfo, type ReplyInfo, type SpaceInfo, type SpaceRef, type ThreadInfo } from './backend.ts';
 import type { People } from './people.ts';
@@ -1051,7 +1051,7 @@ export class Kernel {
     const chats = new Map<string, { count: number; last: string }>();
     for (const e of entries) {
       const body = e.body as { post?: unknown; target?: unknown } | null;
-      const post = e.kind === KIND_MSG ? body?.post : e.kind === KIND_REPLY ? body?.target : undefined;
+      const post = e.kind === KIND_MSG || e.kind === KIND_WIDGET ? body?.post : e.kind === KIND_REPLY ? body?.target : undefined;
       if (typeof post !== 'string') continue;
       const chat = chats.get(post) ?? { count: 0, last: '' };
       chat.count++;
@@ -1703,6 +1703,7 @@ export class Kernel {
       reactions: m.reactions.map(this.#reactionInfo),
       ...(m.announce ? { announce: m.announce } : {}),
       ...(m.file ? { file: m.file } : {}),
+      ...(m.widget ? { widget: m.widget } : {}),
     };
   }
 

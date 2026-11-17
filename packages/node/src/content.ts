@@ -1,4 +1,4 @@
-import { type Attachment, BLOB_TYPES, type Badge, type BlobType, type BoardType, CHOICES, COMMUNITY_BOARD, type Choice, DEFAULT_CHANNEL, type Did, type Entry, type Grantee, ISSUE_STATUSES, type IssueStatus, type Json, KIND_BOARD, KIND_BOARD_ACCESS, KIND_CHANNEL, KIND_CURATE, KIND_ISSUE, KIND_ISSUE_CLAIM, KIND_ISSUE_STATUS, KIND_MSG, KIND_POST, KIND_POST_COAUTHOR, KIND_POST_DELETE, KIND_POST_EDIT, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_REACT, KIND_REPLY, KIND_SAVE, KIND_THREAD, KIND_UPVOTE, KIND_VOTE, KIND_VOTE_DELEGATE, type KeyFacts, MAX_COAUTHORS, POST_SORTS, type Post, type PostSort, SAVE_MODES, type SaveMode, type SpaceState, TEXT_LIMITS, WeaveError, attachmentOf, blobRefsIn, boardName, boardRulesOf, channelName, channelsOf, closingUpTo, coauthorsOf, decryptBlob, encryptBlob, fileName, formatBlobRef, isDid, isMediaType, issuesOf, mayDo, mayUse, messagesOf, parseBlobRef, postRefOf, postTargetOf, postsOf, proposalsOf, rank, sceneOf, sealFor, threadsOf, tooLong } from '@weave/core';
+import { type Attachment, BLOB_TYPES, type Badge, type BlobType, type BoardType, CHOICES, COMMUNITY_BOARD, type Choice, DEFAULT_CHANNEL, type Did, type Entry, type Grantee, ISSUE_STATUSES, type IssueStatus, type Json, KIND_BOARD, KIND_BOARD_ACCESS, KIND_CHANNEL, KIND_CURATE, KIND_ISSUE, KIND_ISSUE_CLAIM, KIND_ISSUE_STATUS, KIND_MSG, KIND_POST, KIND_POST_COAUTHOR, KIND_POST_DELETE, KIND_POST_EDIT, KIND_PROPOSAL, KIND_PROPOSAL_CLOSE, KIND_REACT, KIND_REPLY, KIND_SAVE, KIND_THREAD, KIND_UPVOTE, KIND_VOTE, KIND_VOTE_DELEGATE, KIND_WIDGET, type KeyFacts, MAX_COAUTHORS, POST_SORTS, type Post, type PostSort, SAVE_MODES, type SaveMode, type SpaceState, TEXT_LIMITS, WeaveError, attachmentOf, blobRefsIn, boardName, boardRulesOf, channelName, channelsOf, closingUpTo, coauthorsOf, decryptBlob, encryptBlob, fileName, formatBlobRef, isDid, isMediaType, issuesOf, mayDo, mayUse, messagesOf, parseBlobRef, postRefOf, postTargetOf, postsOf, proposalsOf, rank, sceneOf, sealFor, threadsOf, tooLong } from '@weave/core';
 import { type Actor, type BoardInfo, type ChannelInfo, type CoauthorRequest, type GranteeInfo, HOME_SOURCES, type InProject, type InSpace, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type PostsQuery, type ProjectInfo, type ProjectPage, type ProposalInfo, type ReplyInfo, type SessionRef, type ThreadInfo, noAgentError } from './backend.ts';
 import type { StoredSpace } from './spacestore.ts';
 import type { Access, Board, BoardRule, EventFields, Inner, Issue, Message, PostTarget, Proposal, SessionStamp, SpaceKind, Thread } from '@weave/core';
@@ -592,7 +592,7 @@ export class Content {
       if (input.channel && !channel) throw new Error('channel names use letters, digits and dashes');
       if (channel && channel !== DEFAULT_CHANNEL) body.channel = channel;
     }
-    if (input.replyTo) body.replyTo = this.core.find(input.replyTo, [KIND_MSG, KIND_REPLY]).id;
+    if (input.replyTo) body.replyTo = this.core.find(input.replyTo, [KIND_MSG, KIND_REPLY, KIND_WIDGET]).id;
     const stamp = this.#sessionStamp(input.session, input.as);
     if (stamp) body.session = stamp;
     const { id } = await this.node.publish({ kind: KIND_MSG, body, space: space.id, as: input.as });
@@ -601,7 +601,7 @@ export class Content {
 
   /** Take a chat message down: yours, or any in a space you maintain or moderate. It stays in the logs, out of sight. */
   async deleteMessage(input: { message: string; as?: string }): Promise<void> {
-    const message = this.core.find(input.message, [KIND_MSG, KIND_REPLY]);
+    const message = this.core.find(input.message, [KIND_MSG, KIND_REPLY, KIND_WIDGET]);
     const space = message.space && this.core.spaces.get(message.space.id);
     const mine = message.event.author === this.node.identity.author;
     if (!mine && !(space && mayDo(this.core.state(space), this.node.identity.author, 'curate').ok))
@@ -612,7 +612,7 @@ export class Content {
   async react(input: { target: string; emoji: string; on?: boolean; as?: string }): Promise<void> {
     const emoji = input.emoji?.trim();
     if (!emoji || emoji.length > 16) throw new Error('react with one emoji');
-    const target = this.core.find(input.target, [KIND_MSG, KIND_POST, KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
+    const target = this.core.find(input.target, [KIND_MSG, KIND_WIDGET, KIND_POST, KIND_THREAD, KIND_REPLY, KIND_ISSUE, KIND_PROPOSAL]);
     await this.node.publish({ kind: KIND_REACT, body: { target: target.id, emoji, on: input.on ?? true }, space: target.space?.id, as: input.as });
   }
 

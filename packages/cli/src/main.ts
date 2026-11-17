@@ -32,6 +32,7 @@ import {
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
+  type WidgetViewInfo,
   type Bundle,
   type CreateCompanyInput,
   type CommunityInfo,
@@ -405,6 +406,11 @@ chat, in a project (-p), group (-g) or community (-r), or in a post (--post <id>
   unsay <id>                 take a message down: yours, or any where you moderate (it stays in the logs)
   channels                   chat channels; add one with: channels add <name> [--text <topic>]
   react <id> <emoji>         react to a message, post, thread or issue; --off to take it back
+  widget list                the widgets you can send: the widget releases of the projects you're in
+  widget send <project>[@tag]  send a widget (a mini-app) into the chat   [-c <channel>] [--title <t>]; sending it approves it for you
+  widget view <id>           a widget in a chat: who sent which release, and once you approved it, its state and actions
+  widget approve <id>        let the release that widget message sends run here (once, by its fingerprint); --off takes it back
+  widget act <id> <action>   do one of its actions, signed by you (or --as <agent>)  [--input <json>]
 
 working together in a project (-p; ids: the first 8 characters are enough):
   thread start <title>       start a discussion         [--text <t>]
@@ -1031,6 +1037,15 @@ const postLine = (p: PostInfo) => {
 };
 const grantees = (list: BoardInfo['access']['read']) => (list?.length ? list.map((g) => (g.group ? `group:${g.name ?? g.group}` : (g.name ?? g.person))).join(', ') : 'maintainers only');
 /** How a board shows through its client service, in a line or two. */
+function widgetLine(v: WidgetViewInfo): string {
+  const from = `${v.app.name} ${v.app.tag} from ${v.app.projectName ?? v.app.project}${v.checked ? '' : ' (as its sender says)'}`;
+  const how = `${v.title} (${v.id.slice(0, 8)}): ${from}, sent by ${v.by.name ?? v.by.did}`;
+  if (v.problem) return `${how}\n  it can't run here: ${v.problem}`;
+  if (!v.approved) return `${how}\n  not approved: it runs here once you approve it (weave widget approve ${v.id.slice(0, 8)})`;
+  const actions = (v.actions ?? []).map((a) => (a && typeof a === 'object' && !Array.isArray(a) ? String((a as Record<string, unknown>).name) : '')).filter(Boolean);
+  return `${how}${actions.length ? `\n  actions: ${actions.join(', ')}` : ''}${v.site ? '\n  it has a view of its own: open the chat in Weave' : ''}`;
+}
+
 function lensLine(v: BoardViewInfo): string {
   if (!v.lens) return `${v.board.title}: no client service, just its posts`;
   const l = v.lens;
@@ -2931,7 +2946,8 @@ ${postLine(p)}`);
             const reply = m.replyTo ? `  ↪ ${actor(m.replyTo.by)}: ${m.replyTo.text.slice(0, 40)}\n` : '';
             const reactions = m.reactions.length ? `  ${m.reactions.map((r) => `${r.emoji}${r.count}`).join(' ')}` : '';
             const file = m.file ? `${m.text ? '\n  ' : ''}📎 ${m.file.name} (${fileSize(m.file.size)}, ${m.file.type})  ${m.file.ref}` : '';
-            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel || values.post ? '' : `#${m.channel} `}${m.text}${file}${reactions}`;
+            const widget = m.widget ? `▣ ${m.widget.title} (${m.widget.name} ${m.widget.app.tag}): weave widget view ${m.short}` : '';
+            return `${reply}${time}  ${m.short}  ${actor(m.by).padEnd(20)}  ${values.channel || values.post ? '' : `#${m.channel} `}${m.text}${widget}${file}${reactions}`;
           })
           .join('\n') || '(quiet so far)',
       );
@@ -2944,6 +2960,39 @@ ${postLine(p)}`);
       const file = values.file ? await uploadFile(b, values.file) : undefined;
       const m = await b.say({ space: values.post ? undefined : needSpace(), post: values.post, text, channel: values.channel, replyTo: values.reply, as: values.as, ...(file ? { file } : {}) });
       return out(m, () => `${actor(m.by)}: ${m.text}${m.file ? `${m.text ? '\n  ' : ''}📎 ${m.file.name} (${fileSize(m.file.size)})` : ''}`);
+    }
+
+    case 'widget': {
+      const [sub, ref] = args;
+      if (sub === 'list') {
+        const all = await (await backend()).widgetReleases();
+        return out(all, () => (all.length ? all.map((w) => `${w.name} ${w.tag}  from ${w.project.name}  weave widget send "${w.project.name}@${w.tag}"${w.approved ? '' : '  (not approved yet)'}`).join('\n') : 'no project of yours has released a widget yet'));
+      }
+      if (sub === 'send' && ref) {
+        const at = ref.lastIndexOf('@');
+        const [project, tag] = at > 0 ? [ref.slice(0, at), ref.slice(at + 1)] : [ref, undefined];
+        const view = await (await backend()).sendWidget({ space: values.post ? undefined : needSpace(), post: values.post, channel: values.channel, project, ...(tag ? { tag } : {}), ...(values.title ? { title: values.title } : {}), replyTo: values.reply, as: values.as });
+        return out(view, () => widgetLine(view));
+      }
+      if (sub === 'view' && ref) {
+        const view = await (await backend()).widgetView({ message: ref });
+        return out(view, () => `${widgetLine(view)}${view.state !== undefined ? `\n\n${JSON.stringify(view.state, null, 2)}` : ''}`);
+      }
+      if (sub === 'approve' && ref) {
+        const view = await (await backend()).approveWidget({ message: ref, off: values.off });
+        return out(view, () => widgetLine(view));
+      }
+      if (sub === 'act' && ref && args[2]) {
+        let input: unknown = null;
+        try {
+          input = values.input === undefined ? null : JSON.parse(values.input);
+        } catch {
+          throw new Error('--input is JSON');
+        }
+        const done = await (await backend()).widgetAction({ message: ref, action: args[2], input: input as never, as: values.as });
+        return out(done, () => `published ${done.published.length}: ${done.published.map((e) => e.kind).join(', ') || 'nothing'}\n${widgetLine(done.view)}`);
+      }
+      throw new Error('usage: weave widget list | send <project>[@tag] -g <group> [-c <channel>] [--title <t>] | view <id> | approve <id> [--off] | act <id> <action> [--input <json>]');
     }
 
     case 'get': {

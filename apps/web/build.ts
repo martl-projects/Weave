@@ -17,7 +17,7 @@ const DESKTOP = join(import.meta.dirname, '..', 'desktop');
 const version = (JSON.parse(readFileSync(join(DESKTOP, 'package.json'), 'utf8')) as { version: string }).version;
 const host = (file: string) => join(import.meta.dirname, 'src', 'host', file);
 
-const HOST: Record<string, string> = { fs: 'fs.ts', path: 'path.ts', os: 'os.ts', crypto: 'crypto.ts', url: 'url.ts' };
+const HOST: Record<string, string> = { fs: 'fs.ts', path: 'path.ts', os: 'os.ts', crypto: 'crypto.ts', url: 'url.ts', zlib: 'zlib.ts' };
 /** What the node builds as it loads, before anything is called. */
 const AT_LOAD: Record<string, string> = { 'net.BlockList': 'class { addSubnet() {} addAddress() {} check() { return false; } }' };
 const BARE = /^(sodium-native|sodium-universal|hyperswarm|hyperdht|oxc-minify|udx-native|@bytecodealliance\/.*|bare-.*)$/;
@@ -30,6 +30,8 @@ const SERVICES = ['unread', 'spotlight'];
  */
 const VERIFIERS = ['github-verify'];
 const SHIPPED = join(import.meta.dirname, '..', '..', 'packages', 'shipped', 'dist');
+/** jco's bindgen as jco-transpile ships it (its package doesn't export the file). */
+const BINDGEN = join(dirname(require.resolve('@bytecodealliance/jco-transpile')), '..', 'vendor', 'js-component-bindgen-component.js');
 
 const webHost: Plugin = {
   name: 'weave-web-host',
@@ -66,6 +68,13 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
   // The page's offline side, with a number of its own: a new one replaces the old caches.
   await build({ entryPoints: { sw: join(import.meta.dirname, 'src/sw.ts') }, outdir: dist, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { BUILD: JSON.stringify(Date.now().toString(36)) } });
   await build({ entryPoints: { service: join(import.meta.dirname, 'src/service.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
+  // Releases' pure components (lenses, widgets), transpiled in their Worker as they start: jco's bindgen, and its core
+  // modules next to it (it finds them by its own address).
+  // (Its node:fs is for Node only, behind a check: left out.)
+  await build({ entryPoints: { 'lens-transpile': join(import.meta.dirname, 'src/transpile.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', external: ['node:*'] });
+  for (const core of ['js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm']) copyFileSync(join(dirname(BINDGEN), core), join(dist, core));
+  // Their views, sandboxed: the page that builds each from its files (its own CSP: lensFrameCsp).
+  copyFileSync(join(import.meta.dirname, 'src', 'lens-frame.html'), join(dist, 'lens-frame.html'));
   await build({
     entryPoints: { worker: join(import.meta.dirname, 'src/worker.ts') },
     outdir: dist,
@@ -123,8 +132,24 @@ export async function buildRooms(dist: string, options: { web: string; storage: 
   await build({ entryPoints: [join(import.meta.dirname, 'rooms-worker.ts')], outfile: join(dist, 'rooms-worker.js'), bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { STORAGE_ORIGIN: define.STORAGE_ORIGIN, WEB_ORIGIN: define.WEB_ORIGIN } });
 }
 
-/** Where the page may frame websites from: any of their own origins (ROOMS_BASE with its {label} as *). */
-export const framesFrom = (rooms = 'https://{label}.weave-rooms.net'): string => rooms.replace('{label}', '*');
+/**
+ * Where the page may frame from: itself (lens-frame.html, the views of lenses and widgets, sandboxed by their own CSP)
+ * and websites' own origins (ROOMS_BASE with its {label} as *).
+ */
+export const framesFrom = (rooms = 'https://{label}.weave-rooms.net'): string => `'self' ${rooms.replace('{label}', '*')}`;
+
+/**
+ * lens-frame.html's own CSP, in place of the page's: sandboxed (an origin of its own, scripts only, so nothing of the
+ * page's storage or passkeys), framed by the page only, no network; the view's files are blob: addresses it makes.
+ * As LENS_CSP on a computer, with blob: for what it builds.
+ */
+export const lensFrameCsp = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline' blob:; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
+
+/**
+ * service.js's own CSP, in place of the page's: the same, and blob: scripts, the glue it transpiles for a release's
+ * pure component (transpile.ts) and imports. It reaches nothing else: no network beyond its manifest's hosts (none for those).
+ */
+export const serviceCsp = (storage: string): string => `default-src 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; connect-src ${connectSrc(storage)}`;
 
 /** Where the page may connect: itself, and its storage node when that's elsewhere (its socket and its handovers). */
 export const connectSrc = (storage: string): string => (storage ? `'self' ${storage} ${storage.replace(/^http/, 'ws')}` : "'self'");

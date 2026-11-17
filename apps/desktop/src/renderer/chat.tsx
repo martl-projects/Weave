@@ -16,6 +16,7 @@ import { AnnounceCard } from './announce.tsx';
 import { AttachedChip, AttachmentView, fileLine, isImage, MAX_FILE, playable, uploadFile } from './attachments.tsx';
 import { pastedFile } from './paste.ts';
 import { t, useTexts } from './texts.tsx';
+import { sendWidget, WidgetMessage, WidgetPicker } from './widgets.tsx';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '✅'];
 
@@ -135,6 +136,7 @@ function Message({
           {m.text && <div ref={textRef} className="msg-text" dangerouslySetInnerHTML={{ __html: html }} />}
           {m.file && <AttachmentView file={m.file} />}
           {m.announce && <AnnounceCard space={space} announce={m.announce} />}
+          {m.widget && <WidgetMessage m={m} meDid={meDid} />}
           {m.reactions.length > 0 && (
             <div className="reactions">
               {m.reactions.map((r) => (
@@ -215,6 +217,14 @@ function Composer({
   // One file per message: picked here, uploaded when sent (shrunk if it is a picture), taken off with ✕ before.
   const [file, setFile] = useState<File>();
   const [uploading, setUploading] = useState(false);
+  // The + menu: a file or image, or a mini-app (a widget) sent into this chat.
+  const [adding, setAdding] = useState<'menu' | 'widget'>();
+  useEffect(() => {
+    if (adding !== 'menu') return;
+    const close = (e: MouseEvent) => !(e.target as Element).closest?.('.attach-menu, .attach-btn') && setAdding(undefined);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [adding]);
   const fileInput = useRef<HTMLInputElement>(null);
   const take = (picked: File) => {
     // Pictures shrink before the check; anything else is sent as it is.
@@ -338,7 +348,7 @@ function Composer({
       {file && <AttachedChip file={file} uploading={uploading} onRemove={() => setFile(undefined)} />}
       <div className={`composer${replyTo || file ? ' with-reply' : ''}`}>
         <input ref={fileInput} type="file" hidden onChange={pick} />
-        <button className="emoji-btn attach-btn" title={t('msg.attach')} disabled={uploading} onClick={() => fileInput.current?.click()}>
+        <button className="emoji-btn attach-btn" title={t('msg.attach.more')} aria-haspopup="menu" disabled={uploading} onClick={() => setAdding((a) => (a ? undefined : 'menu'))}>
           <Icon name="attachment" />
         </button>
         <textarea
@@ -354,6 +364,25 @@ function Composer({
           <Icon name="emoji" />
         </button>
       </div>
+      {adding === 'menu' && (
+        <div className="attach-menu window" role="menu">
+          <button role="menuitem" onClick={() => (setAdding(undefined), fileInput.current?.click())}>
+            <Icon name="attachment" /> {t('msg.attach')}
+          </button>
+          <button role="menuitem" onClick={() => setAdding('widget')}>
+            <Icon name="zap" /> {t('msg.attach.widget')}
+          </button>
+        </div>
+      )}
+      {adding === 'widget' && (
+        <WidgetPicker
+          onClose={() => setAdding(undefined)}
+          onPick={(release) => {
+            setAdding(undefined);
+            void sendWidget(post ? { post } : { space: space.id, channel }, release);
+          }}
+        />
+      )}
       <CharCount length={text.length} max={TEXT_LIMITS.text} onlyNear />
       {picking && (
         <EmojiPicker
@@ -415,7 +444,7 @@ export function ChatView({ space, channel = 'general', post, meDid, meName, memb
     estimateSize: (i) => {
       if (rows[i]?.kind === 'day') return 44;
       const row = rows[i] as Extract<Row, { kind: 'msg' }>;
-      return (row.compact ? 26 : 62) + (row.m.file ? (isImage(row.m.file.type) || playable(row.m.file.type) === 'video' ? 270 : playable(row.m.file.type) ? 90 : 40) : 0);
+      return (row.compact ? 26 : 62) + (row.m.widget ? row.m.widget.height + 40 : 0) + (row.m.file ? (isImage(row.m.file.type) || playable(row.m.file.type) === 'video' ? 270 : playable(row.m.file.type) ? 90 : 40) : 0);
     },
     overscan: 12,
     getItemKey: (i) => rows[i].key,

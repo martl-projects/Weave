@@ -186,6 +186,7 @@ export interface BrowserHandover {
 }
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
+import { Widgets } from './widgets.ts';
 import { Marks } from './marks.ts';
 import { Hints, type HeldNotice } from './hints.ts';
 import { RemoteAccess } from './remote.ts';
@@ -899,6 +900,8 @@ export class WeaveNode implements Backend {
   #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
   /** Boards' client services, run here for this member. */
   #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services);
+  /** Group widgets: mini-apps sent into chats, run here for this member once they approved the release (docs/group-widgets.md). */
+  #widgets: Widgets = this.#lensesSeeWidgets(new Widgets(WeaveNode.servicesHost(this), () => this.#services));
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
   #marks: Marks = new Marks(WeaveNode.servicesHost(this));
   #hints: Hints = new Hints(WeaveNode.servicesHost(this), (since) => this.#heldNotices(since));
@@ -3664,6 +3667,8 @@ export class WeaveNode implements Backend {
       /** The Weave project: where Weave announces itself (and its new versions); its maintainers speak for Weave. */
       weaveProject: () => n.config.updates?.project ?? UPDATE_SOURCE.project,
       clock: () => n.clock(),
+      /** Where a post's chat lives (a project's own chat is its channels). */
+      chatOf: (ref: string) => n.#chatOf(ref),
       project: n.#kernel.project.bind(n.#kernel),
       publish: n.publish.bind(n),
       get releases() {
@@ -3806,6 +3811,36 @@ export class WeaveNode implements Backend {
 
   lensFile(...args: Parameters<Lenses['lensFile']>): ReturnType<Lenses['lensFile']> {
     return this.#lenses.lensFile(...args);
+  }
+
+  lensSite(...args: Parameters<Lenses['lensSite']>): ReturnType<Lenses['lensSite']> {
+    return this.#lenses.lensSite(...args);
+  }
+
+  /** A widget's view is served as a lens's is (lensFile), once you approved it. */
+  #lensesSeeWidgets(widgets: Widgets): Widgets {
+    this.#lenses.widgetSite = (release) => widgets.site(release);
+    return widgets;
+  }
+
+  widgetReleases(...args: Parameters<Widgets['widgetReleases']>): ReturnType<Widgets['widgetReleases']> {
+    return this.#widgets.widgetReleases(...args);
+  }
+
+  sendWidget(...args: Parameters<Widgets['sendWidget']>): ReturnType<Widgets['sendWidget']> {
+    return this.#widgets.sendWidget(...args);
+  }
+
+  widgetView(...args: Parameters<Widgets['widgetView']>): ReturnType<Widgets['widgetView']> {
+    return this.#widgets.widgetView(...args);
+  }
+
+  widgetAction(...args: Parameters<Widgets['widgetAction']>): ReturnType<Widgets['widgetAction']> {
+    return this.#widgets.widgetAction(...args);
+  }
+
+  approveWidget(...args: Parameters<Widgets['approveWidget']>): ReturnType<Widgets['approveWidget']> {
+    return this.#widgets.approveWidget(...args);
   }
 
   marks(...args: Parameters<Marks['marks']>): ReturnType<Marks['marks']> {

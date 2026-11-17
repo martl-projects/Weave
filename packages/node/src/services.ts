@@ -1507,16 +1507,17 @@ export class Services {
 
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */
   async locateArtifact(a: StoredArtifact, platform = platformKey()): Promise<Located | undefined> {
-    if (!this.h.spaces.has(a.project)) return undefined;
     // One that hands out artifacts from where this one's files are (any source, if its contract names none).
     const source = artifactSourceOf(a.manifest)?.provider;
-    // A release from Weave: its blobs, from whoever holds them, put together and checked here. No provider asked.
+    // A release from Weave: its blobs, from whoever holds them, put together and checked here. No provider asked, so
+    // no need to be in its project: a group widget's members fetch it from whoever holds it (widgets.ts).
     if (source === WEAVE_SOURCE) {
       const asset = a.manifest.install?.assets?.[platform];
       if (!asset) return undefined;
       const body = await assembleFile(a.manifest, asset, (hash) => this.h.blobs.fetch(hash, (hashes) => this.h.wantBlobs(hashes), this.blobWait));
       return { body, by: 'Weave, from the project' };
     }
+    if (!this.h.spaces.has(a.project)) return undefined;
     const provider = (await this.servicesIn(a.project)).find((p) => p.contract.offers?.includes(PROTOCOL_ARTIFACT_FETCH) && (!p.contract.sources || !source || p.contract.sources.includes(source)));
     // Open code: the fetcher gets it as it is, with nobody's grant (the provider needn't be there).
     const asset = a.manifest.install?.assets?.[platform];

@@ -27,13 +27,15 @@ function Words({ words }: { words: string }) {
   const list = words.split(' ');
   return (
     <>
-      <ol className="words sunken">
-        {list.map((w, i) => (
-          <li key={i}>
-            <span className="n">{i + 1}.</span> {w}
-          </li>
-        ))}
-      </ol>
+      <div className="words-box">
+        <ol className="words sunken">
+          {list.map((w, i) => (
+            <li key={i}>
+              <span className="n">{i + 1}.</span> {w}
+            </li>
+          ))}
+        </ol>
+      </div>
       {/* All 24 at once, numbered one per line: a restore takes them back as they are. */}
       <div className="buttons">
         <button id="copy-words" type="button" onClick={() => void navigator.clipboard.writeText(list.map((w, i) => `${i + 1}. ${w}`).join('\n')).then(() => toast(t('onboard.words.copied')))}>

@@ -60,7 +60,7 @@ export function packFolder(from: string): PackedRelease {
   const manifest = checked.manifest;
   // What it brings: the components and folders its manifest names (a service's, a client service's, a mark or hint service's).
   const parts = new Map<string, string>();
-  for (const [what, block] of [['wasm', manifest.wasm], ['client', manifest.client], ['marks', manifest.marks], ['hints', manifest.hints]] as const) {
+  for (const [what, block] of [['wasm', manifest.wasm], ['client', manifest.client], ['widget', manifest.widget], ['marks', manifest.marks], ['hints', manifest.hints]] as const) {
     if (!block) continue;
     for (const key of ['component', 'site', 'panel'] as const) {
       const path = (block as unknown as Record<string, unknown>)[key];

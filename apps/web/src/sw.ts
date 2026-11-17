@@ -18,8 +18,9 @@ declare const self: { addEventListener(type: string, listener: (event: WorkerEve
 declare const BUILD: string;
 
 const CACHE = `weave-${BUILD}`;
-const SHELL = ['/', '/app.js', '/worker.js', '/service.js', '/styles.css', '/sqlite3.wasm', '/shipped-web.json', '/manifest.json', '/icon.png', '/icon-192.png'];
-const LARGE = /^\/(services|avatar3d)\/|^\/sqlite3\.wasm$/;
+const SHELL = ['/', '/app.js', '/worker.js', '/service.js', '/styles.css', '/sqlite3.wasm', '/shipped-web.json', '/manifest.json', '/icon.png', '/icon-192.png', '/lens-frame'];
+// The transpiler of lenses and widgets (and its bindgen) too: fetched the first time one is shown, then kept.
+const LARGE = /^\/(services|avatar3d)\/|^\/sqlite3\.wasm$|^\/lens-transpile\.js$|^\/js-component-bindgen-component\.core2?\.wasm$/;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

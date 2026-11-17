@@ -33,6 +33,7 @@ describe('node:crypto in a browser', () => {
   it('hashes as Node does', () => {
     expect(crypto.createHash('sha256').update('weave').update(new Uint8Array([1, 2])).digest('hex')).toBe(createHash('sha256').update('weave').update(new Uint8Array([1, 2])).digest('hex'));
     expect(crypto.createHash('sha1').update('a').digest('base64')).toBe(createHash('sha1').update('a').digest('base64'));
+    expect(crypto.createHash('sha256').update('fingerprint?').digest('base64url' as BufferEncoding)).toBe(createHash('sha256').update('fingerprint?').digest('base64url'));
     expect(new Uint8Array(crypto.createHash('sha256').update('a').digest() as Uint8Array)).toEqual(new Uint8Array(createHash('sha256').update('a').digest()));
     expect(crypto.createHmac('sha256', 'key').update('a').digest('hex')).toBe(createHmac('sha256', 'key').update('a').digest('hex'));
   });

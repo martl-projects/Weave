@@ -96,6 +96,39 @@ export class Releases {
     return { body: res.body, ...(size > 0 ? { size } : {}), from: located.by };
   }
 
+  /**
+   * A release file in memory, refused unless it matches the fingerprint published and is at most `limit` bytes: for a
+   * pure component (a lens, a widget), unpacked by Weave itself, on a computer as in a page (lenses.ts).
+   */
+  async bytes(a: ArtifactRef, asset: AppAsset, limit: number): Promise<Uint8Array> {
+    if (asset.size && asset.size > limit) throw new Error(`${a.manifest.name} ${a.tag}: ${asset.file} is larger than Weave fetches for it (${Math.round(limit / 1024 / 1024)} MB)`);
+    const download = await this.#download(a, asset);
+    const hash = createHash('sha256');
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = download.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`${a.manifest.name} ${a.tag}: ${asset.file} is larger than Weave fetches for it (${Math.round(limit / 1024 / 1024)} MB)`);
+      }
+      hash.update(value);
+      chunks.push(value);
+    }
+    const got = hash.digest('hex');
+    if (got !== asset.sha256) throw new Error(`the downloaded file isn't the one the project published (SHA-256 ${got.slice(0, 12)}…, expected ${asset.sha256.slice(0, 12)}…): not installed`);
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.byteLength;
+    }
+    return out;
+  }
+
   /** Download a release file into dir/<tag>, refuse it unless it matches the fingerprint published, unpack it: its folder. */
   async fetch(dir: string, a: ArtifactRef, asset: AppAsset, job: InstallJob): Promise<string> {
     mkdirSync(dir, { recursive: true });

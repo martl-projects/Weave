@@ -90,6 +90,8 @@ const MAY_USE_NODE = [
   'webpush.ts',
   'website.ts',
   'websocket.ts',
+  // Group widgets: the lens runtime's other half (lenses.ts), with each member's approvals in a file of their home.
+  'widgets.ts',
 ];
 
 /** The core: what runs wherever JavaScript runs. It imports no node:* module and nothing else as a value: types only. */

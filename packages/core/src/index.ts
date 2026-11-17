@@ -173,12 +173,14 @@ export {
   type Issue,
   type IssueStatus,
   type Message,
+  type MessageWidget,
   type Proposal,
   type Reaction,
   type Reply,
   type Tally,
   type Thread,
 } from './collab.ts';
+export { KIND_WIDGET, widgetEventsOf, widgetMayWrite, widgetOf, widgetPartsOf, type Widget, type WidgetApp } from './widgets.ts';
 export {
   BOARD_TYPES,
   boardName,
@@ -429,7 +431,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, unrunnableRelease, releaseProgram, programPlatforms, type ReleaseProgram, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, unrunnableRelease, releaseProgram, programPlatforms, type ReleaseProgram, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppWidget, WIDGET_HEIGHT, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { attachmentOf, BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, FILE_NAME_LIMIT, fileName, formatBlobRef, isImageType, isMediaType, MAX_BLOB, parseBlobRef, type Attachment, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,

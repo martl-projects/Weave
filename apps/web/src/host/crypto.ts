@@ -24,8 +24,10 @@ function digesting(state: { update(data: Uint8Array): unknown; digest(): Uint8Ar
       state.update(bytes(data, encoding));
       return self;
     },
-    digest(encoding?: BufferEncoding) {
+    digest(encoding?: BufferEncoding | 'base64url') {
       const out = Buffer.from(state.digest());
+      // The buffer package knows no base64url (a fingerprint's, as applaunch.ts makes them).
+      if (encoding === 'base64url') return out.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       return encoding ? out.toString(encoding) : out;
     },
   };

@@ -29,7 +29,7 @@ async function until<T>(what: string, ready: () => Promise<T | undefined | false
 }
 
 function startServer(): ChildProcess {
-  return spawn(process.execPath, [join(import.meta.dirname, 'dev.ts')], { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+  return spawn(process.execPath, [join(import.meta.dirname, 'dev.ts')], { env: { ...process.env, PORT: String(PORT) }, stdio: process.env.SERVER_LOG ? 'inherit' : 'ignore' });
 }
 
 /** The DevTools protocol, as far as this needs it. */
@@ -173,6 +173,27 @@ try {
   const linked = await call('linkAccount', { platform: 'github', handle: 'octocat', proof: 'https://gist.github.com/octocat/6cad326836d38bd3a7ae' });
   if (!/doesn't hold/.test(linked.error ?? '')) throw new Error(`GitHub's verifier didn't answer: ${linked.error ?? 'it held'}`);
   passed("GitHub's verifier asks GitHub, from the browser");
+
+  // A widget Lena sends into Climb, released in a project the browser isn't in: nothing of it runs before it's approved;
+  // then its component, fetched and checked by the node, is transpiled in its Worker, folds, and a vote of the browser's
+  // reaches Lena. Its view builds itself from its files in its sandboxed frame (lens-frame.html) in the group's chat.
+  const widget = (await (await fetch(`${ORIGIN}/dev/widget`)).json()) as { id: string };
+  type WidgetView = { approved: boolean; state?: { votes?: Array<{ choice: string }> }; problem?: string };
+  const unapproved = await until('the widget', async () => (await call<WidgetView>('widgetView', { message: widget.id })).result, 30_000);
+  if (unapproved.approved || unapproved.state !== undefined) throw new Error(`the widget ran before it was approved: ${JSON.stringify(unapproved)}`);
+  const approved = await call<WidgetView>('approveWidget', { message: widget.id });
+  if (approved.error || approved.result?.problem || !approved.result?.state) throw new Error(`the widget didn't run: ${approved.error ?? approved.result?.problem ?? 'no state'}`);
+  const voted = await call('widgetAction', { message: widget.id, action: 'vote', input: { choice: 'web' } });
+  if (voted.error) throw new Error(`the widget's action failed: ${voted.error}`);
+  const refused = await call('widgetAction', { message: widget.id, action: 'post' });
+  if (!/never proposes weave.post/.test(refused.error ?? '')) throw new Error(`a widget proposed weave.post: ${refused.error ?? 'it went through'}`);
+  await until("Lena's node folding the vote", async () => JSON.stringify(await (await fetch(`${ORIGIN}/dev/widget-state?id=${widget.id}`)).json()).includes('"web"'), 40_000);
+  passed('a widget runs only once approved, transpiled in the page, and its vote reaches the group');
+  const climb = (await call<Array<{ id: string; name: string }>>('spaces')).result!.find((s) => s.name === 'Climb')!;
+  await run(`location.hash = ${JSON.stringify(`#/g/${climb.id}`)}`);
+  await until("the widget's view, built in its frame", () => run<boolean>(`document.querySelector('iframe.widget-frame')?.dataset.loaded === '1'`), 40_000);
+  if ((await run<string>(`document.querySelector('iframe.widget-frame').getAttribute('sandbox')`)) !== 'allow-scripts') throw new Error("the widget's frame isn't sandboxed as it should be");
+  passed("the widget's view shows in the chat, sandboxed");
 
   // Lena's website, in a tab of its own (its own origin) that reaches her computer through the storage node's relay: the
   // page, what its script asks for, and the cookie it set, all through the tunnel.

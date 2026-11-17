@@ -484,6 +484,65 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
   );
 
   server.registerTool(
+    'weave_widgets',
+    {
+      title: 'Widgets you can send',
+      description:
+        "The widgets (mini-apps for a chat, like a game or a poll) the projects this person is in have released: the latest of each, with whether this person approved it. Send one with weave_widget_send.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    run(async () => backend.widgetReleases()),
+  );
+
+  server.registerTool(
+    'weave_widget_send',
+    {
+      title: 'Send a widget',
+      description:
+        "Send a widget (a mini-app: a game, a poll…) into a chat: a channel (default \"general\") of a group, project or community, or a post's chat. It's a release of a project this person is in (weave_widgets lists them). The message is one instance: everyone in the chat who approved the release sees it and can act in it. Sent by an agent, it doesn't approve the release for its person.",
+      inputSchema: {
+        project: z.string().describe('The project that released it'),
+        tag: z.string().optional().describe('Its release tag (default: the latest)'),
+        space: z.string().optional().describe('Group, project or community name or id'),
+        post: z.string().min(6).optional().describe("Into this post's chat instead of a channel"),
+        channel: z.string().optional(),
+        title: z.string().optional().describe("What this instance is called in the chat (default: the release's name)"),
+      },
+    },
+    run(async ({ project, tag, space, post, channel, title }: { project: string; tag?: string; space?: string; post?: string; channel?: string; title?: string }) => backend.sendWidget({ project, tag, space, post, channel, title, as })),
+  );
+
+  server.registerTool(
+    'weave_widget_view',
+    {
+      title: 'Widget view',
+      description:
+        "A widget in a chat (its message id): who sent which release, and whether this person approved it. Once approved, its state and actions ({name, label, input?}); until then nothing of it runs, and only the person can approve it, in the Weave app. Do an action with weave_widget_action.",
+      inputSchema: { message: z.string().min(6).describe("The widget message's id") },
+      annotations: { readOnlyHint: true },
+    },
+    run(async ({ message }: { message: string }) => backend.widgetView({ message })),
+  );
+
+  server.registerTool(
+    'weave_widget_action',
+    {
+      title: 'Widget action',
+      description:
+        "Do one of the actions a widget offers (weave_widget_view lists them, with the input each takes): the widget proposes events of its own kinds about this instance only, and you sign them with your own permissions. Returns what was published and the widget's new state.",
+      inputSchema: {
+        message: z.string().min(6).describe("The widget message's id"),
+        action: z.string().describe('Its name, as weave_widget_view lists it'),
+        input: z.any().optional().describe('What the action takes (JSON), as weave_widget_view describes it'),
+      },
+    },
+    run(async ({ message, action, input }: { message: string; action: string; input?: unknown }) =>
+      backend.widgetAction({ message, action, input: (input ?? null) as Parameters<Backend['widgetAction']>[0]['input'], as }),
+    ),
+  );
+
+  server.registerTool(
     'weave_marks',
     {
       title: 'Marks',

@@ -91,6 +91,12 @@ export interface AppManifest {
    */
   client?: AppClient;
   /**
+   * A group widget: a mini-app sent into a chat, one instance per message (weave.widget), run by every member's own
+   * node who approved its release (the same board world as a client service: packages/sdk/wit/service.wit). Its
+   * events are of its own kinds only, each about its instance (`target`). docs/group-widgets.md.
+   */
+  widget?: AppWidget;
+  /**
    * A mark service: what shows next to names, from an issuer someone chose (the marks world of
    * packages/sdk/wit/service.wit; docs/v2-stage19.md). Pure like a client service, run by every node that took it in.
    */
@@ -142,6 +148,20 @@ export interface AppClient {
   component: string;
   site?: string;
   writes: string[];
+}
+
+/** The height a widget asks for in a chat, in CSS pixels: between these, and this one when it says none. */
+export const WIDGET_HEIGHT = { min: 120, max: 720, default: 320 } as const;
+
+/**
+ * A group widget's parts in its package, the kinds its actions may propose (its own only, never Weave's: each about
+ * its instance), and how tall it wants to be in a chat.
+ */
+export interface AppWidget {
+  component: string;
+  site?: string;
+  writes: string[];
+  size?: { height: number };
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
@@ -600,7 +620,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   }
   let services: AppService[] = [];
   if (!Array.isArray(m.services) || m.services.length === 0) {
-    if (m.service === undefined && m.client === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined && m.marks === undefined && m.hints === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
+    if (m.service === undefined && m.client === undefined && m.widget === undefined && m.fetcher === undefined && m.file === undefined && m.verifier === undefined && m.keyvault === undefined && m.marks === undefined && m.hints === undefined) problems.push('a manifest says what it does: its web page ("services", like [{"port": 3000}]), its contract ("service"), or both');
   } else {
     if (m.services.length > 8) warnings.push('only the first 8 services count');
     services = m.services.slice(0, 8).flatMap((raw, i): AppService[] => {
@@ -742,6 +762,25 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (raw.site !== undefined && !site) problems.push('"client.site" is the folder of its renderer in the package, like "site"');
     else client = { component, ...(site ? { site } : {}), writes };
   }
+  // A group widget: as a client service, but its kinds are its own only (never Weave's), and it says its height.
+  let widget: AppWidget | undefined;
+  if (m.widget !== undefined) {
+    const raw = (m.widget && typeof m.widget === 'object' && !Array.isArray(m.widget) ? m.widget : {}) as Record<string, unknown>;
+    const component = packagePath(raw.component);
+    const site = raw.site === undefined ? undefined : packagePath(raw.site);
+    const named = Array.isArray(raw.writes) ? raw.writes.filter((k): k is string => typeof k === 'string') : [];
+    const writes = [...new Set(named.filter((k) => /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(k)))].slice(0, 20);
+    const sizeRaw = (raw.size && typeof raw.size === 'object' && !Array.isArray(raw.size) ? raw.size : {}) as Record<string, unknown>;
+    const height = Number(sizeRaw.height);
+    if (!component || !/\.wasm$/i.test(component)) problems.push('"widget.component" is where its component is in the package, like "board.wasm"');
+    else if (raw.site !== undefined && !site) problems.push('"widget.site" is the folder of its renderer in the package, like "site"');
+    else if (writes.some((k) => k.startsWith('weave.'))) problems.push(`"widget.writes" names kinds of its own only, never Weave's (not ${writes.filter((k) => k.startsWith('weave.')).join(', ')}): a widget's events are about its instance alone`);
+    else if (raw.size !== undefined && (!Number.isFinite(height) || height <= 0)) problems.push('"widget.size" says how tall it wants to be in a chat, in pixels: {"height": 320}');
+    else {
+      if (named.length !== writes.length) warnings.push('"widget.writes" lists kinds like "tiles.move": the others are left out');
+      widget = { component, ...(site ? { site } : {}), writes, ...(raw.size !== undefined ? { size: { height: Math.round(Math.min(WIDGET_HEIGHT.max, Math.max(WIDGET_HEIGHT.min, height))) } } : {}) };
+    }
+  }
   // A mark service: where its component is, what it reads, and where it answers.
   let marks: AppMarks | undefined;
   if (m.marks !== undefined) {
@@ -759,7 +798,7 @@ export function checkManifest(input: unknown): ManifestCheck {
     else if (marks) problems.push('a manifest is a mark service or a hint service, not both: claims and counts never look alike');
     else hints = parsed.hints;
   }
-  if (!m.wasm && !m.client && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined && rawStart.release === undefined)
+  if (!m.wasm && !m.client && !m.widget && !m.marks && !m.hints && m.file === undefined && rawStart.image === undefined && rawStart.release === undefined)
     warnings.push('nothing for Weave to run sealed off: a release of it runs only as a container image (start.image) or WebAssembly (wasm), or as the program per platform it brings (start.release), behind a warning; as a description alone, whoever wants it runs it themselves and opens a website by its port');
   const start =
     hint || command || release || image
@@ -814,7 +853,7 @@ export function checkManifest(input: unknown): ManifestCheck {
   for (const e of env) if (e.choose && !service?.actions?.some((x) => x.name === e.choose!.action)) problems.push(`env: ${e.name} is picked from what its action ${e.choose.action} lists, but its service has no such action`);
 
   if (problems.length) return { problems, warnings };
-  return { problems, warnings, manifest: { app, name, ...(about ? { about } : {}), version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(hints ? { hints } : {}), ...(lists.length && service ? { lists } : {}) } };
+  return { problems, warnings, manifest: { app, name, ...(about ? { about } : {}), version: Number.isInteger(m.version) ? (m.version as number) : 1, services, ...(start ? { start } : {}), ...(install ? { install } : {}), ...(env.length ? { env } : {}), ...(service ? { service } : {}), ...(wasm ? { wasm } : {}), ...(client ? { client } : {}), ...(widget ? { widget } : {}), ...(fetcher ? { fetcher } : {}), ...(file ? { file } : {}), ...(verifier ? { verifier } : {}), ...(keyvault ? { keyvault } : {}), ...(marks ? { marks } : {}), ...(hints ? { hints } : {}), ...(lists.length && service ? { lists } : {}) } };
 }
 
 /**
@@ -876,6 +915,7 @@ export const MANIFEST_RULES = [
   'keyvault and fetcher: client apps a person adds for themselves (Keys & devices), from Weave or from any project\'s release, approved once and pinned to what was released; WebAssembly components, run sandboxed. A keyvault ({"platform": "acme", "net": ["api.acme.example"], "resources": "buckets"}, world keyvault) holds its person\'s access to a platform and mints services only what their contracts declare ("uses") for what its person handed each project; a fetcher ({"net": [...]}, world fetcher) fetches release files a provider grants.',
   'lists: what a service hands out, shown by Weave the same way in every card, however it runs (WebAssembly, a container, a program), whoever made it (search, pages, each button only for who may): its lists come first, before any page of its own. Each names the action that answers its items, + (add: an action, or {"hand": "github"}: whoever runs it hands one from their keyvault), the trash can (remove: an action, given {id}) and each item’s main button (use: an action and a label, or {"account": "github", "label": "Get access"}), and "covers" for other actions its items offer: [{"name": "repos", "title": "Repositories", "item": "access offer", "list": "offers", "add": {"hand": "github"}, "remove": {"action": "decline"}, "use": {"account": "github", "label": "Get access"}}]. Its list action answers [{id, icon?, title, badge?, detail?, url?, done? (said instead of the main button: "✓ You have access"), use?: false, remove?: false, more?: [{action, label, icon?, confirm?}]}], or, for a long list it pages itself, {items, next}, asked again with {query, cursor}. A page of its own (wasm.panels) only for what isn’t a list: a form of several steps, a live view.',
   'client: a client service, which shows a board its own way (the board world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --lens): {"component": "board.wasm", "site": "site", "writes": ["weave.post", "kanban.move"]}. Released like wasm (an image for wasi/wasm, or a release file for "wasm"); a project\'s maintainers pin it to a board (weave board lens), and every member\'s Weave runs it with no key and no network. "writes": the kinds its actions may propose, which members sign: of Weave\'s own only posts and what members do with posts; kinds of its own name a post in the board ("target").',
+  'widget: a group widget, a mini-app anyone in a chat sends into it (the board world too; docs/group-widgets.md): {"component": "board.wasm", "site": "site", "writes": ["tiles.move"], "size": {"height": 360}}. Released like a client service, and one release may be both. Each message that sends it (weave.widget) is one instance; every member’s Weave runs it, once they approved the release, with no key, no network, no clock and no randomness: it folds its instance’s events and its actions propose events the member signs. "writes": kinds of its own only, never Weave’s, each about its instance ("target": the message). "size": its height in the chat, in pixels (120 to 720; 320 when left out).',
   'marks: a mark service, which shows marks next to names (the marks world of packages/sdk/wit/service.wit; a starter: weave service new <folder> --marks): {"component": "marks.wasm", "reads": ["weave.badge"], "slots": ["author", "member", "chat", "profile"], "subjects": ["did"]}. Released like wasm. You take it into your own domain (weave marks add), shown everywhere you look; or a space\'s maintainers pin it (weave marks add --space), shown in that space only. Every node that took it in runs it with no key and no network. "reads": the kinds it folds. It answers with check, label, count, symbol or image, and Weave shows who says so.',
   'hints: a hint service, which shows numbers about its person\'s own state next to places, like unread counts (the marks world too): {"component": "hints.wasm", "reads": ["weave.notice", "weave.seen"], "slots": ["place"], "subjects": ["space", "board", "channel"]}. Released like wasm; its person takes it in (weave hints add) and its counts show in their Places. It folds what their node holds of the kinds it reads, what\'s sealed to them too, and the notices their node works out (weave.notice), with no key and no network. It answers with a count, never a claim about anyone.',
   'install.steps: how to install it by hand, for agents (from a checkout). install.source, tag and assets are added when a release is published (weave app release, through the project\'s provider): don\'t write them.',
@@ -889,7 +929,7 @@ export const MANIFEST_RULES = [
  * mark service (what shows next to names: yours, or pinned to a space), or a file (something to get). There are no
  * programs: what only has ports (tcp ones too) is a website.
  */
-export type ArtifactKind = 'service' | 'website' | 'board-view' | 'fetcher' | 'keyvault' | 'marks' | 'hints' | 'file';
+export type ArtifactKind = 'service' | 'website' | 'board-view' | 'widget' | 'fetcher' | 'keyvault' | 'marks' | 'hints' | 'file';
 
 export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (m.file) return 'file';
@@ -898,6 +938,7 @@ export function artifactKindOf(m: AppManifest): ArtifactKind {
   if (m.fetcher) return 'fetcher';
   if (m.keyvault) return 'keyvault';
   if (m.client) return 'board-view';
+  if (m.widget) return 'widget';
   const site = !!m.wasm?.site || m.services.some((s) => s.protocol === 'http');
   // A website reads nothing and writes nothing: it only shows its page (and holds its visitors' game).
   if (site && (!m.service || (m.service.reads === 'nothing' && !m.service.writes.length))) return 'website';

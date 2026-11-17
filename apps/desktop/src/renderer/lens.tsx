@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
@@ -13,6 +13,10 @@ import { useTexts } from './texts.tsx';
  *   from the frame  {weave: 'act', id, name, input}                do an action (signed by you, with your rights)
  *                   {weave: 'open', post}                          open a post in Weave
  *   to the frame    {weave: 'acted', id, error?}                   how that went
+ *   from the frame  {weave: 'files'} / {weave: 'loaded'}            Weave Web's frame: the view's files, please / built
+ *   to the frame    {weave: 'files', files: [{path, type, data}]}  (apps/web/src/lens-frame.html)
+ *
+ * A chat's widget (widgets.tsx) talks the same way: its 'view' carries {widget: {id, title}} instead of board.
  *
  * Suggested lenses are each member's choice (kept on this computer); required ones are how the board shows.
  */
@@ -42,29 +46,25 @@ export function useLensChoice(space: SpaceInfo, board?: BoardInfo): [boolean, (o
   return [board?.lens?.mode === 'require' || chosen, choose];
 }
 
-export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; board: BoardInfo; meDid: string; onOpen(post: string): void }) {
-  const { t } = useTexts();
-  const { data: view, error } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
+/**
+ * A client service's renderer in its sandboxed frame, a board's lens or a chat's widget (widgets.tsx): it gets what
+ * `view` says whenever that changes, asks for actions (`act`, signed by you with your rights) and to open posts.
+ * Only its own frame is listened to, nothing else on the page.
+ */
+export function LensFrame({ title, release, base, view, act, onOpen, className, style }: { title: string; release: string; base: string; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const frame = useRef<HTMLIFrameElement>(null);
-  // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
-  const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
-  const latest = useRef(view);
-  latest.current = view;
-
+  const latest = useRef({ view, act, onOpen, release });
+  latest.current = { view, act, onOpen, release };
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
-  const sendView = () => {
-    const v = latest.current;
-    if (v) send({ weave: 'view', state: v.state ?? null, actions: v.actions ?? [], board: v.board, me: { did: meDid } });
-  };
+  const sendView = () => send(latest.current.view);
   useEffect(sendView, [view]);
 
   useEffect(() => {
     const listen = (event: MessageEvent) => {
-      // Only its own frame, nothing else on the page.
       if (!frame.current || event.source !== frame.current.contentWindow) return;
       const m = event.data as { weave?: string; id?: unknown; name?: unknown; input?: unknown; post?: unknown };
       if (m?.weave === 'act' && typeof m.name === 'string') {
-        api<{ view: BoardViewInfo }>('boardAction', { space: space.id, board: board.name, action: m.name, input: m.input ?? null }).then(
+        latest.current.act(m.name, m.input ?? null).then(
           () => {
             send({ weave: 'acted', id: m.id });
             bump();
@@ -75,11 +75,31 @@ export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; bo
           },
         );
       }
-      if (m?.weave === 'open' && typeof m.post === 'string') onOpen(m.post);
+      if (m?.weave === 'open' && typeof m.post === 'string') latest.current.onOpen?.(m.post);
+      // Weave Web's frame (apps/web/src/lens-frame.html) asks for the view's files, builds its page, and says so.
+      if (m?.weave === 'files')
+        api<Array<{ path: string; type: string; data: string }>>('lensSite', { release: latest.current.release }).then(
+          (files) => send({ weave: 'files', files }),
+          (e: Error) => toast(e.message, 'error'),
+        );
+      if (m?.weave === 'loaded') {
+        frame.current.dataset.loaded = '1';
+        sendView();
+      }
     };
     window.addEventListener('message', listen);
     return () => window.removeEventListener('message', listen);
-  }, [space.id, board.name]);
+  }, []);
+
+  return <iframe ref={frame} className={className ?? 'lens-frame'} style={style} title={title} src={base} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
+}
+
+export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; board: BoardInfo; meDid: string; onOpen(post: string): void }) {
+  const { t } = useTexts();
+  const { data: view, error } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
+  // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
+  const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
+  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid } }, [view, meDid]);
 
   if (error) return <p className="muted pad">{error}</p>;
   if (!view) return <p className="muted pad">{t('lens.getting.ready', { name: board.lens?.name ?? t('lens.its.view') })}</p>;
@@ -92,7 +112,7 @@ export function LensView({ space, board, meDid, onOpen }: { space: SpaceInfo; bo
       </div>
     );
   if (!base) return <p className="muted pad">{t('lens.getting.ready', { name: view.lens.name })}</p>;
-  return <iframe ref={frame} className="lens-frame" title={view.lens.name} src={base} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
+  return <LensFrame title={view.lens.name} release={view.lens.release} base={base} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />;
 }
 
 /** The switch between a board's posts and its suggested client service. */

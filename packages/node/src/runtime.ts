@@ -150,6 +150,9 @@ export async function prepareWasm(component: string, dir: string): Promise<strin
   return 'component.js';
 }
 
+/** A release's pure component (a board's lens, a chat's widget): on a computer, as any other (a page transpiles it elsewhere: apps/web). */
+export const preparePureWasm = prepareWasm;
+
 export class Runtime {
   readonly #docker: () => string[];
   #procs = new Map<string, { child: ChildProcess; stopping: boolean; container?: string }>();

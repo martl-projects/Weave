@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { build } from 'esbuild';
-import { buildRooms, buildServices, buildWeb, connectSrc, framesFrom } from './build.ts';
+import { buildRooms, buildServices, buildWeb, connectSrc, framesFrom, lensFrameCsp, serviceCsp } from './build.ts';
 
 const storage = new URL(process.argv[2] ?? 'https://storage.martl.io').origin;
 const dist = join(import.meta.dirname, 'dist');
@@ -53,6 +53,21 @@ writeFileSync(
     // The page's files keep their names across deploys (app.js, worker.js): asked again each time (an unchanged one is a
     // short 304), or a browser runs the last deploy for hours.
     '  Cache-Control: no-cache',
+    '',
+    // Lenses' and widgets' views: sandboxed, framed by the page only (build.ts, lensFrameCsp), in place of the page's CSP.
+    // Pages serves lens-frame.html at /lens-frame (and sends .html on there): both get it.
+    '/lens-frame',
+    '  ! Content-Security-Policy',
+    `  Content-Security-Policy: ${lensFrameCsp}`,
+    '',
+    '/lens-frame.html',
+    '  ! Content-Security-Policy',
+    `  Content-Security-Policy: ${lensFrameCsp}`,
+    '',
+    // The services' Worker imports the glue it transpiles for a release's pure component (blob:): it alone (serviceCsp).
+    '/service.js',
+    '  ! Content-Security-Policy',
+    `  Content-Security-Policy: ${serviceCsp(storage)}`,
     '',
   ].join('\n'),
 );

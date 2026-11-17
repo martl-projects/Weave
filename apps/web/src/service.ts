@@ -10,9 +10,11 @@ import * as random from '@bytecodealliance/preview2-shim/random';
  * a browser runs (host/runtime.ts). A service that only folds and answers (Unread, Spotlight) gets the WASI pieces every
  * program needs and nothing else: no network, no host calls, no files of the person. A verifier (GitHub) also reaches
  * the hosts its manifest names, over HTTPS, and has a log; it waits for their answers suspended by JSPI (build.ts).
+ * A release's pure component (a board's lens, a chat's widget) comes as its bytes, checked by the node: transpiled here
+ * by jco's bindgen (transpile.ts, loaded only then), and given exactly what Weave's own pure services get.
  */
 
-declare const self: { onmessage: ((event: { data: { base: string; net?: string[]; port: MessagePort } }) => void) | null };
+declare const self: { onmessage: ((event: { data: { base?: string; component?: Uint8Array; net?: string[]; port: MessagePort } }) => void) | null };
 
 /** The part of wasi:http's outgoing-request looked at here (preview2-shim's class). */
 interface OutgoingRequest {
@@ -66,13 +68,35 @@ const imports = new Proxy(
 type Component = Record<string, (...args: unknown[]) => unknown>;
 let component: Component | undefined;
 
+type Instantiate = { instantiate(getCoreModule: (file: string) => Promise<WebAssembly.Module>, imports: object): Promise<Component> };
+
 async function start(base: string): Promise<void> {
-  const { instantiate } = (await import(/* @vite-ignore */ `${base}/component.js`)) as { instantiate(getCoreModule: (file: string) => Promise<WebAssembly.Module>, imports: object): Promise<Component> };
+  const { instantiate } = (await import(/* @vite-ignore */ `${base}/component.js`)) as Instantiate;
   component = await instantiate((file) => WebAssembly.compileStreaming(fetch(`${base}/${file}`)), imports);
 }
 
+/** Where the page's transpiler is (build.ts): a name, so the bundler leaves it for the browser to load. */
+const TRANSPILER = '/lens-transpile.js';
+
+/** A release's pure component, from its bytes: transpiled here, its glue imported from a blob: address of this Worker's. */
+async function startRelease(bytes: Uint8Array): Promise<void> {
+  const { transpileComponent } = (await import(/* @vite-ignore */ TRANSPILER)) as { transpileComponent(component: Uint8Array): Promise<Map<string, Uint8Array>> };
+  const files = await transpileComponent(bytes);
+  const glue = URL.createObjectURL(new Blob([files.get('component.js')! as Uint8Array<ArrayBuffer>], { type: 'text/javascript' }));
+  try {
+    const { instantiate } = (await import(/* @vite-ignore */ glue)) as Instantiate;
+    component = await instantiate(async (file) => {
+      const core = files.get(file);
+      if (!core) throw new Error(`it has no ${file}`);
+      return WebAssembly.compile(core as Uint8Array<ArrayBuffer>);
+    }, imports);
+  } finally {
+    URL.revokeObjectURL(glue);
+  }
+}
+
 /** The page starts this with where the component is, what it may reach, and the channel to the node. */
-self.onmessage = async ({ data: { base, net: hosts, port } }) => {
+self.onmessage = async ({ data: { base, component: release, net: hosts, port } }) => {
   net = (hosts ?? []).map((host) => host.toLowerCase());
   port.onmessage = async ({ data }: MessageEvent<{ id: number; fn: string; args: unknown[] }>) => {
     try {
@@ -88,7 +112,8 @@ self.onmessage = async ({ data: { base, net: hosts, port } }) => {
   try {
     // A verifier waits suspended, and a browser without JSPI can't: it can't check accounts yet.
     if (net.length && !('Suspending' in WebAssembly)) throw new Error("this browser can't check accounts yet (it has no JSPI)");
-    await start(base);
+    if (release) await startRelease(release);
+    else await start(base!);
     port.postMessage({ type: 'ready' });
   } catch (error) {
     port.postMessage({ type: 'failed', error: String((error as Error)?.message ?? error) });

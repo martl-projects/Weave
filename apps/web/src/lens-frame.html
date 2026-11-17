@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>View</title>
+  </head>
+  <body>
+    <!--
+      A lens's or a widget's view in Weave Web (docs/web-stage2.md, step 8). Weave Web has nowhere to serve a view's files
+      from, so this page, served sandboxed (its own CSP: an origin of its own, scripts, no network, no forms), asks the
+      page for them ({weave: 'files'}), gets them ({weave: 'files', files: [{path, type, data}]}), and builds the view's
+      page from them: each file a blob: address here, its index.html written in place of this one. From then on the view
+      talks to Weave as anywhere (apps/desktop/src/renderer/lens.tsx), and says {weave: 'loaded'} once it has.
+    -->
+    <script>
+      (function () {
+        'use strict';
+        var asked = false;
+        function bytes(base64) {
+          var text = atob(base64);
+          var out = new Uint8Array(text.length);
+          for (var i = 0; i < text.length; i++) out[i] = text.charCodeAt(i);
+          return out;
+        }
+        /** A path inside the view, from an address written in `from` (a file's path): undefined for one elsewhere. */
+        function inside(address, from) {
+          if (!address || /^[a-z][a-z0-9+.-]*:|^\/\/|^#/i.test(address)) return undefined;
+          var path = address.split(/[?#]/)[0];
+          var parts = path.charAt(0) === '/' ? [] : from.split('/').slice(0, -1);
+          path.split('/').forEach(function (part) {
+            if (part === '..') parts.pop();
+            else if (part && part !== '.') parts.push(part);
+          });
+          return parts.join('/');
+        }
+        function build(files) {
+          var byPath = {};
+          files.forEach(function (f) {
+            byPath[f.path] = f;
+          });
+          var urls = {};
+          // Style sheets first: their url(…)s point at the other files' blob addresses.
+          function url(path) {
+            if (urls[path]) return urls[path];
+            var f = byPath[path];
+            if (!f) return undefined;
+            var data = bytes(f.data);
+            if (/^text\/css/.test(f.type)) {
+              var css = new TextDecoder().decode(data).replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, function (all, quote, address) {
+                var found = url(inside(address, path) || '');
+                return found ? 'url(' + quote + found + quote + ')' : all;
+              });
+              data = new TextEncoder().encode(css);
+            }
+            urls[path] = URL.createObjectURL(new Blob([data], { type: f.type }));
+            return urls[path];
+          }
+          var index = byPath['index.html'];
+          if (!index) throw new Error('the view has no index.html');
+          var doc = new DOMParser().parseFromString(new TextDecoder().decode(bytes(index.data)), 'text/html');
+          doc.querySelectorAll('[src], link[href]').forEach(function (el) {
+            var attr = el.hasAttribute('src') ? 'src' : 'href';
+            var found = url(inside(el.getAttribute(attr), 'index.html') || '');
+            if (found) el.setAttribute(attr, found);
+          });
+          // After everything the view's page runs as it loads: it listens now.
+          var done = doc.createElement('script');
+          done.textContent = "parent.postMessage({ weave: 'loaded' }, '*');";
+          doc.body.appendChild(done);
+          document.open();
+          document.write('<!doctype html>' + doc.documentElement.outerHTML);
+          document.close();
+        }
+        window.addEventListener('message', function (event) {
+          if (event.source !== window.parent || asked || !event.data || event.data.weave !== 'files' || !Array.isArray(event.data.files)) return;
+          asked = true;
+          try {
+            build(event.data.files);
+          } catch (error) {
+            document.body.textContent = String((error && error.message) || error);
+          }
+        });
+        window.parent.postMessage({ weave: 'files' }, '*');
+      })();
+    </script>
+  </body>
+</html>

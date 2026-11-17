@@ -868,6 +868,51 @@ export interface HintServiceInfo {
   time: string;
 }
 
+/**
+ * A group widget instance (a weave.widget message), as this member's node sees it. Until `approved`, nothing of it
+ * was fetched or run: the chat shows who sent which release, and a button to approve it.
+ */
+export interface WidgetViewInfo {
+  /** Its message's id. */
+  id: string;
+  space: { id: string; kind: string; name: string };
+  /** Where it was sent: a channel of the space, or a post's chat. */
+  channel?: string;
+  post?: string;
+  title: string;
+  by: Actor;
+  time: string;
+  /** The release it comes from, as sent; projectName when you're in that project. */
+  app: { project: string; release: string; tag: string; app: string; name: string; about?: string; projectName?: string };
+  /** You're in its project and the release as sent is what that project released. Otherwise only its sender says so. */
+  checked: boolean;
+  /** What approving it means: this release with exactly these files. */
+  fingerprint: string;
+  approved: boolean;
+  /** How tall it wants to be in a chat, in pixels. */
+  height: number;
+  /** Its view's files: lensFile({release: view, path}), in a sandboxed frame (LENS_CSP); site says it has one. */
+  view: string;
+  site?: true;
+  state?: Json;
+  actions?: Json[];
+  /** Why it can't run (its release doesn't match, it couldn't be fetched, its fold failed). */
+  problem?: string;
+}
+
+/** A widget release of a project you're in: what you can send into a chat. */
+export interface WidgetReleaseInfo {
+  project: { id: string; name: string };
+  release: string;
+  tag: string;
+  app: string;
+  name: string;
+  about?: string;
+  time: string;
+  /** You approved exactly this release (or sent it before). */
+  approved: boolean;
+}
+
 export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
@@ -1926,6 +1971,8 @@ export interface MessageInfo {
   announce?: { kind: 'website' | 'release'; id: string };
   /** A file or image attached: its blob (wblob: reference, read with blob) and its name, size and media type. The text may be empty then. */
   file?: Attachment;
+  /** It sends a widget (weave.widget): this message is one instance of it (widgetView). Its text is empty. */
+  widget?: { title: string; name: string; app: { project: string; release: string; tag: string }; height: number };
 }
 
 export interface IssueInfo {
@@ -2447,6 +2494,20 @@ export interface Backend {
    * desktop, the phone and the web preview each serve it their own way. Only of lenses pinned to a board you're in.
    */
   lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }>;
+  /** All of a view's files at once (each as lensFile gives it): for Weave Web, whose sandboxed frame builds the view's page from them. */
+  lensSite(input: { release: string }): Promise<Array<{ path: string; type: string; data: string }>>;
+
+  // group widgets (docs/group-widgets.md)
+  /** The widget releases of the projects you're in (the latest of each app): what you can send into a chat. */
+  widgetReleases(): Promise<WidgetReleaseInfo[]>;
+  /** Send a widget into a chat (a channel of a space, or a post's chat): a release of a project you're in. Sending it approves it for you (not when an agent sends). */
+  sendWidget(input: { space?: string; channel?: string; post?: string; project: string; tag?: string; title?: string; replyTo?: string; as?: string }): Promise<WidgetViewInfo>;
+  /** A widget instance (its message): who sent which release, whether you approved it, and once you did, its state and actions. */
+  widgetView(input: { message: string }): Promise<WidgetViewInfo>;
+  /** Do one of a widget's actions: what it proposes (its own kinds, about this instance only) is signed by you (or your agent), with your rights. */
+  widgetAction(input: { message: string; action: string; input?: Json; as?: string }): Promise<{ published: FeedItem[]; view: WidgetViewInfo }>;
+  /** Approve the release a widget message sends (by its fingerprint, kept on this node), or with off take that back. */
+  approveWidget(input: { message: string; off?: boolean }): Promise<WidgetViewInfo>;
 
   // marks (stage 19)
   /** What the mark services you and the space chose say about these subjects ({did}, {space} or {post}) at a slot, with who says so. */
@@ -2737,7 +2798,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile',
+  'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile', 'lensSite', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'imprint', 'setImprint', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',

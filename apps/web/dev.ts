@@ -8,11 +8,14 @@
 // A passkey needs a browser with one (localhost counts as secure); the words work everywhere.
 //
 // DHT=1 puts the storage node and the person on the real DHT instead: then a contact link of anyone's (your own Weave's)
-// reaches them, as it would from a hosted page.
+// reaches them, as it would from a hosted page. TESTNET=<host:port> puts the person and the relay on a local testnet.
 //
 // The person also hosts a website in their project Party (/dev/invite's party), on the real DHT (an invitation names the
 // network it comes from, and a browser takes only the public one): a website's tab opens at http://<name>.localhost:<port>,
 // and reaches it through the storage node's relay.
+//
+// /dev/widget has the person send a widget into her group (Tally, a test's: packages/node/test/helpers), released in a
+// project of hers the browser isn't in; /dev/widget-state is how her node folds it.
 
 import { createReadStream, existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -20,10 +23,10 @@ import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { playManifest, playTags } from '@weave/core';
-import { keepReconciling, linkHandovers, originMatches, postPush, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags } from '@weave/node';
+import { keepReconciling, linkHandovers, originMatches, postPush, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags, parseBootstrap } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { WebSocketServer } from 'ws';
-import { buildRooms, buildServices, buildWeb } from './build.ts';
+import { buildRooms, buildServices, buildWeb, lensFrameCsp } from './build.ts';
 import { roomsCsp } from './src/rooms/csp.ts';
 
 const port = Number(process.env.PORT ?? 8790);
@@ -39,6 +42,8 @@ console.log('services:', await buildServices(dist));
 
 const scratch = mkdtempSync(join(tmpdir(), 'weave-web-dev-'));
 const { node: person, words: personWords } = WeaveNode.create('Lena', join(scratch, 'lena'));
+// TESTNET=<host:port>: the person and the relay on a local testnet (npm run dev:testnet) instead of the real DHT.
+const testnet = process.env.TESTNET ? [parseBootstrap(process.env.TESTNET)] : undefined;
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
 // What Lena pushes when she says something (docs/web-push.md, stage 3), kept for /dev/pushed, and posted as a computer does.
@@ -47,6 +52,24 @@ person.pushTargets.setSender(async (target, message) => {
   pushed.push({ address: target.address, ...message });
   await postPush(target, message).catch(() => undefined);
 });
+
+/** Tally (a test's widget), released once in Lena's project Games, sent into Climb: the widget message. */
+let tally: Promise<void> | undefined;
+async function sendWidget(): Promise<{ id: string; release: string }> {
+  tally ??= (async () => {
+    const { buildComponent } = await import('../../packages/node/test/helpers/components.ts');
+    const { folderWith, releaseFolder } = await import('../../packages/node/test/helpers/release.ts');
+    const component = readFileSync(await buildComponent(join(import.meta.dirname, '..', '..', 'packages', 'node', 'test', 'helpers', 'wasm-widget-tally.js'), 'board'));
+    await person.createProject({ name: 'Games' });
+    const manifest = { app: 'tally', name: 'Tally', widget: { component: 'tally.wasm', site: 'site', writes: ['tally.vote'], size: { height: 160 } } };
+    const site = '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><main id="tally">…</main><script src="app.js"></script>';
+    const script = "addEventListener('message', (e) => { if (e.data && e.data.weave === 'view') document.getElementById('tally').textContent = (e.data.state.votes || []).map((v) => v.by + ': ' + v.choice).join(', ') || 'no votes'; });";
+    await releaseFolder(person, { project: 'Games', tag: '1.0', folder: folderWith({ 'weave.app.json': JSON.stringify(manifest), 'tally.wasm': component, 'site/index.html': site, 'site/app.js': script, 'site/style.css': 'main { font: 14px sans-serif; }' }) });
+  })();
+  await tally;
+  const sent = await person.sendWidget({ space: 'Climb', project: 'Games', title: 'Lunch?' });
+  return { id: sent.id, release: sent.app.release };
+}
 
 const standIn: StorageOptions['network'] = (replica, access, blobs) => {
   const sessions: PeerSession2[] = [];
@@ -64,7 +87,7 @@ const standIn: StorageOptions['network'] = (replica, access, blobs) => {
   };
 };
 // Websites: the person hosts on the real DHT, and the storage node relays there.
-const relayDht = onDht ? undefined : new HyperDHT();
+const relayDht = onDht ? undefined : new HyperDHT(testnet ? { bootstrap: testnet } : {});
 const app = createServer((req, res) => {
   if (req.url === '/api') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
   // An event stream that stays open, as a game's live updates do: a tick every half second.
@@ -86,7 +109,11 @@ await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
 await person.createProject({ name: 'Party' });
 const storage = await StorageNode.open({ dir: join(scratch, 'storage'), network: onDht ? swarmNetwork() : Object.assign(standIn, { dht: () => relayDht! }), push: { subject: `http://localhost:${port}` } });
 keepReconciling(person);
+// On a testnet, only for going online: her invitations still name the public network, the one a browser takes.
+const publicNetwork = person.config.bootstrap;
+if (testnet) person.config.bootstrap = testnet;
 await person.goOnline();
+person.config.bootstrap = publicNetwork;
 await person.addService({ builtin: 'website', spaces: ['Party'] });
 const website = await person.openWebsite({ project: 'Party', name: 'Party', port: (app.address() as { port: number }).port });
 console.log(onDht ? 'on the real DHT' : 'with a stand-in for the DHT (DHT=1 for the real one)');
@@ -122,6 +149,8 @@ const server = createServer(async (req, res) => {
   // Pushes (stage 3): the addresses in Climb sealed to Lena (she runs it), and what she pushed.
   if (url.pathname === '/dev/push-targets') return json(person.pushTargets.targetsIn((await person.spaces()).find((s) => s.name === 'Climb')!.id).map((t) => t.target.address));
   if (url.pathname === '/dev/pushed') return json(pushed);
+  if (url.pathname === '/dev/widget') return json(await sendWidget());
+  if (url.pathname === '/dev/widget-state') return json((await person.widgetView({ message: url.searchParams.get('id') ?? '' })).state ?? null);
   // An onboarding link to Party, as Lena makes one in her app (idea bZFDCQNT): this storage node lets her.
   if (url.pathname === '/dev/onboard') {
     PlanStore.allowIn(join(scratch, 'storage'), person.identity.did);
@@ -163,7 +192,9 @@ const server = createServer(async (req, res) => {
     return res.end(readFileSync(join(dist, 'index.html'), 'utf8').replace('</head>', `<meta name="weave-invite" content="${storage.invite()}"></head>`));
   }
   const file = url.pathname.slice(1);
-  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
+  // Lenses' and widgets' views, with their own CSP as on Pages (pages.ts).
+  if (file === 'lens-frame' || file === 'lens-frame.html') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': lensFrameCsp }).end(readFileSync(join(dist, 'lens-frame.html')));
+  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png', 'lens-transpile.js', 'js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
   if (file.includes('..') || !existsSync(join(dist, file))) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
   createReadStream(join(dist, file)).pipe(res);

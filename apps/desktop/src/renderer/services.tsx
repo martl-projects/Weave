@@ -911,6 +911,9 @@ function ServicePanel({ space, service, panel, actions }: { space: { id: string;
       if (!frame.current || event.source !== frame.current.contentWindow) return;
       const m = event.data as { weave?: string; id?: unknown; name?: unknown; input?: unknown; px?: unknown };
       if (m?.weave === 'height' && typeof m.px === 'number') setHeight(Math.max(40, Math.min(1200, Math.round(m.px))));
+      // Weave Web's frame (apps/web/src/lens-frame.html) builds the panel from its files, as a lens's view.
+      if (m?.weave === 'files') void api<unknown[]>('lensSite', { release: panel.key }).then((files) => send({ weave: 'files', files }), () => {});
+      if (m?.weave === 'loaded') sendView();
       // A running website it shows: its window is in the project's Live.
       if (m?.weave === 'visit') location.hash = `#/p/${space.id}/live`;
       // Proving an account elsewhere here (its services give access by it): Weave asks for it, never the page.

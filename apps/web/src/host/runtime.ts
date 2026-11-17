@@ -1,4 +1,5 @@
 import { Runtime as OnAComputer } from '../../../../packages/node/src/runtime.ts';
+import { readFileSync } from './fs.ts';
 import { isServed } from './services.ts';
 
 export * from '../../../../packages/node/src/runtime.ts';
@@ -8,6 +9,9 @@ export * from '../../../../packages/node/src/runtime.ts';
  * into the page (build.ts: transpiled ahead of time, since a page has no transpiler). Each runs in a Worker of its own
  * (service.ts), so a long fold doesn't hold up the node. The page starts it, because a Worker started from a Worker didn't
  * load there: the node asks with {event: 'service'} and from then on speaks to it over a channel of their own.
+ *
+ * A release's pure component (a board's lens, a chat's widget: lenses.ts, widgets.ts) isn't built into the page: its
+ * Worker transpiles it when it starts (service.ts), from the bytes the node fetched and checked.
  */
 
 declare const self: { postMessage(message: unknown, transfer: Transferable[]): void };
@@ -17,11 +21,21 @@ const CALL_MS = 60_000;
 
 const nameOf = (file: string): string => file.split('/').at(-1)!.replace(/\.wasm$/, '');
 
+/** Releases' pure components, by their entry: their bytes, for their Worker. */
+const components = new Map<string, Uint8Array>();
+
 /** A component here is ready already, or it isn't one a browser can run. The entry says which it is. */
 export async function prepareWasm(component: string): Promise<string> {
   const name = nameOf(component);
   if (!isServed(name)) throw new Error(`${name} doesn't run in a browser`);
   return name;
+}
+
+/** A release's pure component (a lens's, a widget's), which its Worker transpiles when it starts (service.ts). */
+export async function preparePureWasm(component: string): Promise<string> {
+  const entry = `release:${component}`;
+  components.set(entry, new Uint8Array(readFileSync(component) as Uint8Array));
+  return entry;
 }
 
 interface Running {
@@ -56,7 +70,9 @@ export class Runtime extends OnAComputer {
     });
     entry.ready.catch(() => {});
     this.#running.set(key, entry);
-    self.postMessage({ event: 'service', key, base: `/services/${run.entry}`, net: run.net ?? [], port: theirs }, [theirs]);
+    const component = components.get(run.entry);
+    if (component) self.postMessage({ event: 'service', key, component: component.slice(), net: [], port: theirs }, [theirs]);
+    else self.postMessage({ event: 'service', key, base: `/services/${run.entry}`, net: run.net ?? [], port: theirs }, [theirs]);
   }
 
   override callWasm(key: string, fn: string, args: unknown[]): Promise<unknown> {

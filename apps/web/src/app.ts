@@ -96,6 +96,8 @@ interface FromWorker {
   key?: string;
   base?: string;
   net?: string[];
+  /** A release's pure component (a lens, a widget), transpiled in its Worker (service.ts); `base` is for Weave's own. */
+  component?: Uint8Array;
   port?: MessagePort;
 }
 
@@ -103,7 +105,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   if (data.event === 'service') {
     const service = new Worker('/service.js', { type: 'module' });
     services.set(data.key!, service);
-    return service.postMessage({ base: data.base, net: data.net, port: data.port }, [data.port!]);
+    return service.postMessage({ base: data.base, net: data.net, component: data.component, port: data.port }, [data.port!]);
   }
   if (data.event === 'service-stop') {
     services.get(data.key!)?.terminate();
@@ -507,7 +509,9 @@ window.weave = {
   openApp: async (url) => void window.open(url, '_blank', 'noopener'),
   pickFolder: async () => undefined,
   show: async () => window.focus(),
-  lensBase: (release) => `/lens/${encodeURIComponent(release)}/`,
+  // Nowhere serves a view's files here: one sandboxed page builds each view from them (lens-frame.html, lens.tsx).
+  // Without .html: Pages sends /lens-frame.html on to /lens-frame, and a frame mustn't land on a redirect.
+  lensBase: () => '/lens-frame',
   attention: async () => {},
   // As the desktop's preload answers: {result}, or the error as it came, which the renderer throws.
   call: (method, ...args) => ask(method, ...args),

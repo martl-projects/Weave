@@ -4,6 +4,7 @@ import type { EventView } from './records.ts';
 import type { Did } from './keys.ts';
 import { attachmentOf, type Attachment } from './blobs.ts';
 import { sessionStampOf, type SessionStamp } from './sessions.ts';
+import { KIND_WIDGET, widgetPartsOf, type WidgetApp } from './widgets.ts';
 
 /*
  * Working together inside a group (or in public). All of these are ordinary
@@ -15,6 +16,7 @@ import { sessionStampOf, type SessionStamp } from './sessions.ts';
  *   weave.msg           {text, channel, post, replyTo, file}  chat message in a channel (default "general") or in a post's chat, optionally replying to one;
  *                                                         file {ref, name, size, type}: a file or image attached (its blob by wblob: reference); text may be empty then;
  *                                                         weave.post.delete {target} takes it down too (its author, or the space's maintainers or moderators)
+ *   weave.widget        {app, manifest, title, channel, post}  a mini-app sent into a chat: a message that is one widget instance (widgets.ts)
  *   weave.channel       {name, topic}                     create a chat channel
  *   weave.react         {target, emoji, on}               add or remove an emoji reaction on any event
  *   weave.issue         {title, text, labels}             open an issue
@@ -120,6 +122,16 @@ export interface Message {
   file?: Attachment;
   /** The agent session that wrote it (its name and figure), when an agent did. */
   session?: SessionStamp;
+  /** It sends a mini-app (weave.widget): this message is one instance of it. */
+  widget?: MessageWidget;
+}
+
+/** What a chat shows of a widget message: its title, the release's name, where it comes from, and its height. */
+export interface MessageWidget {
+  title: string;
+  name: string;
+  app: WidgetApp;
+  height: number;
 }
 
 /** What a message announces: a website (its id, or the service hosting it) or a released version (its artifact id). */
@@ -183,7 +195,7 @@ export function channelsOf(entries: Entry[]): Channel[] {
     const name = channelName(field(e.body, 'name'));
     if (name && !channels.has(name)) channels.set(name, { name, topic: str(e.body, 'topic', 200) });
   }
-  for (const e of entries.filter((x) => x.kind === KIND_MSG && !str(x.body, 'post', 200))) {
+  for (const e of entries.filter((x) => (x.kind === KIND_MSG || x.kind === KIND_WIDGET) && !str(x.body, 'post', 200))) {
     const name = channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL;
     const channel = channels.get(name) ?? { name, topic: '' };
     if (!channel.last || e.event.time > channel.last) channel.last = e.event.time;
@@ -228,7 +240,7 @@ export function threadsOf(entries: Entry[]): Thread[] {
 
 /** Chat messages taken down: by their author, or by the space's maintainers or moderators. */
 export function deletedMessages(entries: Entry[], maintainers: ReadonlySet<Did> = new Set()): Set<string> {
-  const authors = new Map(entries.filter((e) => e.kind === KIND_MSG || e.kind === KIND_REPLY).map((e) => [e.id, e.event.author]));
+  const authors = new Map(entries.filter((e) => e.kind === KIND_MSG || e.kind === KIND_REPLY || e.kind === KIND_WIDGET).map((e) => [e.id, e.event.author]));
   const deleted = new Set<string>();
   for (const e of entries.filter((x) => x.kind === KIND_DELETE)) {
     const target = str(e.body, 'target', 200);
@@ -240,15 +252,22 @@ export function deletedMessages(entries: Entry[], maintainers: ReadonlySet<Did> 
 
 /**
  * Chat messages, oldest first: in one channel, or in one post's chat. Replies
- * (weave.reply, from before posts had chats) show up in their target's chat.
- * Those taken down (see deletedMessages) are left out.
+ * (weave.reply, from before posts had chats) show up in their target's chat, and
+ * widgets (weave.widget) as messages that carry one. Those taken down (see
+ * deletedMessages) are left out.
  */
 export function messagesOf(entries: Entry[], where: { channel?: string; post?: string } = {}, maintainers: ReadonlySet<Did> = new Set()): Message[] {
   const reactions = reactionsOf(entries);
   const deleted = deletedMessages(entries, maintainers);
+  const widgets = new Map<string, MessageWidget>();
+  for (const e of entries) {
+    const parts = e.kind === KIND_WIDGET ? widgetPartsOf(e.body) : undefined;
+    if (parts) widgets.set(e.id, { title: parts.title, name: parts.name, app: parts.app, height: parts.height });
+  }
   return entries
-    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY) && (str(e.body, 'text') || (e.kind === KIND_MSG && attachmentOf(e.body))) && !deleted.has(e.id))
+    .filter((e) => (e.kind === KIND_MSG || e.kind === KIND_REPLY || widgets.has(e.id)) && (str(e.body, 'text') || widgets.has(e.id) || (e.kind === KIND_MSG && attachmentOf(e.body))) && !deleted.has(e.id))
     .map((e) => {
+      const widget = widgets.get(e.id);
       const replyTo = str(e.body, 'replyTo', 200);
       const post = str(e.body, e.kind === KIND_REPLY ? 'target' : 'post', 200);
       const announce = e.kind === KIND_MSG ? announceOf(e.body) : undefined;
@@ -258,10 +277,11 @@ export function messagesOf(entries: Entry[], where: { channel?: string; post?: s
         ...(announce ? { announce } : {}),
         ...(file ? { file } : {}),
         ...(session ? { session } : {}),
+        ...(widget ? { widget } : {}),
         id: e.id,
         author: e.event.author,
         signer: e.event.signer,
-        text: str(e.body, 'text'),
+        text: widget ? '' : str(e.body, 'text'),
         time: e.event.time,
         channel: channelName(field(e.body, 'channel')) ?? DEFAULT_CHANNEL,
         ...(post ? { post } : {}),

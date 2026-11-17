@@ -428,6 +428,30 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .emoji-btn { min-width: 36px; padding: 0; font-size: 16px; }
 .attach-btn .icon { width: 16px; height: 16px; }
 
+/* ---------- mini-apps (group widgets) in chat: widgets.tsx */
+.attach-menu, .widget-picker { position: absolute; bottom: 44px; left: 0; z-index: 30; display: flex; flex-direction: column; min-width: 200px; max-width: min(360px, calc(100vw - 32px)); padding: 3px; color: #000; font-family: var(--content-font); font-size: 12px; }
+.attach-menu button, .widget-pick { display: flex; align-items: center; gap: 6px; min-height: 0; padding: 4px 8px; text-align: left; background: none; box-shadow: none; text-shadow: none; color: inherit; }
+.attach-menu button:hover, .widget-pick:hover { background: var(--navy); color: #fff; }
+.attach-menu .icon, .widget-pick .icon, .widget-head .icon { width: 16px; height: 16px; flex: none; }
+.widget-picker { max-height: min(360px, 60vh); overflow-y: auto; }
+.widget-picker-title { padding: 2px 8px 4px; font-weight: bold; }
+.widget-picker p { margin: 4px 8px; }
+.widget-card { max-width: 560px; margin: 4px 0; padding: 4px 8px 6px; border: 1px solid var(--line, #c0c0c0); border-radius: 6px; font-family: var(--content-font); font-size: 12px; }
+.widget-card p { margin: 4px 0; }
+.widget-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; min-width: 0; }
+.widget-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.widget-app { flex: none; }
+.widget-open { margin-left: auto; min-width: 0; min-height: 0; padding: 0 6px; }
+.widget-frame { display: block; width: 100%; border: 0; background: #fff; border-radius: 4px; }
+.widget-wait { width: 100%; }
+.widget-state { max-height: 240px; overflow: auto; }
+.widget-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.widget-foot button { margin-left: auto; }
+@media (max-width: 700px) {
+  .widget-card { max-width: none; }
+  .attach-menu, .widget-picker { bottom: 52px; }
+}
+
 /* ---------- files and images in chat */
 .attached { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: #ffffe1; border: 1px solid #808080; border-bottom: none; color: #000; font-family: var(--content-font); font-size: 11px; }
 .attached.uploading { opacity: 0.7; }
@@ -666,9 +690,21 @@ menu[role='tablist'] { margin-bottom: 0; }
 .admission .note { margin-top: 3px; padding: 2px 6px; background: #ffffe1; border: 1px solid #c0c0a0; font-style: italic; }
 
 /* ---------- keys */
-.words { display: grid; grid-template-columns: repeat(auto-fill, minmax(10em, 1fr)); gap: 4px 12px; margin: 8px 0; padding: 10px 12px; list-style: none; font: 13px 'Lucida Console', Consolas, monospace; }
+/* The recovery words in four columns, read down (1-6, then 7-12, ...), as they're written on paper: always 4 x 6, so no
+   width or font breaks the rows somewhere else. */
+.words { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(6, auto); grid-auto-flow: column; gap: 4px 12px; margin: 8px 0; padding: 10px 12px; list-style: none; font: 13px 'Lucida Console', Consolas, monospace; }
 .words .n { display: inline-block; width: 2.2em; color: #777; text-align: right; }
 .words li { white-space: nowrap; }
+/* By the room the box has (a phone, a narrow window, a wide look), not the screen: tighter first, then two columns
+   (1-12, 13-24) where four don't fit. */
+.words-box { container: words / inline-size; }
+@container words (max-width: 460px) {
+  .words { gap: 4px 8px; padding: 6px; font-size: 11px; }
+  .words .n { width: 1.9em; font-size: 10px; }
+}
+@container words (max-width: 350px) {
+  .words { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(12, auto); font-size: 12px; }
+}
 .keys-table { width: 100%; border-collapse: collapse; font-family: var(--content-font); font-size: 12px; }
 .keys-table td { padding: 4px 6px; border-bottom: 1px solid #d4d4d4; vertical-align: middle; }
 .keys-table td:last-child { text-align: right; }

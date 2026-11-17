@@ -124,6 +124,7 @@ const TARGET_FIELDS: Record<string, string> = {
   'weave.issue.status': 'issue',
   'weave.reply': 'target',
   'weave.msg': 'post',
+  'weave.widget': 'post',
   'weave.upvote': 'target',
   'weave.post.edit': 'target',
   'weave.post.delete': 'target',
@@ -132,7 +133,8 @@ const TARGET_FIELDS: Record<string, string> = {
 
 /**
  * A kind of a board's client service (not Weave's own, like kanban.move): about a post in a board (its `target`),
- * or in the board it names. See lenses.ts.
+ * or in the board it names. See lenses.ts. A group widget's kinds are the same shape: their target is the widget's
+ * message, so in a post's chat they belong to that post's board, and in a channel to no board (widgets.ts).
  */
 const lensKind = (kind: string) => !kind.startsWith('weave.');
 
