@@ -353,8 +353,8 @@ try {
     await putKey(null);
     passed('push: one sealed to this browser is opened by its service worker');
     // The number on Weave's icon: what the app counted, kept for the service worker to count on from.
-    const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : n)));
-    passed("the app keeps its count for Weave's icon", badge);
+    const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : { n })));
+    passed("the app keeps its count for Weave's icon", badge.n);
 
     // Stage 3: pushes on in this browser give each place an address of its own, sealed to whoever runs it. Lena runs
     // Climb: her node opens Webby's address there, seals what she says to its key, and the service worker opens it with
