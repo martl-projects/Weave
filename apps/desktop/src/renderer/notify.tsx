@@ -101,14 +101,25 @@ function flush(): void {
 }
 
 let started = false;
+/** Older than this, a notice in Weave Web came while it was closed. */
+const CATCHING_UP_MS = 2 * 60_000;
 
 /** Start listening for notices; once per app. */
 export function startNotifications(): void {
   // Weave Web: a push that came while Weave was open and seen (the service worker hands it here): said in the app.
-  if (!started && bridge.web) window.addEventListener('weave-push', (event) => {
-    const notice = (event as CustomEvent<{ title?: string; text?: string }>).detail;
-    if (notice?.title) toast(notice.text ? `${notice.title}: ${notice.text}` : notice.title);
-  });
+  if (!started && bridge.web) {
+    window.addEventListener('weave-push', (event) => {
+      const notice = (event as CustomEvent<{ title?: string; text?: string }>).detail;
+      if (notice?.title) toast(notice.text ? `${notice.title}: ${notice.text}` : notice.title);
+    });
+    // A tapped notification leads to its place: Weave was open, or it opened Weave.
+    const go = (open: unknown) => void hrefOf(open as Notice['open']).then(navigate, () => navigate('#/'));
+    window.addEventListener('weave-open', (event) => go((event as CustomEvent<unknown>).detail));
+    const opened = bridge.web.push.opened();
+    if (opened) go(opened);
+    // Pushes on here: each place's address follows (docs/web-push.md, stage 3).
+    void bridge.web.push.resume().catch((error: Error) => console.warn('weave: pushes:', error.message));
+  }
   if (started || typeof Notification === 'undefined') return;
   started = true;
   // What you open stops counting; so does what was open while the window was in the background.
@@ -126,6 +137,9 @@ export function startNotifications(): void {
     if (!(rule ? rule.notify : loadSettings()[notice.category]) || Notification.permission !== 'granted' || looking(notice.open)) return;
     // An agent's request shows as a popup in the app (see agents.tsx): a notification only when Weave is in the background.
     if (notice.type === 'permission' && document.hasFocus()) return;
+    // Weave Web catching up as it opens: what came while it was closed is counted on its icon (and pushed, where a
+    // push came), not told again one by one.
+    if (bridge.web && Date.now() - Date.parse(item.time) > CATCHING_UP_MS) return;
     pending.push(notice);
     clearTimeout(timer);
     timer = setTimeout(flush, 1200);

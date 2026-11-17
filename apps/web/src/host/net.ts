@@ -34,6 +34,9 @@ export const handOnAgain = (): void => current?.again();
 /** The storage node this node goes online through. */
 export const useStorage = (storage: StorageLink): void => void (link = storage);
 
+/** Its address (wss://…/storage), once there is one. */
+export const storageUrl = (): string | undefined => link?.url;
+
 export const accountRecord = (account: SigningIdentity) => ({ did: account.did, publicKey: b64u.encode(account.keys.publicKey), secretKey: b64u.encode(account.keys.secretKey) });
 export const accountOf = (record: { did: Did; publicKey: string; secretKey: string }): SigningIdentity => ({ author: record.did, did: record.did, keys: { publicKey: b64u.decode(record.publicKey), secretKey: b64u.decode(record.secretKey) } });
 

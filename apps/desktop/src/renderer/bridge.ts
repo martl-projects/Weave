@@ -125,6 +125,10 @@ export interface Bridge {
       test(notice: { title: string; text?: string; open?: string }): Promise<void>;
       /** What waits, as the app counted it: the service worker counts on from here while Weave is closed. */
       counted(total: number): Promise<void>;
+      /** Weave open again with pushes on: the places' addresses (stage 3) follow this browser's subscription. */
+      resume(): Promise<void>;
+      /** A tapped notification that opened Weave: where it leads (once), as a notice says it. */
+      opened(): Record<string, unknown> | undefined;
     };
     /** Empty this browser of its account and start again: at the start, or straight at linking it with a computer. */
     reset(then?: 'link'): Promise<void>;

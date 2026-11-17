@@ -73,7 +73,8 @@ export interface StorageOptions {
 /** Pushes to one address in an hour: from one sender, and in all. */
 export const PUSH_PER_SENDER = 30;
 export const PUSH_PER_ADDRESS = 120;
-const MAX_PUSH_ADDRESSES = 16;
+// One per place and browser (docs/web-push.md, stage 3): a person in many places with a few browsers.
+const MAX_PUSH_ADDRESSES = 512;
 const MAX_PUSH = 3 * 1024;
 
 interface HeldRecord {
@@ -100,7 +101,7 @@ interface AccountFile {
   /** Sealed boxes by the hash of their token. */
   boxes: Record<string, string>;
   /** Its browsers' push subscriptions, by the address senders push to (docs/web-push.md). */
-  push?: Record<string, PushSubscriptionData & { created: string }>;
+  push?: Record<string, PushSubscriptionData & { created: string; scoped?: true }>;
 }
 
 interface Account {
@@ -328,7 +329,7 @@ export class StorageNode {
     const account = id && this.#accounts.get(id);
     const subscription = account && account.file.push?.[address];
     if (!account || !subscription || !this.#options.push) return 'unknown';
-    const payload = Buffer.from(JSON.stringify({ from: message.from, sealed: message.sealed }));
+    const payload = Buffer.from(JSON.stringify({ from: message.from, to: address, sealed: message.sealed }));
     if (payload.length > MAX_PUSH) return 'failed';
     if (!this.#mayPush(address, message.from)) return 'limit';
     const { sendPush } = await import('./webpush.ts');
@@ -584,12 +585,12 @@ export class StorageNode {
           const { isPushEndpoint } = await import('./webpush.ts');
           if (!isText(m.endpoint, 1024) || !isText(m.p256dh, 200) || !isText(m.auth, 100) || !isPushEndpoint(m.endpoint, this.#options.push.endpoints)) return no("that isn't a browser's push subscription");
           const push = (mine.file.push ??= {});
-          // The same browser again: the address it has.
-          const again = Object.entries(push).find(([, s]) => s.endpoint === m.endpoint);
+          // The same browser again: the address it has. A place's own address (scoped) is always a new one.
+          const again = !m.scoped && Object.entries(push).find(([, s]) => s.endpoint === m.endpoint && !s.scoped);
           if (again) return channel.send({ t: 'ok', address: again[0] });
           if (Object.keys(push).length >= MAX_PUSH_ADDRESSES) return no('this account has as many push addresses as it may: drop one first');
           const address = randomBytes(18).toString('base64url');
-          push[address] = { endpoint: m.endpoint, p256dh: m.p256dh, auth: m.auth, created: new Date().toISOString() };
+          push[address] = { endpoint: m.endpoint, p256dh: m.p256dh, auth: m.auth, created: new Date().toISOString(), ...(m.scoped ? { scoped: true as const } : {}) };
           this.#pushes.set(address, mine.file.id);
           this.#save(mine);
           return channel.send({ t: 'ok', address });
@@ -613,6 +614,13 @@ export class StorageNode {
           }
           const sent = await this.push(m.address, { from: mine.file.id, sealed: m.sealed });
           return sent === 'sent' ? channel.send({ t: 'ok' }) : no(sent === 'limit' ? 'too many pushes in the last hour' : "the push service didn't take it");
+        }
+        case 'push.forward': {
+          // A browser's node telling someone (stage 3): only this node's own addresses for now (the CSP keeps the page
+          // here, and a storage node posting anywhere it's told would be a door into other networks).
+          if (!isText(m.address, 64)) return no('which address?');
+          const sent = await this.push(m.address, { from: mine.file.id, sealed: m.sealed });
+          return sent === 'sent' ? channel.send({ t: 'ok' }) : no(sent === 'unknown' ? 'no such push address here' : sent === 'limit' ? 'too many pushes in the last hour' : "the push service didn't take it");
         }
         case 'usage': {
           const { used, quota, over } = this.measure(mine.file.id);

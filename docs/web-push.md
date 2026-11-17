@@ -24,6 +24,19 @@ From the conversation on 2026-11-14, building on the idea [Notifications the nat
 4. Mentions and replies; blocking at the relay.
 5. The native app (APNs/FCM) with the same sealed notice.
 
+## Stage 3, as decided on 2026-11-17: an address per place, seen only by those who manage it
+
+The profile is public (anyone who syncs a person's replica reads it), so targets don't go there. Instead:
+
+- **One push key and one address per place** (a group, a project, a community, a direct chat), per browser. Each can be taken back on its own: the browser drops the address at its relay, and the relay throws away whatever still comes for it.
+- **Sealed to those who manage the place**: a `weave.push.target` event in the space, `{device, boxes: {did: Box}}`, each box `{relay, address, key}` sealed to one of its managers (`managersOf`: maintainers, moderators, a group's owner; in a direct chat the other one). The other members see that there is one, never what's in it. When the managers change, the browser seals it anew; a manager who left can still push to the old address until the browser drops it, so a change of managers also means a new address.
+- **Off is off**: a place set to "Quiet" (or "Count only": iOS shows every push) takes its address back (`{device, off: true}`), and so does turning pushes off in the settings.
+- **The sender**: when a manager (or the other one in a direct chat) writes a message, its node opens the targets sealed to it in that space, seals a short notice to each target's key (`{title, text, open, tag}`) and hands it to the relay. A computer posts it (`POST <relay>/push/<address>`, `{from, sealed}`); a browser asks its own storage node (`push.forward`), the only place its CSP lets it reach. For now a storage node forwards only to its own addresses.
+- **The service worker** knows each address's key (IndexedDB, by address; the relay sends `to` with every push).
+
+So for now: direct chats, and what the people who run a place say there. Mentions and replies by anyone (stage 4) need a target for those who aren't managers, likely one per conversation.
+
+
 ## Open
 
 - iOS shows a push only for the home-screen app, never in a Safari tab.

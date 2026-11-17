@@ -70,18 +70,19 @@ interface PushWorker {
   registration: { showNotification(title: string, options: NotificationOptions & { data?: unknown }): Promise<void> };
   clients: { matchAll(o: { type: 'window'; includeUncontrolled: boolean }): Promise<Array<{ url: string; visibilityState?: string; focused?: boolean; focus(): Promise<unknown>; navigate(url: string): Promise<unknown>; postMessage(m: unknown): void }>>; openWindow(url: string): Promise<unknown> };
   addEventListener(type: 'push', listener: (event: { data?: { json(): unknown }; waitUntil(work: Promise<unknown>): void }) => void): void;
-  addEventListener(type: 'notificationclick', listener: (event: { notification: { data?: { open?: string }; close(): void }; waitUntil(work: Promise<unknown>): void }) => void): void;
+  addEventListener(type: 'notificationclick', listener: (event: { notification: { data?: { open?: unknown }; close(): void }; waitUntil(work: Promise<unknown>): void }) => void): void;
 }
 const pushing = self as unknown as PushWorker;
 
 pushing.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
-      const { loadBadge, loadPushKey, openNotice, saveBadge } = await import('./pushkey.ts');
-      let notice: { title: string; text?: string; open?: string; tag?: string } = { title: 'Weave', text: 'Something new for you' };
+      const { loadBadge, loadKeyFor, loadPushKey, openNotice, saveBadge } = await import('./pushkey.ts');
+      let notice: { title: string; text?: string; open?: unknown; tag?: string } = { title: 'Weave', text: 'Something new for you' };
       try {
-        const message = event.data?.json() as { from?: string; sealed?: unknown } | undefined;
-        const key = await loadPushKey();
+        const message = event.data?.json() as { from?: string; to?: string; sealed?: unknown } | undefined;
+        // A place's own address (stage 3) has its own key; the browser's first one is for its own tests.
+        const key = (message?.to && (await loadKeyFor(message.to))) || (await loadPushKey());
         if (key && message?.sealed) notice = openNotice(key, message.sealed as Parameters<typeof openNotice>[1]);
       } catch (error) {
         // Not for this key (an old subscription), or altered: the plain line above.
@@ -112,6 +113,8 @@ pushing.addEventListener('notificationclick', (event) => {
         there.postMessage({ type: 'weave-open', open });
         return;
       }
+      // A place as a notice says it (stage 3): the app finds its way there once it's open.
+      if (typeof open !== 'string') return void (await pushing.clients.openWindow(`/?open=${encodeURIComponent(JSON.stringify(open))}`));
       await pushing.clients.openWindow(`/${open.startsWith('#') ? open : `#${open}`}`);
     })(),
   );

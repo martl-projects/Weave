@@ -224,6 +224,16 @@ if (arrived) {
 const LINK_KEY = 'weave.link';
 /** Where to start after this browser was emptied on purpose (reset). */
 const START_KEY = 'weave.start';
+/** A tapped notification that opened Weave (the service worker's ?open=): where it leads, once unlocked. */
+let openedFrom: Record<string, unknown> | undefined;
+try {
+  const asked = new URLSearchParams(location.search).get('open');
+  if (asked) {
+    const parsed = JSON.parse(asked) as unknown;
+    if (parsed && typeof parsed === 'object') openedFrom = parsed as Record<string, unknown>;
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+} catch {}
 const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
 if (linkSecret) {
   sessionStorage.setItem(LINK_KEY, linkSecret);
@@ -359,14 +369,29 @@ const web: Bridge['web'] = {
       const address = await own<string>('pushSubscribe', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
       const kept = await loadPushKey();
       if (kept?.address !== address) await savePushKey(makePushKey(address));
+      // Each place its own address, sealed to those who manage it (docs/web-push.md, stage 3).
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
     },
     disable: async () => {
+      await own('pushPlaces').catch(() => undefined);
       const kept = await loadPushKey();
       if (kept) await own('pushDrop', kept.address).catch(() => undefined);
       await (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe();
       await clearPushKey();
     },
     counted: async (total) => void (await saveBadge(total).catch(() => undefined)),
+    resume: async () => {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+      const subscription = await (await navigator.serviceWorker.ready).pushManager?.getSubscription();
+      if (!subscription || !(await loadPushKey())) return;
+      const keys = subscription.toJSON().keys ?? {};
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
+    },
+    opened: () => {
+      const kept = openedFrom;
+      openedFrom = undefined;
+      return kept;
+    },
     test: async (notice) => {
       const kept = await loadPushKey();
       if (!kept) throw new Error('notifications are off on this device');
@@ -485,10 +510,13 @@ window.weave = {
 
 // A notification tapped while Weave is open: the service worker says where it leads.
 // One that came while Weave was in front isn't shown (the node here tells it): it's said to the page.
-navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: string; notice?: unknown }>) => {
+navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: unknown; notice?: unknown }>) => {
   if (event.data?.type === 'weave-push') return void window.dispatchEvent(new CustomEvent('weave-push', { detail: event.data.notice }));
   if (event.data?.type === 'weave-push-failed') return void console.warn('a push could not be shown:', (event.data as { why?: string }).why);
-  if (event.data?.type === 'weave-open' && event.data.open) location.hash = event.data.open.startsWith('#') ? event.data.open : `#${event.data.open}`;
+  const open = event.data?.type === 'weave-open' ? event.data.open : undefined;
+  // A place as a notice says it (stage 3): the app finds its way there.
+  if (open && typeof open === 'object') return void window.dispatchEvent(new CustomEvent('weave-open', { detail: open }));
+  if (typeof open === 'string' && open) location.hash = open.startsWith('#') ? open : `#${open}`;
 });
 
 await import('../../desktop/src/renderer/main.tsx');

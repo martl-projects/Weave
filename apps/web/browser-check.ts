@@ -334,6 +334,26 @@ try {
     // The number on Weave's icon: what the app counted, kept for the service worker to count on from.
     const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : n)));
     passed("the app keeps its count for Weave's icon", badge);
+
+    // Stage 3: pushes on in this browser give each place an address of its own, sealed to whoever runs it. Lena runs
+    // Climb: her node opens Webby's address there, seals what she says to its key, and the service worker opens it with
+    // that place's key. (A real subscription needs a window Chrome lets ask; the storage node takes this one's word.)
+    const dev = async <T>(path: string) => (await (await fetch(`${ORIGIN}${path}`)).json()) as T;
+    const said = await call('pushPlaces', { endpoint: `https://fcm.googleapis.com/fcm/send/check-${Date.now()}`, p256dh: 'BCheck', auth: 'check' });
+    if (said.error) throw new Error(`pushes on: ${said.error}`);
+    const address = await until("Webby's address in Climb, as Lena opens it", async () => (await dev<string[]>('/dev/push-targets'))[0], 30_000);
+    const placeKey = await until("that address's key, in this browser", () =>
+      run<{ did: string } | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get(${JSON.stringify(`addr:${address}`)}); g.onsuccess = () => (r.result.close(), done(g.result ?? null)); }; })`).then((k) => k ?? undefined),
+    );
+    await fetch(`${ORIGIN}/dev/say?text=${encodeURIComponent('push from Lena')}`, { method: 'POST' });
+    const message = await until('what Lena pushed to it', async () => (await dev<Array<{ address: string; from: string; sealed: unknown }>>('/dev/pushed')).find((p) => p.address === address));
+    await send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: JSON.stringify({ from: message.from, to: address, sealed: message.sealed }) });
+    await until("Lena's push, opened with the place's key", () => run<boolean>(`window.__pushes.some((p) => p.title === 'Lena · Climb' && p.text === 'push from Lena')`));
+    passed("push: a place's own address, sealed to the one who runs it, and her message opened with that place's key", placeKey.did.slice(0, 16));
+    // Off: every address goes back, and Lena can't open one any more.
+    await call('pushPlaces');
+    await until('the address taken back', async () => (await dev<string[]>('/dev/push-targets')).length === 0, 30_000);
+    passed('push off takes back every place\'s address');
   }
 
   // On a phone's width: what the menu bar has on a computer is under Settings.

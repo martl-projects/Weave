@@ -244,6 +244,39 @@ export function linkHandovers(behindProxy: boolean | undefined, origins: Iterabl
   };
 }
 
+/**
+ * A sender's push (docs/web-push.md, stage 3): `{from, sealed}` to one of this node's push addresses, sealed by the
+ * sender to that browser's push key. Only someone the address was sealed to knows it; the limits count per sender.
+ */
+function pushTo(node: StorageNode, req: IncomingMessage, res: ServerResponse, address: string): void {
+  const done = (status: number) => void res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end('{}');
+  if (req.method !== 'POST') return done(405);
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(address)) return done(404);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  req.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > 8 * 1024) {
+      done(413);
+      req.destroy();
+    } else chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (res.headersSent) return;
+    let message: { from?: unknown; sealed?: unknown };
+    try {
+      message = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof message;
+    } catch {
+      return done(400);
+    }
+    if (typeof message.from !== 'string' || !message.from.startsWith('did:') || message.from.length > 200 || !message.sealed) return done(400);
+    void node.push(address, { from: message.from, sealed: message.sealed }).then(
+      (sent) => done({ sent: 202, unknown: 404, limit: 429, failed: 502 }[sent]),
+      () => done(500),
+    );
+  });
+}
+
 /** The HTTP side: the page's files, if it has them, handovers to linked browsers, onboarding links' previews, and whether it's up. */
 export function storageServer(node: StorageNode, options: StorageServerOptions): Server {
   const handover = linkHandovers(options.behindProxy, options.origins);
@@ -251,6 +284,7 @@ export function storageServer(node: StorageNode, options: StorageServerOptions):
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');
     if (url.pathname.startsWith('/link/')) return handover(req, res, url.pathname.slice('/link/'.length));
+    if (url.pathname.startsWith('/push/')) return pushTo(node, req, res, url.pathname.slice('/push/'.length));
     // An onboarding link's preview: open by design, and nothing of the sealed plan. Fetching it counts no use.
     // A game's own app (/play/<code>): its name and icon, open like the preview, while its link isn't taken back.
     const app = /^\/preview\/([A-Za-z0-9]+)\/(app|icon\.png)$/.exec(url.pathname);

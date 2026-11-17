@@ -2,7 +2,7 @@ import './host/globals.ts';
 import { b64u, errorToWire } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
-import { handOnAgain, relayTicket, useStorage, withStorage } from './host/net.ts';
+import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
@@ -57,6 +57,53 @@ async function ready(opened: WeaveNode): Promise<void> {
   node.wasmSetup.shippedDir = SHIPPED;
   // As the daemon's /events: everything new, with what it means for this person.
   void node.watch((item) => self.postMessage({ event: item }), new AbortController().signal);
+  void startPushes(opened).catch((error: Error) => console.warn('weave: pushes:', error.message));
+}
+
+/** The relay this browser's addresses are at: its storage node, as an https address. */
+const relayOf = (url: string): string => url.replace(/^ws/, 'http').replace(/\/storage$/, '');
+
+/**
+ * Pushes to this browser while Weave is closed (docs/web-push.md, stage 3): with a subscription, the node keeps an
+ * address and a key for each place, sealed to those who manage it. Notices this node sends go out through its own
+ * storage node, the one place the page's CSP lets it reach (so only to addresses there, for now).
+ */
+async function startPushes(opened: WeaveNode, off = false): Promise<void> {
+  const keys = await import('./pushkey.ts');
+  opened.pushTargets.setSender(async (target, message) => {
+    const here = storageUrl();
+    if (!here || relayOf(here) !== target.relay) return;
+    await withStorage((client) => client.pushForward(target.address, message.sealed));
+  });
+  const subscription = off ? undefined : await keys.loadSubscription().catch(() => undefined);
+  if (!subscription) return opened.pushTargets.setHost(undefined);
+  const device = await keys.deviceName();
+  await opened.pushTargets.setHost({
+    device,
+    targetFor: async (space) => {
+      const address = await keys.loadPlace(space);
+      const key = address ? await keys.loadKeyFor(address) : undefined;
+      const here = storageUrl();
+      return key && here ? { relay: relayOf(here), address: key.address, key: key.did } : undefined;
+    },
+    make: async (space) => {
+      const here = storageUrl();
+      const sub = await keys.loadSubscription();
+      if (!here || !sub) throw new Error('pushes are off in this browser');
+      const address = await withStorage((client) => client.pushSubscribe(sub, true));
+      const key = keys.makePushKey(address);
+      await keys.saveKeyFor(key);
+      await keys.savePlace(space, address);
+      return { relay: relayOf(here), address, key: key.did };
+    },
+    drop: async (space) => {
+      const address = await keys.loadPlace(space);
+      if (!address) return;
+      await withStorage((client) => client.pushDrop(address)).catch(() => undefined);
+      await keys.dropKeyFor(address);
+      await keys.dropPlace(space);
+    },
+  });
 }
 
 const lifecycle: Record<string, (...args: never[]) => unknown> = {
@@ -144,6 +191,15 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     return withStorage((client) => client.pushSelf(address, sealed, after));
   },
 
+  /** Pushes on in this browser (its subscription) or off: each place gets its address, or every one goes back. */
+  async pushPlaces(subscription?: { endpoint: string; p256dh: string; auth: string }) {
+    const keys = await import('./pushkey.ts');
+    if (subscription) await keys.saveSubscription(subscription);
+    if (node) await startPushes(node, !subscription);
+    // Off: the node took every place's address back while it still had the subscription to say so.
+    if (!subscription) await keys.clearSubscription();
+  },
+
   ways() {
     return account.lockState(HOME).ways;
   },
@@ -176,6 +232,8 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   async connect(url: string, invite?: string) {
     useStorage(account.storageLink(HOME, node!, url, { invite, status: (state, detail) => self.postMessage({ event: 'status', state, detail }) }));
     await node!.goOnline();
+    // Online now: the places' push addresses can be made at the storage node.
+    node!.pushTargets.changed(0);
     // A new account (it came with its invitation): the contacts Weave ships with, once it can reach them.
     if (invite) void node!.applyBundle(bundle).catch((error: Error) => console.warn('the contacts Weave ships with:', error.message));
   },
