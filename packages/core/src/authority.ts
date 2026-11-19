@@ -346,7 +346,9 @@ export class Authority {
     // Relays can't see a sealed event's kind; any delegated key may carry one, and
     // readers drop the event after decrypting if its inner kind isn't permitted.
     if (event.kind === KIND_SEALED && grant.permissions.length > 0) return { ok: true };
-    if (!permits(grant.permissions, event.kind)) return { ok: false, reason: `signer may not sign ${event.kind}`, retry: false };
+    // A person may have allowed the kind in a newer delegation that hasn't come yet (it travels apart from what the
+    // key signs): the event waits for it, instead of being dropped until someone happens to send it again.
+    if (!permits(grant.permissions, event.kind)) return { ok: false, reason: `signer may not sign ${event.kind}`, retry: true };
     return { ok: true };
   }
 }

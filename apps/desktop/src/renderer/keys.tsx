@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AgentAvatar } from './avatar.tsx';
 import { AgentAvatarEditor } from './avatar-editor.tsx';
-import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
+import type { BackupInfo, IdentityInfo, KeeperFriend, KeepersInfo, KeyInfo, LensKindInfo, Profile, ReachInfo, SignInStatus, Status } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { ago, api, bridge, bump, openedEnrollLink, shortDid, useApi } from './lib.ts';
 import { ask, attempt, AsyncButton, Modal, WeaveMark, Info, toast } from './ui.tsx';
@@ -651,7 +651,7 @@ function WordsDialog({ title, intro, since, encryption, onSubmit, onClose }: { t
   );
 }
 
-/** The kinds most agents need, in plain words (agent.perm.<kind>). Other kinds an agent already has are kept as they are. */
+/** The kinds most agents need, in plain words (agent.perm.<kind>). */
 const AGENT_KINDS = ['weave.post', 'weave.reply', 'weave.msg', 'weave.react', 'weave.issue.*', 'weave.vote', 'weave.post.coauthor', 'weave.post.edit', 'weave.app'] as const;
 const PERM_NAMES: Record<(typeof AGENT_KINDS)[number], string> = {
   'weave.post': 'agent.perm.post',
@@ -702,31 +702,56 @@ function DirectChatsChoice({ node, on, onChange }: { node: string; on: boolean; 
   );
 }
 
-/** What an agent may sign: checkboxes for the common kinds, saved with updateAgent. */
+/**
+ * What an agent may sign, saved with updateAgent: checkboxes for the common kinds, for the kinds the lenses of your
+ * boards write themselves (each named by its lens), and for whatever else it has, so anything can be taken away again.
+ */
 function AgentPermissionsDialog({ agent, onClose }: { agent: KeyInfo & { name: string; permissions: string[] }; onClose(): void }) {
   const { t } = useTexts();
   const [chosen, setChosen] = useState(() => new Set(agent.permissions));
   const [directChats, setDirectChats] = useState(!!agent.directChats);
-  const others = agent.permissions.filter((p) => !(AGENT_KINDS as readonly string[]).includes(p));
+  const { data: lensKinds } = useApi(() => api<LensKindInfo[]>('lensKinds').catch(() => []), []);
+  const ofLenses = lensKinds ?? [];
+  const others = agent.permissions.filter((p) => !(AGENT_KINDS as readonly string[]).includes(p) && !ofLenses.some((l) => l.kind === p));
+  const toggle = (kind: string, on: boolean) =>
+    setChosen((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(kind);
+      else next.delete(kind);
+      return next;
+    });
   return (
     <Modal title={t('agent.may.title', { name: agent.name })} onClose={onClose}>
       <form
         className="form"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          const permissions = [...AGENT_KINDS.filter((k) => chosen.has(k)), ...others];
+          const permissions = [...AGENT_KINDS, ...ofLenses.map((l) => l.kind), ...others].filter((k) => chosen.has(k));
           const done = await attempt(() => api('updateAgent', { name: agent.name, permissions, ...(agent.node ? { directChats } : {}) }).then(() => (bump(), true)), t('agent.may.saved', { name: agent.name }));
           if (done) onClose();
         }}
       >
         <p className="small">{t('agent.may.intro', { name: agent.name })}</p>
         <AgentKinds chosen={chosen} onChange={setChosen} />
+        {ofLenses.length > 0 && <p className="small">{t('agent.may.lenses')}</p>}
+        {ofLenses.map(({ kind, lenses }) => (
+          <div className="field-row" key={kind}>
+            <input id={`perm-${kind}`} type="checkbox" checked={chosen.has(kind)} onChange={(e) => toggle(kind, e.target.checked)} />
+            <label htmlFor={`perm-${kind}`} title={kind}>
+              {t('agent.perm.lens', { lens: lenses.join(', '), kind })}
+            </label>
+          </div>
+        ))}
+        {others.length > 0 && <p className="small">{t('agent.may.others')}</p>}
+        {others.map((kind) => (
+          <div className="field-row" key={kind}>
+            <input id={`perm-${kind}`} type="checkbox" checked={chosen.has(kind)} onChange={(e) => toggle(kind, e.target.checked)} />
+            <label htmlFor={`perm-${kind}`}>
+              <code>{kind}</code>
+            </label>
+          </div>
+        ))}
         {agent.node && <DirectChatsChoice node={agent.node.name} on={directChats} onChange={setDirectChats} />}
-        {others.length > 0 && (
-          <p className="small">
-            {t('agent.may.others')} <code>{others.join(', ')}</code>
-          </p>
-        )}
         <div className="buttons">
           <button type="button" onClick={onClose}>
             {t('button.cancel')}

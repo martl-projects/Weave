@@ -1333,9 +1333,12 @@ function FollowSpace({ space }: { space: SpaceInfo }) {
 export function CommunityBanner({ community, onInvite, onSubmit }: { community: SpaceInfo; onInvite(): void; onSubmit(): void }) {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<CommunityInfo>('community', community.id), [community.id]);
+  // Its page's banner, or else the background of its group photo (as a project's hero does).
+  const picture = info?.banner || community.background;
   return (
-    <div className="banner community">
-      <Sprite seed={community.id} size={64} className="banner-art" />
+    <div className={`banner community${picture ? ' has-banner' : ''}`}>
+      {picture && <BlobImage src={picture} className="hero-bg" />}
+      <ProjectIcon id={community.id} icon={community.icon} size={64} className="banner-art" />
       <div className="banner-text">
         <h1>r/{community.name}</h1>
         <span className="small">{t('community.members.moderated', { n: community.members, by: info?.moderators.map((m) => m.name ?? shortDid(m.did)).join(', ') ?? '…' })}</span>
@@ -1351,6 +1354,24 @@ export function CommunityBanner({ community, onInvite, onSubmit }: { community: 
         <FollowSpace space={community} />
       </div>
     </div>
+  );
+}
+
+/** Moderators give the community its icon and its banner: each is saved when picked, and taken away with Remove. */
+function CommunityPictures({ info }: { info: CommunityInfo }) {
+  const { t } = useTexts();
+  const save = (patch: { icon?: string; banner?: string }) => attempt(() => api('setCommunity', { community: info.id, ...patch }).then(bump), t('community.saved'));
+  return (
+    <fieldset>
+      <legend>{t('community.pictures')}</legend>
+      <div className="page-fields">
+        <ImagePicker label={t('pageed.icon')} value={info.icon ?? ''} onChange={(icon) => save({ icon })} />
+        <div className="grow">
+          <ImagePicker label={t('pageed.banner')} wide value={info.banner ?? ''} onChange={(banner) => save({ banner })} />
+        </div>
+      </div>
+      <p className="small">{t(info.background && !info.banner ? 'community.pictures.note.background' : 'community.pictures.note')}</p>
+    </fieldset>
   );
 }
 
@@ -1379,6 +1400,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
         )}
         <p className="small">{t('community.private.note')}</p>
       </fieldset>
+      {info.moderator && <CommunityPictures info={info} />}
       <fieldset>
         <legend>{t('community.moderators')}</legend>
         {members.map((m) => {

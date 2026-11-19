@@ -15,6 +15,7 @@ export type {
   BoardViewInfo,
   WidgetViewInfo,
   WidgetReleaseInfo,
+  LensKindInfo,
   GranteeInfo,
   InviteOptions,
   KnockInfo,

@@ -241,6 +241,11 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .banner .tag { vertical-align: 3px; }
 .banner-side { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 .banner-side .votes { margin-bottom: 4px; background: #fff; color: #000; padding: 2px; }
+/* A community's banner picture behind its head, under the same dark wash as a project's. */
+.banner.has-banner { position: relative; overflow: hidden; }
+.banner.has-banner::before { content: ''; position: absolute; inset: 0; background: #00104099; z-index: 1; }
+.banner.has-banner > :not(.hero-bg) { position: relative; z-index: 2; }
+.banner-art.project-icon { background: #fff; }
 .board-strip { display: flex; gap: 4px; flex-wrap: wrap; flex: none; padding: 4px 2px; }
 .board-chip {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; color: #000; text-decoration: none;

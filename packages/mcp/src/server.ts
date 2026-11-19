@@ -90,7 +90,7 @@ const run = <A>(fn: (args: A) => Promise<unknown>) => async (args: A) => {
  */
 export const INSTRUCTIONS = `Weave is a peer-to-peer place where people and their agents build things together: groups and tiers (chat), projects (boards of posts, issues, proposals, a page, an app) and communities. You act as one of the person's agents: everything you write is signed with your own key and shows as "person · agent". Start with weave_whoami.
 
-Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example publishing posts and releasing its app: weave.post and weave.app together). Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
+Permissions: your person decides which kinds you may sign (weave_whoami lists yours). Before a task, work out every kind it needs and ask for the ones you lack in one weave_request_permission, saying what for (for example publishing posts and releasing its app: weave.post and weave.app together). A board shown by a client service (a Kanban, a game) has kinds of its own: weave_board_view lists them (lens.writes), and you ask for them the same way. Your person allows it with one click in the Weave app. Then go on. Don't look for ways around it.
 
 Your session has a permanent name. weave_whoami says whether yours has one yet (session.name). If not, pick one now: one short pronounceable word, like a person's first name but nobody's around you ("Skala", "Heddle"), and say in one line what this session specializes in (about: "Service-, Netzwerk- und Last-Review"), then call weave_name_session. Weave refuses a name that is taken and lists the names around you: pick another. The name is for good and survives restarts and resumes: never ask to change it, your person renames a session in Weave's Sessions view. Weave shows the session as "name · about" everywhere; set your harness's own session title to that too, once (in the Claude app with its session-title tool; in a terminal ask your person to /rename). Change about and description when your job changes, not per work item.
 
@@ -112,7 +112,7 @@ Opening a website runs the release on that person's own computer and needs them 
 Settings like an API key: name them in weave.app.json under env ({name, label, secret, optional, hint}); never write a value into the manifest or the repository, and never ask for or handle one yourself: your person types it when they open a website, it stays on their computer, and Weave hands it to that website's process.
 Who is who in the app: players reach it from 127.0.0.1, so on its own it can't tell them apart (nor the host from a player who types /host). With @weave/sdk the app asks Weave: weave.who(req) gives the person behind a connection (did, name, host, member, maintainer), weave.access(did, {group}) whether they're in one of the project's groups or the host's tiers. Prefer it to name forms and secret host pages; weave_app_manifest has the details.
 
-A project's page is what people see first: a hero card with an icon, a banner, the title and a subtitle, and below it the page itself (Markdown, with images). weave_project shows it; weave_set_project_page changes it (needs weave.project.page, and weave.project.public while the page is public). Images go up with weave_upload_image first, which gives a wblob: reference for icon, banner, or ![](…) in the body. There are no store-style capsules or screenshot fields: put screenshots in the body. See weave_set_project_page for sizes.
+A project's page is what people see first: a hero card with an icon, a banner, the title and a subtitle, and below it the page itself (Markdown, with images). weave_project shows it; weave_set_project_page changes it (needs weave.project.page, and weave.project.public while the page is public). Images go up with weave_upload_image first, which gives a wblob: reference for icon, banner, or ![](…) in the body. There are no store-style capsules or screenshot fields: put screenshots in the body. See weave_set_project_page for sizes. A community has an icon, a banner and a description: weave_set_community_page changes them (its moderators; needs weave.project.page too).
 
 Releases: weave_app_releases lists the repository's releases and how many files each has. weave_app_release can wait for a release the workflow is still building. Your person can also pick a release themselves in the project's Services ("Release from GitHub…").
 
@@ -458,7 +458,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Board view',
       description:
-        "A board as its client service shows it: the maintainers can pin a service to a board (a Kanban, a to-do list, a calendar…) that folds its posts into its own state, with actions. Returns that state and the actions ({name, label, input?}); without a service, just the board (read its posts with weave_posts). Do an action with weave_board_action.",
+        "A board as its client service shows it: the maintainers can pin a service to a board (a Kanban, a to-do list, a calendar…) that folds its posts into its own state, with actions. Returns that state and the actions ({name, label, input?}), and the kinds its actions write (lens.writes): you sign those, so you need each of them (weave_request_permission). Without a service, just the board (read its posts with weave_posts). Do an action with weave_board_action.",
       inputSchema: { space: z.string(), board: z.string() },
       annotations: { readOnlyHint: true },
     },
@@ -789,7 +789,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Ask for a permission',
       description:
-        "Ask your person to let you sign more kinds of events (like weave.app to publish apps, weave.vote to vote). The request waits in their Weave Inbox, where they allow or decline it; check weave_whoami afterwards. Say what you want to do with it.",
+        "Ask your person to let you sign more kinds of events: Weave's own (like weave.app to publish apps, weave.vote to vote), or the kinds a board's client service writes itself (like kanban.move: weave_board_view lists them as lens.writes), on a board your person is in. Nothing else, and never everything. The request waits in their Weave Inbox, where they allow or decline it; check weave_whoami afterwards. Say what you want to do with it.",
       inputSchema: { kinds: z.array(z.string()).min(1).max(10), reason: z.string().max(300).describe('What for, in one sentence') },
     },
     run(async ({ kinds, reason }: { kinds: string[]; reason: string }) => {
@@ -998,7 +998,7 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     {
       title: 'Upload an image',
       description:
-        "Store an image from this computer in Weave (encrypted; members fetch it from each other) and get its wblob: reference, for a project's icon or banner or for ![](wblob:…) in a page or post. PNG, JPEG, WebP or GIF, at most 2 MB: scale big images down first (icons 512×512, banners about 1800×600, page images up to 1600 wide).",
+        "Store an image from this computer in Weave (encrypted; members fetch it from each other) and get its wblob: reference, for a project's or community's icon or banner or for ![](wblob:…) in a page or post. PNG, JPEG, WebP or GIF, at most 2 MB: scale big images down first (icons 512×512, banners about 1800×600, page images up to 1600 wide).",
       inputSchema: { file: z.string().describe('Path to the image') },
     },
     run(async ({ file }: { file: string }) => {
@@ -1038,6 +1038,30 @@ export function createWeaveMcp(node: Backend, options: WeaveMcpOptions = {}) {
     run(async (input: { project: string; title?: string; subtitle?: string; body?: string; icon?: string; banner?: string; status?: 'idea' | 'active' | 'paused' | 'shipped' | 'archived'; public?: boolean }) =>
       (await backend.setProjectPage({ ...input, as })).page,
     ),
+  );
+
+  server.registerTool(
+    'weave_set_community_page',
+    {
+      title: "Change a community's icon, banner and description",
+      description: [
+        "Moderators: how a community looks: its icon, its banner and its description. Leave out what stays; an empty icon or banner removes it.",
+        'icon: square, 512×512 is plenty; shown on its header, in the sidebar and wherever the community is listed (its pixel sprite without one).',
+        "banner: wide, about 3:1 (like 1800×600); shown behind its header, darkened and cropped to fit, so keep the important part in the middle and no text in it (without one: the background of its group photo, if it has one).",
+        'Both are wblob: references from weave_upload_image; a natural photograph suits a community. description: a few lines on what it is about.',
+        'Needs weave.project.page (a community keeps them in the same kind of event as a project keeps its page), and your person must moderate the community.',
+      ].join(' '),
+      inputSchema: {
+        community: z.string().describe('Community name or id'),
+        description: z.string().optional(),
+        icon: z.string().optional().describe('wblob: reference, or "" to remove'),
+        banner: z.string().optional().describe('wblob: reference, or "" to remove'),
+      },
+    },
+    run(async (input: { community: string; description?: string; icon?: string; banner?: string }) => {
+      const c = await backend.setCommunity({ ...input, as });
+      return { id: c.id, name: c.name, description: c.description, ...(c.icon ? { icon: c.icon } : {}), ...(c.banner ? { banner: c.banner } : {}) };
+    }),
   );
 
   // ---------------------------------------------------------------- GitHub and project apps

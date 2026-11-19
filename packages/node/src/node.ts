@@ -106,6 +106,7 @@ import {
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
+  type LensKindInfo,
   type ChatInfo,
   type FeedItem,
   type IdentityInfo,
@@ -3831,6 +3832,10 @@ export class WeaveNode implements Backend {
 
   approveWidget(...args: Parameters<Widgets['approveWidget']>): ReturnType<Widgets['approveWidget']> {
     return this.#widgets.approveWidget(...args);
+  }
+
+  async lensKinds(): Promise<LensKindInfo[]> {
+    return this.#lenses.lensKinds();
   }
 
   marks(...args: Parameters<Marks['marks']>): ReturnType<Marks['marks']> {

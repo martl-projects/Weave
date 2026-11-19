@@ -340,8 +340,18 @@ export class Sessions {
   async requestPermission(input: { as: string; kinds: string[]; reason?: string }): Promise<PermissionRequest> {
     const agent = this.core.agents.find((a) => a.name === input.as);
     if (!agent) throw noAgentError(input.as, this.core.agents.map((a) => a.name));
-    const kinds = [...new Set(input.kinds.map((k) => k.trim()))].filter((k) => /^weave\.[a-z0-9.*-]{1,60}$/.test(k));
-    if (!kinds.length) throw new Error('name the kinds to ask for, like weave.app');
+    // Weave's own kinds, and the kinds the lenses of this person's boards write themselves (tiles.move): nothing else, and never everything.
+    const asked = [...new Set(input.kinds.map((k) => String(k).trim()).filter(Boolean))];
+    const ofLenses = new Map((await this.node.lensKinds()).map((k) => [k.kind, k.lenses]));
+    const unknown = asked.filter((k) => !/^weave\.[a-z0-9.*-]{1,60}$/.test(k) && !ofLenses.has(k));
+    if (!asked.length) throw new Error('name the kinds to ask for, like weave.app');
+    if (unknown.length) {
+      const known = [...ofLenses.keys()];
+      throw new Error(
+        `can't ask for ${unknown.join(', ')}: name Weave's kinds (like weave.app), or the kinds a board's client service writes on a board your person is in${known.length ? ` (here: ${known.join(', ')})` : ' (none here yet)'}`,
+      );
+    }
+    const kinds = asked;
     const missing = kinds.filter((k) => !permits(agent.permissions, k));
     const now = new Date(this.node.clock()).toISOString();
     if (!missing.length) return { id: '', agent: agent.name, kinds, reason: '', time: now, state: 'allowed' };
@@ -349,16 +359,19 @@ export class Sessions {
     // Asking again for the same while waiting doesn't make a second request.
     const open = requests.find((r) => r.state === 'pending' && r.agent === agent.name && missing.every((k) => r.kinds.includes(k)));
     if (open) return open;
-    const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: missing, reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
+    // Which lens each of its kinds belongs to, for the person to read: a kind like tiles.move says little alone.
+    const lenses = Object.fromEntries(missing.filter((k) => ofLenses.has(k)).map((k) => [k, ofLenses.get(k)!]));
+    const named = missing.map((k) => (lenses[k] ? `${k} (${lenses[k].join(', ')})` : k)).join(', ');
+    const request: PermissionRequest = { id: b64u.encode(randomBytes(9)), agent: agent.name, kinds: missing, ...(Object.keys(lenses).length ? { lenses } : {}), reason: (input.reason ?? '').trim().slice(0, 300), time: now, state: 'pending' };
     // Keep what's pending, and the last few answers.
     writeJson(this.#requestsFile, [...requests.filter((r) => r.state === 'pending'), ...requests.filter((r) => r.state !== 'pending').slice(-20), request]);
     this.core.emitLive({
       type: 'permission',
       category: 'requests',
       title: `Your agent ${agent.name} asks for a permission`,
-      text: `To sign ${missing.join(', ')}${request.reason ? `: “${request.reason}”` : ''}`,
+      text: `To sign ${named}${request.reason ? `: “${request.reason}”` : ''}`,
       name: 'daemon.notice.permission',
-      values: { agent: agent.name, kinds: missing.join(', '), hasReason: request.reason ? 'yes' : 'no', reason: request.reason },
+      values: { agent: agent.name, kinds: named, hasReason: request.reason ? 'yes' : 'no', reason: request.reason },
       open: { inbox: true },
     });
     return request;

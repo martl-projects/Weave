@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVICE_LABEL } from '@weave/core';
-import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { closeOpenStores, WeaveNode, type FeedItem, type Fetch } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
 import { registry } from './helpers/registry.ts';
 
@@ -134,6 +134,61 @@ describe('client services', { timeout: 120_000 }, () => {
     await martl.setBoardLens({ space: 'Team', board: 'tasks', off: true });
     sync([martl, ola]);
     expect(await ola.boardView({ space: 'Team', board: 'tasks', use: true })).not.toHaveProperty('lens');
+  });
+
+  it('lets a person allow their agent a lens’s own kinds: asked for, named by its lens, and taken away again', async () => {
+    const martl = person('martl');
+    await martl.createProject({ name: 'Crew' });
+    await martl.setBoard({ project: 'Crew', name: 'tasks', title: 'Tasks' });
+    await martl.addAgent('claude', ['weave.post']);
+    // No board is shown by a lens yet: its kinds are nobody's to ask for.
+    expect(await martl.lensKinds()).toEqual([]);
+    await expect(martl.requestPermission({ as: 'claude', kinds: ['kanban.move'] })).rejects.toThrow(/can't ask for kanban\.move: .*\(none here yet\)/);
+
+    await martl.releaseService({ project: 'Crew', image: 'ghcr.io/martl/kanban:1.0' });
+    const view = await martl.setBoardLens({ space: 'Crew', board: 'tasks', from: { project: 'Crew' }, mode: 'require' });
+    // The board says what its lens writes, and the node what a person may allow beside Weave's kinds (never weave.*).
+    expect(view.lens?.writes).toEqual(['weave.post', 'kanban.move']);
+    expect(await martl.lensKinds()).toEqual([{ kind: 'kanban.move', lenses: ['Kanban'] }]);
+
+    // The agent adds a card (it may post), but may not move it.
+    const added = await martl.boardAction({ space: 'Crew', board: 'tasks', action: 'add', input: { title: 'Cut the video' }, as: 'claude' });
+    const card = (added.view.state as Kanban).columns[0].cards[0];
+    const move = () => martl.boardAction({ space: 'Crew', board: 'tasks', action: 'move', input: { post: card.id, column: 'Doing' }, as: 'claude' });
+    await expect(move()).rejects.toThrow(/agent "claude" may not sign kanban\.move; its person can allow it in Keys & devices/);
+
+    // Still refused: everything, a family of a lens's kinds, and kinds no lens here writes.
+    for (const kinds of [['*'], ['kanban.*'], ['kanban.move', 'evil.thing'], ['Kanban.Move']]) {
+      await expect(martl.requestPermission({ as: 'claude', kinds })).rejects.toThrow(/can't ask for .*\(here: kanban\.move\)/);
+    }
+    expect(await martl.permissionRequests()).toEqual([]);
+
+    // It asks for the lens's kind: the request and its notice name the lens.
+    const seen: FeedItem[] = [];
+    const watching = new AbortController();
+    void martl.watch((item) => seen.push(item), watching.signal);
+    await new Promise((r) => setTimeout(r, 50));
+    const asked = await martl.requestPermission({ as: 'claude', kinds: ['kanban.move', 'weave.post', 'weave.vote'], reason: 'to move the cards I work on' });
+    await new Promise((r) => setTimeout(r, 50));
+    watching.abort();
+    expect(asked).toMatchObject({ agent: 'claude', kinds: ['kanban.move', 'weave.vote'], lenses: { 'kanban.move': ['Kanban'] }, state: 'pending' });
+    expect(seen.find((i) => i.notice?.type === 'permission')?.notice).toMatchObject({
+      text: 'To sign kanban.move (Kanban), weave.vote: “to move the cards I work on”',
+      values: { agent: 'claude', kinds: 'kanban.move (Kanban), weave.vote' },
+    });
+
+    // Allowed: the agent moves the card, signed with its own key.
+    await martl.answerPermission({ id: asked.id, allow: true });
+    expect((await martl.whoami()).agents.find((a) => a.name === 'claude')!.permissions).toEqual(['weave.post', 'kanban.move', 'weave.vote']);
+    expect((await martl.requestPermission({ as: 'claude', kinds: ['kanban.move'] })).state).toBe('allowed');
+    const moved = await move();
+    expect(moved.published).toMatchObject([{ kind: 'kanban.move', author: martl.identity.author, body: { target: card.id, column: 'Doing' } }]);
+    expect(moved.published[0].signer).not.toBe(martl.identity.did);
+    expect((moved.view.state as Kanban).columns.map((c) => c.cards.map((x) => x.title))).toEqual([[], ['Cut the video'], []]);
+
+    // Taken away again (the dialog in Keys & devices saves what stays ticked): refused as before.
+    await martl.updateAgent({ name: 'claude', permissions: ['weave.post', 'weave.vote'] });
+    await expect(move()).rejects.toThrow(/may not sign kanban\.move/);
   });
 
   it('publishes only what its contract and the board allow, and nothing of a refused action', async () => {

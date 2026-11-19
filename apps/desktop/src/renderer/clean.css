@@ -355,12 +355,14 @@
 
 /* ---------- banners: plain, with the picture when there is one */
 :root[data-skin='clean'] :is(.hero, .banner) { margin: 0; padding: 20px; min-height: 0; color: var(--cl-text); border-bottom: 1px solid var(--cl-line); }
-:root[data-skin='clean'] :is(.hero:not(.has-banner), .banner) { background: var(--cl-panel); }
-:root[data-skin='clean'] :is(.hero:not(.has-banner), .banner) :is(h1, .hero-text h1, .banner-text h1) { color: var(--cl-text); text-shadow: none; }
-:root[data-skin='clean'] :is(.hero:not(.has-banner), .banner) .hero-subtitle { color: var(--cl-text-2); text-shadow: none; }
-:root[data-skin='clean'] :is(.hero:not(.has-banner), .banner) a { color: var(--cl-accent); }
-:root[data-skin='clean'] .hero.has-banner { color: #fff; }
-:root[data-skin='clean'] .hero.has-banner::before { background: linear-gradient(90deg, #101828cc, #10182855); }
+:root[data-skin='clean'] :is(.hero, .banner):not(.has-banner) { background: var(--cl-panel); }
+:root[data-skin='clean'] :is(.hero, .banner):not(.has-banner) :is(h1, .hero-text h1, .banner-text h1) { color: var(--cl-text); text-shadow: none; }
+:root[data-skin='clean'] :is(.hero, .banner):not(.has-banner) .hero-subtitle { color: var(--cl-text-2); text-shadow: none; }
+:root[data-skin='clean'] :is(.hero, .banner):not(.has-banner) a { color: var(--cl-accent); }
+:root[data-skin='clean'] :is(.hero, .banner).has-banner { color: #fff; }
+:root[data-skin='clean'] :is(.hero, .banner).has-banner::before { background: linear-gradient(90deg, #101828cc, #10182855); }
+/* A community's head on a picture: its title and description white too, in the light mode as in the dark. */
+:root[data-skin='clean'] .banner.has-banner :is(h1, .md) { color: #fff; }
 :root[data-skin='clean'] .hero-text h1, :root[data-skin='clean'] .banner-text h1 { font: 600 24px var(--content-font); letter-spacing: -0.02em; text-shadow: none; }
 :root[data-skin='clean'] :is(.hero-art, .banner-art) { border: 1px solid var(--cl-line); border-radius: 12px; overflow: hidden; box-shadow: var(--cl-shadow); background: var(--cl-subtle); }
 :root[data-skin='clean'] .banner-side .votes { padding: 4px 8px; background: var(--cl-panel); color: var(--cl-text); border: 1px solid var(--cl-line); border-radius: 8px; }
