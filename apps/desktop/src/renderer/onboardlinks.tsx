@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { BoardInfo, LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, PostInfo, SpaceInfo, WebsiteInfo } from '@weave/node/client';
+import type { LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, SpaceInfo } from '@weave/node/client';
 import { bridge } from './bridge.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { api, bump, navigate, useApi } from './lib.ts';
@@ -11,89 +11,52 @@ import { playSoon } from './websites.tsx';
 
 /*
  * Weave links (idea bZFDCQNT): one short web.martl.io link that makes a newcomer's account, makes you friends, lets them in
- * and opens what it leads to. Built in four steps: where it leads (you, a space, or in a space a board, a post or a website),
- * what happens on arrival, who may use it and how long, and how its card looks where it's shared. Its plan goes sealed to
- * the storage node; only the card is open. Below, your links with how often each was used, to take one back.
+ * and opens what it leads to. Where it leads is chosen in share mode (share.tsx), by going there; then three steps: what
+ * happens on arrival, who may use it and how long, and how its card looks where it's shared. Its plan goes sealed to the
+ * storage node; only the card is open. Below, your links with how often each was used, to take one back.
  *
  * Following one (Open link, a link handed over by the OS, Weave Web's /j/…) asks "Join?" once; a link to where you are
  * already, or your own, opens straight away and stays as a quick start (Quick start in the places tree, /play/<code>).
  */
 
-type Where = 'me' | 'space';
-type What = 'space' | 'board' | 'post' | 'website';
-const STEPS = 4;
+const STEPS = 3;
 /** Where the card says the link is from: Weave Web's page, where links live. */
 const CARD_SITE = bridge.web ? location.host : new URL('https://web.martl.io').host;
 const USES = [0, 1, 10, 50];
 const DAYS = [7, 30, 365];
 
-/** The link builder: four steps, then the link. `space`: a place to start from (Invite in a space). */
-export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: SpaceInfo[]; space?: SpaceInfo; tabs?: ReactNode; onClose(): void }) {
+/**
+ * The rest of a Weave link, once share mode (share.tsx) said where it leads: what happens on arrival, who may use it and
+ * how long, and its card; then the link. `crumbs`: where it leads, as the bar said it. `onClose(made)`: whether a link was made.
+ */
+export function LinkFinish({ target, space, also, title, crumbs, onClose }: { target: LinkTarget; space?: SpaceInfo; also: string[]; title: string; crumbs: string[]; onClose(made: boolean): void }) {
   const { t } = useTexts();
-  // Only places you may let people into: a project's maintainers make its links, any member a group's or community's.
-  const places = spaces.filter((s) => s.kind !== 'direct' && !s.closed && s.mayInvite);
+  const toMe = target.kind === 'me';
   const [step, setStep] = useState(1);
-  const [where, setWhere] = useState<Where>(from?.mayInvite ? 'space' : 'me');
-  const [spaceId, setSpaceId] = useState(from?.mayInvite ? from.id : (places[0]?.id ?? ''));
-  const [what, setWhat] = useState<What>('space');
-  const [board, setBoard] = useState('');
-  const [post, setPost] = useState('');
-  const [website, setWebsite] = useState('');
   const [friends, setFriends] = useState(true);
   const [play, setPlay] = useState(true);
   const [askFirst, setAskFirst] = useState(false);
-  const [also, setAlso] = useState<string[]>([]);
   const [welcome, setWelcome] = useState('');
   const [uses, setUses] = useState(0);
   const [days, setDays] = useState(30);
   const [preview, setPreview] = useState(true);
   const [previewText, setPreviewText] = useState('');
   const [image, setImage] = useState<'banner' | 'icon' | 'none'>('banner');
-  const [made, setMade] = useState<{ link: string; svg: string; target: LinkTarget['kind'] }>();
-  const space = places.find((s) => s.id === spaceId);
-  const { data: boards } = useApi(() => (where === 'space' && space?.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([] as BoardInfo[])), [where, space?.id]);
-  const { data: posts } = useApi(() => (where === 'space' && space && what === 'post' ? api<PostInfo[]>('posts', { space: space.id, sort: 'new' }) : Promise.resolve([] as PostInfo[])), [where, space?.id, what]);
-  const { data: websites } = useApi(() => (where === 'space' && space?.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id).catch(() => [] as WebsiteInfo[]) : Promise.resolve([] as WebsiteInfo[])), [where, space?.id]);
+  const [made, setMade] = useState<{ link: string; svg: string }>();
   const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks'), []);
   const { data: me } = useApi(() => api<{ name?: string }>('profile'), []);
-  const groups = places.filter((s) => s.kind === 'group' && s.id !== spaceId);
-
-  // What's chosen, as the node takes it; undefined while something's missing.
-  const target: LinkTarget | undefined =
-    where === 'me'
-      ? { kind: 'me' }
-      : !space
-        ? undefined
-        : what === 'board'
-          ? board ? { kind: 'board', space: space.id, board } : undefined
-          : what === 'post'
-            ? post ? { kind: 'post', space: space.id, post } : undefined
-            : what === 'website'
-              ? website ? { kind: 'website', space: space.id, website } : undefined
-              : { kind: 'space', space: space.id };
-  const title =
-    where === 'me'
-      ? (me?.name ?? '')
-      : what === 'board'
-        ? `${boards?.find((b) => b.name === board)?.title ?? ''} · ${space?.name ?? ''}`
-        : what === 'post'
-          ? (posts?.find((p) => p.id === post)?.title ?? '')
-          : what === 'website'
-            ? (websites?.find((w) => w.id === website)?.name ?? '')
-            : (space?.name ?? '');
-  const line = previewText.trim() || (where === 'me' ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title }));
+  const line = previewText.trim() || (toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title }));
 
   const create = async () => {
-    if (!target) return;
     const link = await attempt(() =>
       api<OnboardLinkInfo>('createOnboardLink', {
         target,
         // Weave Web makes links for its own page (and the storage node behind it); the desktop for web.martl.io.
         ...(bridge.web ? { page: location.origin } : {}),
         also,
-        friends: where === 'me' || friends,
-        play: what === 'website' ? play : false,
-        ask: where === 'space' && askFirst,
+        friends: toMe || friends,
+        play: target.kind === 'website' ? play : false,
+        ask: !toMe && askFirst,
         ...(welcome.trim() ? { welcome: welcome.trim() } : {}),
         ...(uses ? { uses } : {}),
         days,
@@ -102,7 +65,7 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
     );
     if (!link) return;
     const svg = await QRCode.toString(link.link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
-    setMade({ link: link.link, svg, target: target.kind });
+    setMade({ link: link.link, svg });
     bump();
   };
   const revoke = async (l: OnboardLinkInfo) => {
@@ -110,10 +73,9 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
     await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
   };
 
-  const stepTitle = [t('linkb.step.where'), t('linkb.step.arrive'), t('linkb.step.who'), t('linkb.step.card')][step - 1];
+  const stepTitle = [t('linkb.step.arrive'), t('linkb.step.who'), t('linkb.step.card')][step - 1];
   return (
-    <Modal title={made ? t('linkb.made.title') : t('linkb.title', { n: step, of: STEPS, step: stepTitle })} onClose={onClose}>
-      {!made && tabs}
+    <Modal title={made ? t('linkb.made.title') : t('linkb.title', { n: step, of: STEPS, step: stepTitle })} onClose={() => onClose(!!made)}>
       {made ? (
         <div className="form">
           <p className="small">{t('linkb.made')}</p>
@@ -122,7 +84,7 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
           </div>
           <div className="buttons">
-            <button onClick={() => (setMade(undefined), setStep(1))}>{t('linkb.another')}</button>
+            <button onClick={() => onClose(true)}>{t('button.close')}</button>
             <button className="default" onClick={() => copy(made.link, t('copy.what.copied', { what: t('linkb.link') }))}>
               <Icon name="copy" /> {t('button.copy')}
             </button>
@@ -135,113 +97,27 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
               <li key={i} className={i + 1 === step ? 'on' : i + 1 < step ? 'done' : ''} />
             ))}
           </ol>
+          <p className="link-leads">
+            <Icon name={KIND_ICON[target.kind]} /> {crumbs.join(' › ')}
+          </p>
 
           {step === 1 && (
             <>
               <div className="field-row">
-                <input type="radio" id="lb-me" checked={where === 'me'} onChange={() => setWhere('me')} />
-                <label htmlFor="lb-me">{t('linkb.where.me')}</label>
-              </div>
-              <div className="field-row">
-                <input type="radio" id="lb-space" checked={where === 'space'} disabled={!places.length} onChange={() => setWhere('space')} />
-                <label htmlFor="lb-space">{t('linkb.where.space')}</label>
-              </div>
-              {where === 'space' && (
-                <fieldset>
-                  <div className="field-row">
-                    <label htmlFor="lb-space-pick">{t('linkb.space')}</label>
-                    <select id="lb-space-pick" value={spaceId} onChange={(e) => (setSpaceId(e.target.value), setWhat('space'), setBoard(''), setPost(''), setWebsite(''))}>
-                      {places.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} · {t(`word.${s.kind}`)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field-row">
-                    <label htmlFor="lb-what">{t('linkb.what')}</label>
-                    <select id="lb-what" value={what} onChange={(e) => setWhat(e.target.value as What)}>
-                      <option value="space">{t('linkb.what.space')}</option>
-                      {space?.kind === 'project' && <option value="board">{t('linkb.what.board')}</option>}
-                      <option value="post">{t('linkb.what.post')}</option>
-                      {space?.kind === 'project' && <option value="website">{t('linkb.what.website')}</option>}
-                    </select>
-                  </div>
-                  {what === 'board' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-board">{t('word.board')}</label>
-                      <select id="lb-board" value={board} onChange={(e) => setBoard(e.target.value)}>
-                        <option value="">{t('linkb.pick')}</option>
-                        {(boards ?? []).map((b) => (
-                          <option key={b.name} value={b.name}>
-                            {b.title}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {what === 'post' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-post">{t('word.post')}</label>
-                      <select id="lb-post" value={post} onChange={(e) => setPost(e.target.value)}>
-                        <option value="">{t('linkb.pick')}</option>
-                        {(posts ?? []).slice(0, 50).map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.title || p.text?.slice(0, 60)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {what === 'website' &&
-                    (websites?.length ? (
-                      <div className="field-row">
-                        <label htmlFor="lb-website">{t('linkb.what.website')}</label>
-                        <select id="lb-website" value={website} onChange={(e) => setWebsite(e.target.value)}>
-                          <option value="">{t('linkb.pick')}</option>
-                          {websites.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <p className="small muted">{t('linkb.no.websites')}</p>
-                    ))}
-                </fieldset>
-              )}
-            </>
-          )}
-
-          {step === 2 && (
-            <>
-              <div className="field-row">
-                <input type="checkbox" id="lb-friends" checked={where === 'me' || friends} disabled={where === 'me'} onChange={(e) => setFriends(e.target.checked)} />
+                <input type="checkbox" id="lb-friends" checked={toMe || friends} disabled={toMe} onChange={(e) => setFriends(e.target.checked)} />
                 <label htmlFor="lb-friends">{t('linkb.friends')}</label>
               </div>
-              {what === 'website' && where === 'space' && (
+              {target.kind === 'website' && (
                 <div className="field-row">
                   <input type="checkbox" id="lb-play" checked={play} onChange={(e) => setPlay(e.target.checked)} />
                   <label htmlFor="lb-play">{t('linkb.start')}</label>
                 </div>
               )}
-              {where === 'space' && (
+              {!toMe && (
                 <div className="field-row">
                   <input type="checkbox" id="lb-ask" checked={askFirst} onChange={(e) => setAskFirst(e.target.checked)} />
                   <label htmlFor="lb-ask">{t('linkb.ask')}</label>
                 </div>
-              )}
-              {groups.length > 0 && (
-                <fieldset>
-                  <legend>{t('linkb.also')}</legend>
-                  {groups.map((g) => (
-                    <div className="field-row" key={g.id}>
-                      <input type="checkbox" id={`lb-also-${g.id}`} checked={also.includes(g.id)} onChange={(e) => setAlso((a) => (e.target.checked ? [...a, g.id] : a.filter((x) => x !== g.id)))} />
-                      <label htmlFor={`lb-also-${g.id}`}>{g.name}</label>
-                    </div>
-                  ))}
-                </fieldset>
               )}
               <div className="field-row-stacked">
                 <label htmlFor="lb-welcome">{t('linkb.welcome')}</label>
@@ -250,7 +126,7 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
             </>
           )}
 
-          {step === 3 && (
+          {step === 2 && (
             <>
               <div className="field-row">
                 <label htmlFor="lb-uses">{t('linkb.uses')}</label>
@@ -276,7 +152,7 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
             </>
           )}
 
-          {step === 4 && (
+          {step === 3 && (
             <>
               <div className="field-row">
                 <input type="checkbox" id="lb-preview" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
@@ -288,7 +164,7 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
                     <label htmlFor="lb-card-text">{t('linkb.card.text')}</label>
                     <input id="lb-card-text" maxLength={300} placeholder={line} value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
                   </div>
-                  {where === 'space' && space?.kind === 'project' && (
+                  {space?.kind === 'project' && (
                     <div className="field-row">
                       <label htmlFor="lb-image">{t('linkb.card.image')}</label>
                       <select id="lb-image" value={image} onChange={(e) => setImage(e.target.value as typeof image)}>
@@ -310,44 +186,51 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
           )}
 
           <div className="buttons">
-            {step > 1 ? <button onClick={() => setStep(step - 1)}>{t('linkb.back')}</button> : <button onClick={onClose}>{t('button.cancel')}</button>}
+            {step > 1 ? <button onClick={() => setStep(step - 1)}>{t('linkb.back')}</button> : <button onClick={() => onClose(false)}>{t('linkb.back')}</button>}
             {step < STEPS ? (
-              <button className="default" disabled={step === 1 && !target} onClick={() => setStep(step + 1)}>
+              <button className="default" onClick={() => setStep(step + 1)}>
                 {t('linkb.next')}
               </button>
             ) : (
-              <AsyncButton className="default" disabled={!target} onClick={create}>
+              <AsyncButton className="default" onClick={create}>
                 {t('linkb.create')}
               </AsyncButton>
             )}
           </div>
         </div>
       )}
-      {!!links?.length && (
-        <fieldset className="link-list">
-          <legend>{t('linkb.yours')}</legend>
-          {links.slice(0, 20).map((l) => (
-            <div className="field-row" key={l.code}>
-              <Icon name={KIND_ICON[l.kind]} />
-              <span className="grow">
-                {l.title} <span className="small muted">
-                  {l.revoked ? t('linkb.state.revoked') : l.used === undefined ? t('linkb.state.unknown') : l.uses ? t('linkb.state.used.of', { n: l.used, uses: l.uses }) : t('linkb.state.used', { n: l.used })}
-                  {l.expires && !l.revoked ? ` · ${t('linkb.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
-                </span>
-              </span>
-              {!l.revoked && (
-                <>
-                  <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('linkb.link') }))} title={t('button.copy')}>
-                    <Icon name="copy" />
-                  </button>
-                  <AsyncButton onClick={() => revoke(l)}>{t('linkb.revoke')}</AsyncButton>
-                </>
-              )}
-            </div>
-          ))}
-        </fieldset>
-      )}
+      {!made && <YourLinks links={links} revoke={revoke} />}
     </Modal>
+  );
+}
+
+/** Your links, with how often each was used, to copy one again or take it back. */
+function YourLinks({ links, revoke }: { links?: OnboardLinkInfo[]; revoke(l: OnboardLinkInfo): Promise<void> }) {
+  const { t } = useTexts();
+  if (!links?.length) return null;
+  return (
+    <fieldset className="link-list">
+      <legend>{t('linkb.yours')}</legend>
+      {links.slice(0, 20).map((l) => (
+        <div className="field-row" key={l.code}>
+          <Icon name={KIND_ICON[l.kind]} />
+          <span className="grow">
+            {l.title} <span className="small muted">
+              {l.revoked ? t('linkb.state.revoked') : l.used === undefined ? t('linkb.state.unknown') : l.uses ? t('linkb.state.used.of', { n: l.used, uses: l.uses }) : t('linkb.state.used', { n: l.used })}
+              {l.expires && !l.revoked ? ` · ${t('linkb.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
+            </span>
+          </span>
+          {!l.revoked && (
+            <>
+              <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('linkb.link') }))} title={t('button.copy')}>
+                <Icon name="copy" />
+              </button>
+              <AsyncButton onClick={() => revoke(l)}>{t('linkb.revoke')}</AsyncButton>
+            </>
+          )}
+        </div>
+      ))}
+    </fieldset>
   );
 }
 

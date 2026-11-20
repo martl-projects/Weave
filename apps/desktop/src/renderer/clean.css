@@ -473,3 +473,7 @@
 :root[data-skin='clean'] .invite-chip { background: var(--cl-success-soft); color: var(--cl-success); border-color: var(--cl-success-line); border-radius: 6px; }
 :root[data-skin='clean'] .invite-card.member .post-embed-meta { color: var(--cl-success); }
 :root[data-skin='clean'] :is(.invite-card.expired, .invite-card.old, .invite-card.elsewhere) .post-embed-meta { color: var(--cl-danger-text); }
+/* Share mode's bar (share.tsx). */
+:root[data-skin='clean'] .share-bar { background: color-mix(in srgb, var(--cl-accent) 14%, var(--cl-panel)); color: var(--cl-text); border-top: 1px solid var(--cl-accent-line, var(--cl-accent)); padding: 8px 14px; }
+:root[data-skin='clean'] .app-window.sharing .panes { outline-color: var(--cl-accent); }
+:root[data-skin='clean'] :is(.share-add.on, .pane-head .pane-share.on) { background: var(--cl-accent); border-color: var(--cl-accent); color: #fff; }

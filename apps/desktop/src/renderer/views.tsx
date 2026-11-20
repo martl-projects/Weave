@@ -10,7 +10,7 @@ import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx'
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
-import { LinkBuilder } from './onboardlinks.tsx';
+import { startShare } from './share.tsx';
 import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubAccounts } from './accounts.tsx';
 import { ImprintButton } from './imprint.tsx';
@@ -1543,8 +1543,6 @@ export function NewDialog({ onClose }: { onClose(): void }) {
 
 export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo; spaces?: SpaceInfo[]; onClose(): void }) {
   const { t } = useTexts();
-  // A project's own: a link to play (onboardlinks.tsx), one short link that makes the account and the friendship too.
-  const [toPlay, setToPlay] = useState(true);
   const [accept, setAccept] = useState(false);
   const [days, setDays] = useState(7);
   const [rights, setRights] = useState<Record<string, 'none' | 'read' | 'write'>>({});
@@ -1559,16 +1557,14 @@ export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo
   };
   const tabs = !link && (
     <div className="buttons tabs-row">
-      <button className={toPlay ? 'default' : ''} onClick={() => setToPlay(true)}>
-        {t('linkb.tab')}
+      <button onClick={() => (onClose(), startShare())}>
+        <Icon name="share" /> {t('linkb.tab')}
       </button>
-      <button className={toPlay ? '' : 'default'} onClick={() => setToPlay(false)}>
+      <button className="default">
         {t('linkb.tab.plain')}
       </button>
     </div>
   );
-  // The link builder, with this space chosen in its first step; the tabs switch to a plain invite link.
-  if (toPlay) return <LinkBuilder spaces={spaces} space={space} tabs={tabs} onClose={onClose} />;
   return (
     <Modal title={t('invite.title', { space: spaceLabel(space) })} onClose={onClose}>
       {tabs}

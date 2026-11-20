@@ -8,7 +8,8 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { joinLinkOf, LinkBuilder, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
+import { ShareAdd, ShareBar, startShare, stopShare, useShare } from './share.tsx';
+import { joinLinkOf, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
 import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
@@ -49,15 +50,15 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'build'; space?: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'submit'; space?: string; board?: string };
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   return (
-    <li style={{ paddingLeft: depth * 14 }}>
+    <li style={{ paddingLeft: depth * 14 }} className={extra ? 'tree-with-extra' : undefined}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
@@ -69,6 +70,7 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
           </span>
         )}
       </a>
+      {extra}
     </li>
   );
 }
@@ -94,7 +96,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} extra={<ShareAdd space={space} route={route} />} />
       {open && (
         <>
           {space.kind === 'project' &&
@@ -126,6 +128,17 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   );
 }
 
+/** In the places tree's head: share mode on, or off again. */
+function ShareToggle() {
+  const { t } = useTexts();
+  const { on } = useShare();
+  return (
+    <button className={`pane-share${on ? ' on' : ''}`} title={t('sharemode.button.title')} aria-pressed={on} onClick={on ? stopShare : startShare}>
+      <Icon name="share" /> {t('sharemode.button')}
+    </button>
+  );
+}
+
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useSeenTick(); // unread state lives in localStorage
   const { t } = useTexts();
@@ -149,6 +162,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
       <ArcadeWellIfOn />
       <header className="pane-head">
         <b>{t('tree.places')}</b>
+        <ShareToggle />
       </header>
       <ul className="tree-view">
         <TreeLink href="#/" icon="home" label={t('nav.home')} on={route.length === 0} />
@@ -294,7 +308,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const [lensFull, setLensFull] = useState(false);
   useEffect(() => setLensFull(false), [lensBoard?.name, space.id]);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
-  const invite = () => open({ kind: 'invite', space });
+  // A space's own Invite buttons make a Weave link, in share mode (share.tsx); the toolbar's Invite has the plain invite link.
+  const invite = startShare;
   const { t } = useTexts();
 
   let body: ReactNode;
@@ -739,6 +754,7 @@ function Shell() {
   // On a phone the places tree is a screen of its own; picking something closes it.
   const [placesOpen, setPlacesOpen] = useState(false);
   const routeKey = route.join('/');
+  const sharing = useShare().on;
   useEffect(() => setPlacesOpen(false), [routeKey]);
   if (!me || !spaces) return <div className="desktop" />;
 
@@ -798,7 +814,7 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${sharing ? ' sharing' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
           <WeaveMark size={14} /> {t('window.title', { where })}
@@ -811,7 +827,7 @@ function Shell() {
           items={[
             { label: t('menu.file.new'), onClick: () => setDialog({ kind: 'new' }) },
             { label: t('menu.file.join'), onClick: () => setDialog({ kind: 'new' }) },
-            { label: t('menu.file.link'), onClick: () => setDialog({ kind: 'build', space }) },
+            { label: t('menu.file.link'), onClick: startShare },
             ...(bridge.web ? [] : [{ label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' as const }) }]),
             'sep',
             { label: t('menu.file.close'), onClick: () => window.close() },
@@ -907,6 +923,7 @@ function Shell() {
         <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} inbox={inbox} onNew={() => setDialog({ kind: 'new' })} />
         {body}
       </div>
+      <ShareBar route={route} spaces={spaces} />
       <div className="status-bar">
         <p className="status-bar-field">
           <Avatar did={me.did} size={12} /> {me.name ?? t('word.you')}
@@ -927,7 +944,6 @@ function Shell() {
         </p>
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
-      {dialog?.kind === 'build' && <LinkBuilder spaces={spaces ?? []} space={dialog.space} onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} spaces={spaces ?? []} onClose={close} />}
       {dialog?.kind === 'link' && <OpenLinkDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}

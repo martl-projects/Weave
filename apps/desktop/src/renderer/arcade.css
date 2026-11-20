@@ -414,3 +414,5 @@
 :root[data-skin='arcade'] .image-picker-frame { background: #000; }
 :root[data-skin='arcade'] .blob-loading { background: var(--ar-panel-2); border-color: var(--ar-line); }
 
+/* Share mode's bar (share.tsx). */
+:root[data-skin='arcade'] .share-bar { background: #000; color: var(--t-s); border-top: 2px solid var(--ar-line); }
