@@ -724,6 +724,7 @@ function Shell() {
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
+  const { data: laterWords } = useApi(() => bridge.web?.laterWords().catch(() => undefined) ?? Promise.resolve(undefined), []);
   const { data: waiting } = useApi(() => api<Admission[]>('admissions'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
@@ -786,10 +787,17 @@ function Shell() {
         <Icon name="lock" /> {t(status.backupDue === 'again' ? 'backup.due.again' : 'backup.due.never')}
       </a>
     );
+    // Weave Web: an account made with a passkey came straight in; its words wait on Keys & devices until written down.
+    const wordsDue = laterWords && routeKey !== 'keys' && (
+      <a className="notice" href="#/keys">
+        <Icon name="lock" /> {t('words.later.notice')}
+      </a>
+    );
     body = (
       <div className="center">
         <DesktopHint />
         {unprotected}
+        {wordsDue}
         {shippedMissing}
         {backupDue}
         {center}

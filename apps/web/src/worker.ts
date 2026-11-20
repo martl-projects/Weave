@@ -75,11 +75,11 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     return account.lockState(HOME);
   },
 
-  /** A new person: their words, to be shown once. */
+  /** A new person: their words, to be shown once; with a passkey, later (laterWords), so they come straight in. */
   async create(name: string, passkey?: { id: string; secret: Uint8Array }) {
     const made = account.createAccount(HOME, name, passkey && wayIn(passkey));
     await ready(made.node);
-    return { words: made.words };
+    return passkey ? {} : { words: made.words };
   },
 
   async unlock(given: GivenWay) {
@@ -142,6 +142,14 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
   pushSelf(address: string, sealed: unknown, after?: number) {
     return withStorage((client) => client.pushSelf(address, sealed, after));
+  },
+
+  laterWords() {
+    return node ? account.laterWords(HOME, node) : undefined;
+  },
+
+  wordsWritten() {
+    account.wordsWritten(HOME);
   },
 
   ways() {

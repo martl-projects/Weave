@@ -407,10 +407,49 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 }
 
 /** Weave Web: what opens this account, and leaving this browser. */
+/** Weave Web: a new account's words, made with a passkey, until they're written down. */
+function LaterWords() {
+  const { t } = useTexts();
+  const { data: words } = useApi(() => bridge.web!.laterWords(), []);
+  const [shown, setShown] = useState(false);
+  const [wrote, setWrote] = useState(false);
+  if (!words) return null;
+  return (
+    <fieldset id="later-words">
+      <legend>{t('words.later.legend')}</legend>
+      <p>
+        <T name="words.later.write" />
+      </p>
+      {shown ? (
+        <>
+          <Words words={words} />
+          <div className="field-row">
+            <input id="later-wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
+            <label htmlFor="later-wrote">{t('onboard.words.wrote')}</label>
+          </div>
+          <div className="buttons">
+            <AsyncButton disabled={!wrote} onClick={() => attempt(() => bridge.web!.wordsWritten().then(bump), t('words.later.saved'))}>
+              {t('words.later.done')}
+            </AsyncButton>
+          </div>
+        </>
+      ) : (
+        <div className="buttons">
+          <button className="default" onClick={() => setShown(true)}>
+            {t('words.later.show')}
+          </button>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 function WebAccountBox() {
   const { t } = useTexts();
   const { data: ways, reload } = useApi(() => bridge.web!.ways(), []);
   return (
+    <>
+    <LaterWords />
     <fieldset>
       <legend>{t('web.ways.legend')}</legend>
       <p className="small">{t('web.ways.why')}</p>
@@ -441,6 +480,7 @@ function WebAccountBox() {
         <AsyncButton onClick={async () => void ((await ask(t('web.forget.ask'), t('web.forget.button'))) && (await attempt(() => bridge.web!.forget())))}>{t('web.forget.button')}</AsyncButton>
       </div>
     </fieldset>
+    </>
   );
 }
 
