@@ -18,7 +18,11 @@ import { useTexts } from './texts.tsx';
  *                                                                  (net: the hosts in its own address, which its CSP took)
  *   to the frame    {weave: 'files', files: [{path, type, data}]}  (apps/web/src/lens-frame.html)
  *   from the frame  {weave: 'fullscreen', on?}                      fill the screen with the view (on: false, leave it)
- *   to the frame    {weave: 'fullscreen', on, corner}               it fills the screen (or no longer); corner: the
+ *   from the frame  {weave: 'edges', own: true}                     I lay out the screen's edges myself: filling the
+ *                                                                  screen, give me all of it (under notch and home bar)
+ *   to the frame    {weave: 'fullscreen', on, corner, inset}        it fills the screen (or no longer); inset {top,
+ *                                                                  right, bottom, left}: what the device covers of each
+ *                                                                  edge, px (0 unless it said 'edges'); corner: the
  *                                                                  square at its top right (px) Weave's ✕ sits in
  *   from the frame  {weave: 'locate', id}                           where am I? (only if its member allowed it)
  *   to the frame    {weave: 'location', id, lat, lon, accuracy, rough} / {weave: 'location', id, error}
@@ -109,6 +113,18 @@ function watchTilt(tell: (tilt: { x: number; y: number }) => void): () => void {
   return () => window.removeEventListener('deviceorientation', heard);
 }
 
+/** How much of each edge of the screen the device covers (a notch, rounded corners, the home bar), in CSS pixels. */
+function screenInsets(): { top: number; right: number; bottom: number; left: number } {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+  document.body.appendChild(probe);
+  const s = getComputedStyle(probe);
+  const px = (v: string) => Math.round(parseFloat(v) || 0);
+  const inset = { top: px(s.paddingTop), right: px(s.paddingRight), bottom: px(s.paddingBottom), left: px(s.paddingLeft) };
+  probe.remove();
+  return inset;
+}
+
 /** A file a view made for its member, waiting for their word: save it (resolves when it is with them) or not. */
 export interface LensOffer {
   name: string;
@@ -148,22 +164,32 @@ const tiltAsks = (): (() => Promise<string>) | undefined => {
 };
 let tiltGranted = false;
 
-export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onOffer, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
+export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
   const frame = useRef<HTMLIFrameElement>(null);
   // Weave Web's frame takes its CSP from its address (a Pages Function): the hosts this member allowed, or none. On a
   // computer or a phone the node's answer carries them (lensFile), so the address stays as it is.
   const hosts = net?.length ? net.join(',') : '';
   const src = bridge.web && hosts ? `${base}?net=${encodeURIComponent(hosts)}` : base;
-  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onLocated, onFullscreen });
-  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onLocated, onFullscreen };
+  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
+  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
   const tilting = useRef<(() => void) | null>(null);
   const attached = useRef(0);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () => send(latest.current.view);
   useEffect(sendView, [view]);
-  // The view hears when it fills the screen, and where Weave's ✕ is then, so it keeps that corner free.
-  useEffect(() => send({ weave: 'fullscreen', on: !!full, corner: 40 }), [full]);
+  // The view hears when it fills the screen, and where Weave's ✕ is then, so it keeps that corner free. A view that
+  // said it lays out the screen's edges itself ({weave: 'edges', own: true}) gets all of the screen, under a phone's
+  // notch and home bar too, and hears how much of each edge the device covers (inset, px): it lays its own ground
+  // there and keeps what matters clear. Any other view stays inside those edges, and its inset is 0.
+  const [edges, setEdges] = useState(false);
+  useEffect(() => {
+    const tell = () => send({ weave: 'fullscreen', on: !!full, corner: 40, inset: full && edges ? screenInsets() : { top: 0, right: 0, bottom: 0, left: 0 } });
+    tell();
+    if (!full) return;
+    window.addEventListener('resize', tell);
+    return () => window.removeEventListener('resize', tell);
+  }, [full, edges]);
 
   useEffect(() => {
     const listen = (event: MessageEvent) => {
@@ -182,6 +208,11 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
         );
       }
       if (m?.weave === 'open' && typeof m.post === 'string') latest.current.onOpen?.(m.post);
+      if (m?.weave === 'edges') {
+        const own = (m as { own?: unknown }).own === true;
+        setEdges(own);
+        latest.current.onEdges?.(own);
+      }
       // The view asks to fill the screen (a map, a game): a click in it came first, so the browser lets the page do it.
       if (m?.weave === 'fullscreen') latest.current.onFullscreen?.((m as { on?: unknown }).on !== false);
       // Where its member is: only as its member allowed (location), asked of the device here, never in the frame.
@@ -353,6 +384,8 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
   const [tiltAsk, setTiltAsk] = useState<(() => void) | null>(null);
   // A file the view made for its member, until they saved it or said no.
   const [offer, setOffer] = useState<LensOffer | null>(null);
+  // The view lays out the screen's edges itself: filling the screen, it gets all of it.
+  const [bleed, setBleed] = useState(false);
   const waiting = useRef<LensOffer | null>(null);
   // One at a time: a newer file takes the place of one nobody answered (which is then not saved).
   const offered = (next: LensOffer | null) => {
@@ -388,7 +421,7 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
     reload();
   };
   return (
-    <div className="lens-box" ref={box}>
+    <div className={bleed ? 'lens-box lens-bleed' : 'lens-box'} ref={box}>
       {full && (
         <button className="lens-full-exit" onClick={() => setFull(false)} title={t('lens.fullscreen.exit')} aria-label={t('lens.fullscreen.exit')}>
           ✕
@@ -463,7 +496,7 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
         </div>
       )}
       {/* A new key when the hosts change: the frame loads again with the CSP that goes with them. */}
-      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
+      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
     </div>
   );
 }

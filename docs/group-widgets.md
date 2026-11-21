@@ -72,6 +72,10 @@ A lens's or widget's site may ask where its member is, when its manifest says ho
 - **Weave asks, not the frame:** the frame posts `{weave: 'locate', id}`; the host (`apps/desktop/src/renderer/lens.tsx`, on a computer, a phone and Weave Web alike) asks the device, rounds it, and answers `{weave: 'location', id, lat, lon, accuracy, rough}` or `{weave: 'location', id, error}`. The sandboxed frame never has geolocation; the component never gets a place, and nothing is published unless the member's own action puts it there.
 - A site with `net` could send the place to its hosts: its member allows both with both in view.
 
+## The screen's edges
+
+A lens that fills the screen (`{weave: 'fullscreen'}`, or the pane's button) stays inside what a phone covers of its screen (the notch, the home bar): strips of Weave's ground are left there. A view that lays those edges out itself says so once, `{weave: 'edges', own: true}`, and then gets all of the screen. `{weave: 'fullscreen', on, corner, inset}` tells it how much of each edge is covered (`inset: {top, right, bottom, left}` in px; 0 for a view that didn't say `edges`): its own ground goes there, and what matters keeps clear. Weave's ✕ sits in the `corner` square at the top right, below `inset.top`.
+
 ## Pictures and files
 
 A view's frame can neither open a picture of its board (a `wblob:` reference is no address) nor keep one, nor give its member a file. Weave does these for it (`apps/desktop/src/renderer/lens.tsx`); the view message's `can` lists what this Weave answers (`['picture', 'attach', 'save', 'tilt']`, as far as it does), so a view on an older Weave knows not to wait.

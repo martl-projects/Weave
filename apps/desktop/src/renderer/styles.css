@@ -1143,6 +1143,9 @@ button.session-title:hover { text-decoration: underline; }
 /* A lens's view, and the same filling the screen: the browser's full screen, or laid over the app (an iPhone). */
 .lens-box { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--window, #fff); }
 .lens-box:fullscreen, .lens-box.lens-full { position: fixed; inset: 0; z-index: 10000; width: auto; height: auto; max-width: 100vw; max-height: 100dvh; box-sizing: border-box; overflow: hidden; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--window, #fff); }
+/* A view that lays out the screen's edges itself ({weave: 'edges'}) gets all of it, under the notch and the home bar too. */
+.lens-box.lens-bleed:fullscreen, .lens-box.lens-bleed.lens-full { padding: 0; }
+.lens-box.lens-bleed .lens-full-exit { opacity: 0.6; }
 /* The view alone on the screen: its lines about hosts and place stay in the pane (they come back on leaving). */
 .lens-box:fullscreen .lens-net, .lens-box.lens-full .lens-net { display: none; }
 html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
