@@ -103,6 +103,20 @@ const startStuck = () => {
   const again = say('button', de ? 'Neu laden' : 'Load again');
   again.style.cssText = 'font:inherit;padding:8px 14px';
   again.onclick = () => location.reload();
+  // This browser's copy of the account can't be read any more. The account itself is with the person's other devices
+  // and the storage node: dropping the copy here and coming in again brings it back. Only on their word.
+  if (/SQLITE_(CORRUPT|NOTADB)/.test(startError)) {
+    say('p', de ? 'Die Kopie deines Kontos in diesem Browser ist beschädigt. Dein Konto selbst liegt weiter bei deinen anderen Geräten und am Speicherknoten. Du kannst die Kopie hier löschen und dich neu anmelden: mit deinem Passkey, deinen 24 Wörtern oder einem Link von deinem Computer. Was du nur hier geschrieben hast und was noch nicht bei den anderen angekommen war, geht dabei verloren.' : 'The copy of your account in this browser is damaged. Your account itself is still with your other devices and the storage node. You can delete the copy here and come in again: with your passkey, your 24 words or a link from your computer. What you wrote only here and what had not reached the others yet is lost with it.').style.marginTop = '14px';
+    const drop = say('button', de ? 'Kopie hier löschen' : 'Delete the copy here');
+    drop.style.cssText = 'font:inherit;padding:8px 14px';
+    drop.onclick = async () => {
+      if (!confirm(de ? 'Die Kopie deines Kontos in diesem Browser wirklich löschen? Das lässt sich nicht zurücknehmen.' : 'Really delete the copy of your account in this browser? This can’t be undone.')) return;
+      (drop as HTMLButtonElement).disabled = true;
+      const answer = await ask('forget');
+      if ('error' in answer) return void say('p', `${de ? 'Das ging nicht' : 'That didn’t work'}: ${JSON.stringify(answer.error)}`);
+      location.reload();
+    };
+  }
   root.replaceChildren(box);
 };
 const startFailed = (error: unknown) => {

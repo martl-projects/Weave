@@ -71,8 +71,18 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     await turn;
     stage('the database in this browser opens');
     const db = await openWasmDatabase('weave.db');
-    useFiles(db);
-    useStore(db);
+    try {
+      useFiles(db);
+      useStore(db);
+    } catch (error) {
+      // A database that can't be read (damaged): let go of it, so the page can offer to drop this copy (forget).
+      try {
+        db.close();
+      } catch {
+        // it was never quite open
+      }
+      throw error;
+    }
     stage("Weave's own services load");
     await shipped();
     stage("the account's files are read");
