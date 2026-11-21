@@ -2,6 +2,24 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.36.0 · 2026-11-21
+
+- A lens that lays out the screen's edges itself fills all of the screen: under a phone's notch and home bar too, and it hears how much of each edge is covered
+- A lens's view gets its board's pictures, can add pictures and hand its member a file: Weave does what the sandboxed frame cannot
+- A lens's view can follow how the device is tilted: its manifest says "tilt", Weave hears the sensors and hands the reading on
+- Storage node: links from anyone with planner '*', within limits
+- Saving a backup works in the app: it's sealed with @noble/ciphers, not node:crypto ("Unknown cipher")
+- The Store job runs on GitHub's Windows runner: the self-hosted one couldn't upload the package to the Store
+- Store submission: msstore's -i is the package's folder, not the file
+- Store submission finds its publisher: msstore gets the project folder and the .appx as its input file
+- Revert "Lenses and widgets let their engines go: one unused for 10 minutes stops, and beyond four the one used longest ago (each starts again when asked); every version of a lens kept one running before"
+- Lenses and widgets let their engines go: one unused for 10 minutes stops, and beyond four the one used longest ago (each starts again when asked); every version of a lens kept one running before
+- A lens hears when it fills the screen ({weave: 'fullscreen', on, corner}), so it keeps the corner of Weave's ✕ free
+- Lenses in full screen: exactly the screen (no wider), the lines about hosts and place out of the way, room for the notch, and a small ✕ in the corner to leave
+- Agents: a lens's own kinds can be asked for and allowed in the app
+- Communities: an icon and a banner of their own, set by their moderators
+- Release notes: @word outside code goes into backticks, so GitHub mentions nobody
+
 ## v0.35.1 · 2026-11-18
 
 - Releases from GitHub in a page: a member's computer that fetched one for a lens or widget keeps it as blobs and says so (weave.artifact.mirror); where the provider's way fails (Weave Web reaches no GitHub download), a node puts it together from those blobs, checked against the release
