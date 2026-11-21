@@ -72,6 +72,14 @@ A lens's or widget's site may ask where its member is, when its manifest says ho
 - **Weave asks, not the frame:** the frame posts `{weave: 'locate', id}`; the host (`apps/desktop/src/renderer/lens.tsx`, on a computer, a phone and Weave Web alike) asks the device, rounds it, and answers `{weave: 'location', id, lat, lon, accuracy, rough}` or `{weave: 'location', id, error}`. The sandboxed frame never has geolocation; the component never gets a place, and nothing is published unless the member's own action puts it there.
 - A site with `net` could send the place to its hosts: its member allows both with both in view.
 
+## Pictures and files
+
+A view's frame can neither open a picture of its board (a `wblob:` reference is no address) nor keep one, nor give its member a file. Weave does these for it (`apps/desktop/src/renderer/lens.tsx`); the view message's `can` lists what this Weave answers (`['picture', 'attach', 'save', 'tilt']`, as far as it does), so a view on an older Weave knows not to wait.
+
+- **`{weave: 'picture', id, ref}`** → `{weave: 'picture', id, type, data}` (an ArrayBuffer) or `{…, error}`: the bytes of a picture, only of a reference the view's own state names, so it sees nothing its member doesn't see on that board anyway.
+- **`{weave: 'attach', id, name, type, data}`** → `{weave: 'attached', id, ref}` or `{…, error}`: Weave keeps the picture as its member's (encrypted, like one they attach themselves); the view puts the reference into an action's input (a `weave.post` with `image`, say). Pictures only, at most 2 MB each and 60 while the view is open (`LENS_FILES` in core).
+- **`{weave: 'save', id, name, type, data}`** → `{weave: 'saved', id}` or `{…, error}`: a file the view made for its member (a PDF, a picture, a text file; at most 64 MB). A line above the lens says it is there; the member saves it or not, so no view writes to a disk by itself. The name is made safe (`lensFileName`). Not for a widget in a chat yet (there is no such line there).
+
 ## How the device is tilted
 
 A lens's or widget's site may follow how its member tilts the device (light that moves over paper, a marble that rolls), when its manifest says so:

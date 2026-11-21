@@ -3,6 +3,7 @@ import {
   locationCovers,
   roughLocation,
   screenTilt,
+  lensFileName,
   artifactKindOf,
   boardOfEvents,
   channelsOf,
@@ -75,6 +76,15 @@ describe('the widget manifest', () => {
     expect(ok.manifest!.widget!.tilt).toBeUndefined();
     expect(checkManifest({ app: 'w', name: 'W', client: { component: 'b.wasm', site: 'site', writes: [], tilt: 'yes' } }).problems.join()).toMatch(/client.tilt/);
     expect(checkManifest({ app: 'w', name: 'W', widget: { component: 'b.wasm', writes: [], tilt: true } }).problems.join()).toMatch(/widget.tilt" is for its site/);
+  });
+
+  it('makes a file name a view gives safe to save under', () => {
+    expect(lensFileName('Unser Sommer 2026.pdf')).toBe('Unser Sommer 2026.pdf');
+    expect(lensFileName('..\\..\\autoexec.bat')).toBe('autoexec.bat');
+    expect(lensFileName('a/b:c*?"<>|d.pdf')).toBe('a b c d.pdf');
+    expect(lensFileName('  ...  ')).toBe('file');
+    expect(lensFileName(7)).toBe('file');
+    expect(lensFileName('x'.repeat(200)).length).toBe(80);
   });
 
   it('tells a tilt as the screen is held, without the compass', () => {

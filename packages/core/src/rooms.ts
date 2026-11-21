@@ -192,6 +192,27 @@ export function screenTilt(beta: number, gamma: number, angle = 0): { x: number;
   return { x: half(x), y: half(y) };
 }
 
+/**
+ * What a lens's or widget's view may hand Weave, and what Weave hands it (the frame itself can neither open a picture
+ * of its board nor keep one, nor give its member a file):
+ *   pictures it adds: these types, at most `attachBytes` each and `attachCount` while the view is open;
+ *   files it offers its member to save: these types, at most `saveBytes`.
+ */
+export const LENS_FILES = {
+  attach: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+  attachBytes: 2 * 1024 * 1024,
+  attachCount: 60,
+  save: ['application/pdf', 'image/png', 'image/jpeg', 'text/plain', 'text/csv'],
+  saveBytes: 64 * 1024 * 1024,
+} as const;
+
+/** A file's name as a view may give it: no path, nothing a file system refuses, at most 80 characters, never empty. */
+export function lensFileName(name: unknown): string {
+  // eslint-disable-next-line no-control-regex
+  const plain = (typeof name === 'string' ? name : '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '');
+  return plain.slice(0, 80).trim() || 'file';
+}
+
 /** The height a widget asks for in a chat, in CSS pixels: between these, and this one when it says none. */
 export const WIDGET_HEIGHT = { min: 120, max: 720, default: 320 } as const;
 
