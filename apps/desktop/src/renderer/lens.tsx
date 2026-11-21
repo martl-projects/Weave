@@ -163,6 +163,50 @@ const tiltAsks = (): (() => Promise<string>) | undefined => {
   return typeof ask === 'function' ? () => ask.call(DeviceOrientationEvent) : undefined;
 };
 let tiltGranted = false;
+/** The views that wait for the iPhone's yes: each is started when it comes, whichever tap brought it. */
+const tiltWaiting = new Set<() => void>();
+const TILT_SAID = 'weave.tilt.said';
+/**
+ * Ask the iPhone (it answers without a question when it still remembers a yes, and refuses to ask unless a tap in
+ * Weave came first). A yes is kept here, so the next time Weave asks by itself at the first tap anywhere in it.
+ */
+function tiltGrant(ask: () => Promise<string>): Promise<boolean> {
+  return ask().then(
+    (answer) => {
+      if (answer !== 'granted') return false;
+      tiltGranted = true;
+      try {
+        localStorage.setItem(TILT_SAID, '1');
+      } catch {
+        // Not kept: Weave's line asks again next time.
+      }
+      for (const go of [...tiltWaiting]) go();
+      tiltWaiting.clear();
+      return true;
+    },
+    () => false,
+  );
+}
+// Someone who said yes before isn't asked by Weave again: an iPhone forgets its own yes when the page is closed, and
+// asks only after a tap, so the first tap in Weave brings its question back (or, if it remembers, nothing at all).
+if (typeof window !== 'undefined') {
+  const ask = tiltAsks();
+  let said = false;
+  try {
+    said = localStorage.getItem(TILT_SAID) === '1';
+  } catch {
+    // No storage: Weave's line asks.
+  }
+  if (ask && said) {
+    const once = () => {
+      window.removeEventListener('touchend', once, true);
+      window.removeEventListener('click', once, true);
+      if (!tiltGranted) void tiltGrant(ask);
+    };
+    window.addEventListener('touchend', once, true);
+    window.addEventListener('click', once, true);
+  }
+}
 
 export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
@@ -174,6 +218,7 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
   const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
   latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
   const tilting = useRef<(() => void) | null>(null);
+  const tiltGo = useRef<(() => void) | null>(null);
   const attached = useRef(0);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () => send(latest.current.view);
@@ -284,6 +329,8 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
       if (m?.weave === 'tilt') {
         tilting.current?.();
         tilting.current = null;
+        if (tiltGo.current) tiltWaiting.delete(tiltGo.current);
+        tiltGo.current = null;
         latest.current.onTiltAsk?.(null);
         if ((m as { on?: unknown }).on !== false && latest.current.tilt) {
           const start = () => {
@@ -292,18 +339,19 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
           };
           const ask = tiltAsks();
           if (!ask || tiltGranted) start();
-          else
-            latest.current.onTiltAsk?.(() => {
+          else {
+            // An iPhone: started when its yes comes. Asked silently first (it may still remember); if it wants a tap,
+            // Weave's line offers one, unless the tap anywhere in Weave (for someone who said yes before) comes first.
+            const go = () => {
               latest.current.onTiltAsk?.(null);
-              ask().then(
-                (answer) => {
-                  if (answer !== 'granted') return;
-                  tiltGranted = true;
-                  start();
-                },
-                () => {},
-              );
+              start();
+            };
+            tiltGo.current = go;
+            tiltWaiting.add(go);
+            void tiltGrant(ask).then((yes) => {
+              if (!yes && !tiltGranted && tiltGo.current === go) latest.current.onTiltAsk?.(() => void tiltGrant(ask));
             });
+          }
         }
       }
       // Weave Web's frame (apps/web/src/lens-frame.html) asks for the view's files, builds its page, and says so.
@@ -327,6 +375,7 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
     return () => {
       window.removeEventListener('message', listen);
       tilting.current?.();
+      if (tiltGo.current) tiltWaiting.delete(tiltGo.current);
     };
   }, []);
 
