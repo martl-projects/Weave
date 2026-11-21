@@ -1410,6 +1410,8 @@
     "lens.location.on": "{name} may know roughly where you are",
     "lens.location.on.exact": "{name} may know exactly where you are",
     "lens.location.not.allowed": "{name} may not know where you are",
+    "lens.tilt.ask": "{name} would like to follow how you tilt your device",
+    "lens.tilt.why": "For light and movement in the view. Weave hears the sensors, and only while the view is open and asks.",
     "widget.from.elsewhere": "{name} {tag}, from a project you're not in",
     "widget.app": "{name} {tag}",
     "widget.app.tag": "{tag}",

@@ -155,6 +155,8 @@ export interface AppClient {
   net?: string[];
   /** Its site may ask where its member is (LensLocation), once they said yes: about 1 km ("rough") or as exact as the device knows. */
   location?: LensLocation;
+  /** Its site may ask how the device is tilted (screenTilt), while it shows: for light on paper, a marble that rolls. */
+  tilt?: boolean;
 }
 
 /**
@@ -177,6 +179,19 @@ export function roughLocation(lat: number, lon: number): { lat: number; lon: num
   return { lat: cell(lat), lon: cell(lon) };
 }
 
+/**
+ * How a device is tilted, as its screen is held: x degrees to the side (the right edge down is positive), y degrees
+ * forward (the top edge away from the person is positive). From the device's own reading (beta: front to back, gamma:
+ * left to right, both about the upright phone) and how far the screen is turned (0, 90, 180 or 270 degrees); rounded
+ * to half a degree. The compass (alpha) is left out: a view learns how the device is held, not where it points.
+ */
+export function screenTilt(beta: number, gamma: number, angle = 0): { x: number; y: number } {
+  const turn = ((Math.round(angle / 90) % 4) + 4) % 4;
+  const [x, y] = turn === 1 ? [beta, -gamma] : turn === 2 ? [-gamma, -beta] : turn === 3 ? [-beta, gamma] : [gamma, beta];
+  const half = (v: number) => Math.round(v * 2) / 2 + 0;
+  return { x: half(x), y: half(y) };
+}
+
 /** The height a widget asks for in a chat, in CSS pixels: between these, and this one when it says none. */
 export const WIDGET_HEIGHT = { min: 120, max: 720, default: 320 } as const;
 
@@ -193,6 +208,8 @@ export interface AppWidget {
   net?: string[];
   /** Its site may ask where its member is, as a client service's (AppClient.location): approving its release allows it. */
   location?: LensLocation;
+  /** Its site may ask how the device is tilted, as a client service's (AppClient.tilt). */
+  tilt?: boolean;
 }
 
 /** Where a WebAssembly service's parts are in its package: paths inside it, like "service.wasm" and "site". */
@@ -805,6 +822,13 @@ export function checkManifest(input: unknown): ManifestCheck {
     problems.push(`"${field}.location" says how closely its site may know where its member is: "rough" (about 1 km) or "exact" (not ${JSON.stringify(raw.location)})`);
     return null;
   };
+  /** A site's wish to know how the device is tilted ("client.tilt", "widget.tilt"): true, or left out. */
+  const siteTilt = (raw: Record<string, unknown>, field: string): boolean | null => {
+    if (raw.tilt === undefined || raw.tilt === false) return false;
+    if (raw.tilt === true) return true;
+    problems.push(`"${field}.tilt" says that its site may ask how the device is tilted: true (not ${JSON.stringify(raw.tilt)})`);
+    return null;
+  };
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;
   if (m.client !== undefined) {
@@ -817,9 +841,11 @@ export function checkManifest(input: unknown): ManifestCheck {
     else {
       const net = siteNet(raw, 'client');
       const location = siteLocation(raw, 'client');
+      const tilt = siteTilt(raw, 'client');
       if (net && !site) problems.push('"client.net" is for its site: a client service without one ("client.site") loads nothing');
       else if (location && !site) problems.push('"client.location" is for its site: a client service without one ("client.site") shows nothing');
-      else if (location !== null) client = { component, ...(site ? { site } : {}), writes, ...(net ? { net } : {}), ...(location ? { location } : {}) };
+      else if (tilt && !site) problems.push('"client.tilt" is for its site: a client service without one ("client.site") shows nothing');
+      else if (location !== null && tilt !== null) client = { component, ...(site ? { site } : {}), writes, ...(net ? { net } : {}), ...(location ? { location } : {}), ...(tilt ? { tilt } : {}) };
     }
   }
   // A group widget: as a client service, but its kinds are its own only (never Weave's), and it says its height.
@@ -840,9 +866,11 @@ export function checkManifest(input: unknown): ManifestCheck {
       if (named.length !== writes.length) warnings.push('"widget.writes" lists kinds like "tiles.move": the others are left out');
       const net = siteNet(raw, 'widget');
       const location = siteLocation(raw, 'widget');
+      const tilt = siteTilt(raw, 'widget');
       if (net && !site) problems.push('"widget.net" is for its site: a widget without one ("widget.site") loads nothing');
       else if (location && !site) problems.push('"widget.location" is for its site: a widget without one ("widget.site") shows nothing');
-      else if (location !== null) widget = { component, ...(site ? { site } : {}), writes, ...(raw.size !== undefined ? { size: { height: Math.round(Math.min(WIDGET_HEIGHT.max, Math.max(WIDGET_HEIGHT.min, height))) } } : {}), ...(net ? { net } : {}), ...(location ? { location } : {}) };
+      else if (tilt && !site) problems.push('"widget.tilt" is for its site: a widget without one ("widget.site") shows nothing');
+      else if (location !== null && tilt !== null) widget = { component, ...(site ? { site } : {}), writes, ...(raw.size !== undefined ? { size: { height: Math.round(Math.min(WIDGET_HEIGHT.max, Math.max(WIDGET_HEIGHT.min, height))) } } : {}), ...(net ? { net } : {}), ...(location ? { location } : {}), ...(tilt ? { tilt } : {}) };
     }
   }
   // A mark service: where its component is, what it reads, and where it answers.

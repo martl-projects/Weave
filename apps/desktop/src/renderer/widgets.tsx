@@ -23,7 +23,7 @@ function WidgetFrame({ view, meDid, height }: { view: WidgetViewInfo; meDid: str
   if (!view.site) return <pre className="sunken widget-state">{JSON.stringify(view.state, null, 2)}</pre>;
   if (!base) return <div className="widget-wait" style={{ height }} />;
   // Approving its release allowed its hosts too, and knowing where you are: the approval card named them.
-  return <LensFrame title={view.title} release={view.view} base={base} net={view.net} location={view.location} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
+  return <LensFrame title={view.title} release={view.view} base={base} net={view.net} location={view.location} tilt={view.tilt} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
 }
 
 /** A widget message's bubble: the approval card, or the widget itself (compact; large on click). */

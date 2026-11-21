@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { roughLocation, type LensLocation } from '@weave/core';
+import { roughLocation, screenTilt, type LensLocation } from '@weave/core';
 import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
@@ -24,6 +24,10 @@ import { useTexts } from './texts.tsx';
  *   to the frame    {weave: 'location', id, lat, lon, accuracy, rough} / {weave: 'location', id, error}
  *                                                                  Weave asks the device, never the frame; rough is
  *                                                                  the middle of a 0.01° cell (roughLocation)
+ *   from the frame  {weave: 'tilt', on}                             how is the device tilted? (only if its manifest
+ *                                                                  says "tilt"; on: false, no longer)
+ *   to the frame    {weave: 'tilt', x, y}                           again and again while it is asked and in sight:
+ *                                                                  degrees to the side and forward (screenTilt)
  *
  * A chat's widget (widgets.tsx) talks the same way: its 'view' carries {widget: {id, title}} instead of board.
  *
@@ -79,15 +83,41 @@ function locate(level: LensLocation): Promise<{ lat: number; lon: number; accura
   });
 }
 
-export function LensFrame({ title, release, base, net, location, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { title: string; release: string; base: string; net?: string[]; location?: LensLocation; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
+/**
+ * How this device is tilted, told as it changes (at most thirty times a second, and not while Weave is out of sight):
+ * the browser's reading of the device's sensors, as the screen is held (screenTilt). The frame never gets a sensor
+ * itself (its sandbox has none). Returns the way to stop.
+ */
+function watchTilt(tell: (tilt: { x: number; y: number }) => void): () => void {
+  let last = 0;
+  const heard = (e: DeviceOrientationEvent) => {
+    if (e.beta == null || e.gamma == null || document.hidden) return;
+    const now = performance.now();
+    if (now - last < 33) return;
+    last = now;
+    tell(screenTilt(e.beta, e.gamma, screen.orientation?.angle ?? 0));
+  };
+  window.addEventListener('deviceorientation', heard);
+  return () => window.removeEventListener('deviceorientation', heard);
+}
+
+/** An iPhone asks its owner before a page hears its sensors, and only after a tap in that page: this asks. */
+const tiltAsks = (): (() => Promise<string>) | undefined => {
+  const ask = typeof DeviceOrientationEvent === 'undefined' ? undefined : (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
+  return typeof ask === 'function' ? () => ask.call(DeviceOrientationEvent) : undefined;
+};
+let tiltGranted = false;
+
+export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
   const frame = useRef<HTMLIFrameElement>(null);
   // Weave Web's frame takes its CSP from its address (a Pages Function): the hosts this member allowed, or none. On a
   // computer or a phone the node's answer carries them (lensFile), so the address stays as it is.
   const hosts = net?.length ? net.join(',') : '';
   const src = bridge.web && hosts ? `${base}?net=${encodeURIComponent(hosts)}` : base;
-  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, onLocated, onFullscreen });
-  latest.current = { view, act, onOpen, release, hosts, title, t, location, onLocated, onFullscreen };
+  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onLocated, onFullscreen });
+  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onLocated, onFullscreen };
+  const tilting = useRef<(() => void) | null>(null);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () => send(latest.current.view);
   useEffect(sendView, [view]);
@@ -126,6 +156,32 @@ export function LensFrame({ title, release, base, net, location, onLocated, onFu
             (e: Error) => send({ weave: 'location', id: m.id, error: e.message }),
           );
       }
+      // How the device is tilted: only for a view whose manifest says so, heard from the device here, never in the frame.
+      if (m?.weave === 'tilt') {
+        tilting.current?.();
+        tilting.current = null;
+        latest.current.onTiltAsk?.(null);
+        if ((m as { on?: unknown }).on !== false && latest.current.tilt) {
+          const start = () => {
+            tilting.current?.();
+            tilting.current = watchTilt((tilt) => send({ weave: 'tilt', ...tilt }));
+          };
+          const ask = tiltAsks();
+          if (!ask || tiltGranted) start();
+          else
+            latest.current.onTiltAsk?.(() => {
+              latest.current.onTiltAsk?.(null);
+              ask().then(
+                (answer) => {
+                  if (answer !== 'granted') return;
+                  tiltGranted = true;
+                  start();
+                },
+                () => {},
+              );
+            });
+        }
+      }
       // Weave Web's frame (apps/web/src/lens-frame.html) asks for the view's files, builds its page, and says so.
       // Only to the frame this page made, with the hosts it was given: a view that sent its frame elsewhere (another
       // address, other hosts) gets nothing of it.
@@ -144,7 +200,10 @@ export function LensFrame({ title, release, base, net, location, onLocated, onFu
       }
     };
     window.addEventListener('message', listen);
-    return () => window.removeEventListener('message', listen);
+    return () => {
+      window.removeEventListener('message', listen);
+      tilting.current?.();
+    };
   }, []);
 
   return <iframe ref={frame} className={className ?? 'lens-frame'} style={style} title={title} src={src} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
@@ -197,6 +256,8 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
   const { t } = useTexts();
   const box = useRef<HTMLDivElement>(null);
   useFullscreen(box, full, setFull);
+  // An iPhone wants a tap in Weave before the view hears how it is tilted: what that tap does, while it is wanted.
+  const [tiltAsk, setTiltAsk] = useState<(() => void) | null>(null);
   const { data: view, error, reload } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
   // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
   const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
@@ -219,6 +280,7 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
     reload();
   };
   const where = view.lens.location;
+  const allowTilt = tiltAsk;
   const allowWhere = async (on: boolean) => {
     await api('allowLensLocation', { release: view.lens!.release, ...(on ? {} : { off: true }) }).catch((e: Error) => toast(e.message, 'error'));
     reload();
@@ -264,8 +326,17 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
           <button className="link" onClick={() => void allowWhere(false)}>{t('lens.net.off')}</button>
         </div>
       )}
+      {allowTilt && (
+        <div className="lens-net ask">
+          <span>
+            <Icon name="zap" /> {t('lens.tilt.ask', { name: view.lens.name })}
+          </span>
+          <span className="muted">{t('lens.tilt.why')}</span>
+          <button onClick={allowTilt}>{t('lens.net.allow')}</button>
+        </div>
+      )}
       {/* A new key when the hosts change: the frame loads again with the CSP that goes with them. */}
-      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
+      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
     </div>
   );
 }

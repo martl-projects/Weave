@@ -72,6 +72,19 @@ A lens's or widget's site may ask where its member is, when its manifest says ho
 - **Weave asks, not the frame:** the frame posts `{weave: 'locate', id}`; the host (`apps/desktop/src/renderer/lens.tsx`, on a computer, a phone and Weave Web alike) asks the device, rounds it, and answers `{weave: 'location', id, lat, lon, accuracy, rough}` or `{weave: 'location', id, error}`. The sandboxed frame never has geolocation; the component never gets a place, and nothing is published unless the member's own action puts it there.
 - A site with `net` could send the place to its hosts: its member allows both with both in view.
 
+## How the device is tilted
+
+A lens's or widget's site may follow how its member tilts the device (light that moves over paper, a marble that rolls), when its manifest says so:
+
+```json
+"client": { "component": "board.wasm", "site": "site", "writes": ["fb.item"], "tilt": true }
+```
+
+- **`tilt`** in `client` or `widget`: `true`. Only with a `site`.
+- **Weave hears the sensors, not the frame:** the frame posts `{weave: 'tilt', on: true}` (and `on: false` when it no longer wants it); the host (`apps/desktop/src/renderer/lens.tsx`) listens to the device and answers again and again with `{weave: 'tilt', x, y}`: degrees to the side and forward as the screen is held (`screenTilt` in core), rounded to half a degree, at most thirty times a second, and not while Weave is out of sight. The compass is left out. A device without sensors (a computer) sends nothing: a view should rest then.
+- **No yes of its own:** unlike `location` it is not kept per member. An iPhone asks its owner itself, after a tap in Weave: a line above the lens offers that tap. A widget on an iPhone gets no tilt yet (there is no such line in a chat).
+- The component never gets it, and nothing is published unless the member's own action puts it there.
+
 ## Limits
 
 A widget is pure, like a lens:

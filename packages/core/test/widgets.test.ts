@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   locationCovers,
   roughLocation,
+  screenTilt,
   artifactKindOf,
   boardOfEvents,
   channelsOf,
@@ -65,6 +66,23 @@ describe('the widget manifest', () => {
     for (const bad of [['localhost'], ['127.0.0.1'], ['{BUCKET}.s3.amazonaws.com'], ['https://api.example.com'], 'api.example.com'])
       expect(checkManifest({ app: 'w', name: 'W', client: { component: 'b.wasm', site: 'site', writes: [], net: bad } }).problems.join()).toMatch(/client.net/);
     expect(checkManifest({ app: 'w', name: 'W', widget: { component: 'b.wasm', writes: [], net: ['api.example.com'] } }).problems.join()).toMatch(/widget.net" is for its site/);
+  });
+
+  it('reads that a site may ask how the device is tilted, only with a site', () => {
+    const ok = checkManifest({ app: 'album', name: 'Album', client: { component: 'b.wasm', site: 'site', writes: [], tilt: true }, widget: { component: 'b.wasm', site: 'site', writes: ['album.turn'], tilt: false } });
+    expect(ok.problems).toEqual([]);
+    expect(ok.manifest!.client!.tilt).toBe(true);
+    expect(ok.manifest!.widget!.tilt).toBeUndefined();
+    expect(checkManifest({ app: 'w', name: 'W', client: { component: 'b.wasm', site: 'site', writes: [], tilt: 'yes' } }).problems.join()).toMatch(/client.tilt/);
+    expect(checkManifest({ app: 'w', name: 'W', widget: { component: 'b.wasm', writes: [], tilt: true } }).problems.join()).toMatch(/widget.tilt" is for its site/);
+  });
+
+  it('tells a tilt as the screen is held, without the compass', () => {
+    expect(screenTilt(40.26, -12.74)).toEqual({ x: -12.5, y: 40.5 });
+    expect(screenTilt(40, -12, 90)).toEqual({ x: 40, y: 12 });
+    expect(screenTilt(40, -12, 180)).toEqual({ x: 12, y: -40 });
+    expect(screenTilt(40, -12, 270)).toEqual({ x: -40, y: -12 });
+    expect(screenTilt(0, 0, -90)).toEqual({ x: 0, y: 0 });
   });
 
   it('reads how closely a site may know where its member is, only with a site', () => {

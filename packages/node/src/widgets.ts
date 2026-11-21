@@ -175,6 +175,7 @@ export class Widgets {
       height: widget.height,
       ...(widget.manifest.widget?.net?.length ? { net: widget.manifest.widget.net } : {}),
       ...(widget.manifest.widget?.location ? { location: widget.manifest.widget.location } : {}),
+      ...(widget.manifest.widget?.tilt ? { tilt: true } : {}),
       view: `widget-${widget.app.release}`,
       ...(check.problem ? { problem: check.problem } : {}),
     };

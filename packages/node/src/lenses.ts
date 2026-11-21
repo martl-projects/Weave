@@ -429,7 +429,7 @@ export class Lenses {
     if (!lens) return base;
     const net = this.#net(lens);
     const location = this.#location(lens);
-    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}) };
+    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}) };
     if (lens.mode === 'suggest' && !input.use) return { ...base, lens: about };
     let ready: Ready;
     try {
