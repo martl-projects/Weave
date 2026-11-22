@@ -502,6 +502,29 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .crown { margin-left: 3px; color: #a87400; }
 .member-sub { margin-left: 30px; font-size: 11px; color: #555; }
 .member-sub.agent { color: var(--agent); }
+
+/* ---------- side panes folded to a strip: Places to its icons, the members to their faces (main.tsx, useFolded) */
+.pane-fold { flex: none; min-width: 0 !important; min-height: 0 !important; padding: 0 6px !important; font-weight: bold; line-height: 1.3; }
+@media (min-width: 701px) {
+  :root .places.folded, :root .members.folded { width: 48px; }
+  :root .folded > .pane-head { justify-content: center; padding-left: 0; padding-right: 0; }
+  :root .folded > .pane-head b { display: none; }
+  :root .places.folded .tree-view { padding: 4px 3px; overflow-x: hidden; scrollbar-width: none; }
+  :root .places.folded .tree-view li { padding-left: 0 !important; }
+  :root .places.folded .tree-link { position: relative; justify-content: center; padding: 5px 0; }
+  :root .places.folded :is(.tree-label, .tree-none, .tree-game-app) { display: none; }
+  :root .places.folded .tree-head { height: 0; margin: 6px 4px !important; padding: 0; overflow: hidden; font-size: 0; border: none; border-bottom: 1px solid currentColor; opacity: 0.3; }
+  :root .places.folded .tree-hints { position: absolute; top: 0; right: 0; }
+  :root .places.folded .tree-hints .badge { min-width: 14px; padding: 0 3px; font-size: 9px; line-height: 14px; }
+  :root .places.folded .new-btn { margin: 4px 3px; padding: 0; min-width: 0; font-size: 0; }
+  :root .members.folded .members-list { padding: 4px 2px; overflow-x: hidden; scrollbar-width: none; }
+  :root .members.folded :is(.member-name, .member-sub, .space-photo, .space-services) { display: none; }
+  :root .members.folded .member-main { justify-content: center; }
+  :root .members.folded h4 { height: 0; margin: 6px 4px; padding: 0; overflow: hidden; font-size: 0; border-bottom: 1px solid currentColor; opacity: 0.3; }
+}
+@media (max-width: 700px) {
+  .pane-fold { display: none !important; }
+}
 .avatar { position: relative; display: inline-block; flex: none; line-height: 0; }
 .avatar .sprite { border: 1px solid #808080; }
 /* Weave avatars: someone's head, their avatar in a scene, and making yours. */

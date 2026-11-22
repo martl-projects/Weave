@@ -51,6 +51,54 @@ import {
 
 type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'build'; space?: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
 
+// ---------------------------------------------------------------- side panes, folded
+
+/**
+ * Places and the member list can fold to a narrow strip: Places to its icons, the members to their faces, each with
+ * its counts. Remembered on this device; the View menu and the button in the pane's head both fold it.
+ */
+const FOLDED = 'weave-fold';
+function useFolded(pane: 'places' | 'members'): [boolean, () => void] {
+  const key = `weave.fold.${pane}`;
+  const stored = () => {
+    try {
+      return localStorage.getItem(key) === '1';
+    } catch {
+      return false;
+    }
+  };
+  const [folded, setFolded] = useState(stored);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; folded: boolean }>).detail;
+      if (detail.key === key) setFolded(detail.folded);
+    };
+    addEventListener(FOLDED, changed);
+    return () => removeEventListener(FOLDED, changed);
+  }, [key]);
+  const toggle = () => {
+    const next = !folded;
+    try {
+      localStorage.setItem(key, next ? '1' : '0');
+    } catch {
+      // Not kept on this device: it stays folded until Weave reloads.
+    }
+    dispatchEvent(new CustomEvent(FOLDED, { detail: { key, folded: next } }));
+  };
+  return [folded, toggle];
+}
+
+/** The button in a side pane's head: it points the way the pane goes (Places sits left, the members right). */
+function FoldButton({ folded, side, onClick }: { folded: boolean; side: 'left' | 'right'; onClick(): void }) {
+  const { t } = useTexts();
+  const label = folded ? t('pane.unfold') : t('pane.fold');
+  return (
+    <button className="pane-fold" title={label} aria-label={label} aria-expanded={!folded} onClick={onClick}>
+      {folded === (side === 'left') ? '»' : '«'}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------- places tree
 
 function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
@@ -58,7 +106,7 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
   const count = (badge ?? 0) + (hint?.count ?? 0);
   return (
     <li style={{ paddingLeft: depth * 14 }}>
-      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
+      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip ?? (typeof label === 'string' ? label : undefined)}>
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
@@ -128,6 +176,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
 
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useSeenTick(); // unread state lives in localStorage
+  const [folded, fold] = useFolded('places');
   const { t } = useTexts();
   const chatHints = useHints('place', chats.map((c) => ({ space: c.space.id })));
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
@@ -145,10 +194,11 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
     );
   };
   return (
-    <aside className="places">
+    <aside className={`places${folded ? ' folded' : ''}`}>
       <ArcadeWellIfOn />
       <header className="pane-head">
         <b>{t('tree.places')}</b>
+        <FoldButton folded={folded} side="left" onClick={fold} />
       </header>
       <ul className="tree-view">
         <TreeLink href="#/" icon="home" label={t('nav.home')} on={route.length === 0} />
@@ -190,7 +240,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
           </>
         )}
       </ul>
-      <button className="new-btn" onClick={onNew}>
+      <button className="new-btn" onClick={onNew} title={t('tree.new')}>
         <Icon name="plus" /> {t('tree.new')}
       </button>
     </aside>
@@ -201,6 +251,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
 
 function MemberList({ space, members, meDid }: { space: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { t } = useTexts();
+  const [folded, fold] = useFolded('members');
   const online = members.filter((m) => m.did === meDid || isActive(m.lastActive));
   const offline = members.filter((m) => !online.includes(m));
   const crown = space.kind === 'project' ? 'maintainer' : space.kind === 'community' ? 'moderator' : 'founder';
@@ -213,12 +264,13 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         ? t('member.how.invited', { name: m.invitedByName })
         : t('role.founder');
     const crowned = m.maintainer || (space.kind !== 'project' && m.did === space.founder);
+    const name = m.did === meDid ? t('member.you', { name: m.name ?? t('word.you') }) : (m.name ?? shortDid(m.did));
     return (
       <div key={m.did} className={`member${on ? '' : ' away'}`}>
-        <a className="member-main" href={`#/space/${encodeURIComponent(m.did)}`} title={how}>
+        <a className="member-main" href={`#/space/${encodeURIComponent(m.did)}`} title={`${name}\n${how}`}>
           <Avatar did={m.did} size={24} status={on ? 'online' : 'offline'} />
           <span className="member-name">
-            {m.did === meDid ? t('member.you', { name: m.name ?? t('word.you') }) : (m.name ?? shortDid(m.did))}
+            {name}
             {crowned && (
               <span className="crown" title={t(`role.${crown}`)}>
                 ★
@@ -236,9 +288,10 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
     );
   };
   return (
-    <aside className="members">
+    <aside className={`members${folded ? ' folded' : ''}`}>
       <ArcadeWellIfOn />
       <header className="pane-head">
+        <FoldButton folded={folded} side="right" onClick={fold} />
         <b>{t(space.kind === 'project' ? 'members.participants' : 'members.members', { n: members.length })}</b>
       </header>
       <div className="members-list sunken">
@@ -740,6 +793,8 @@ function Shell() {
   const { t, setting: language, setLanguage } = useTexts();
   // On a phone the places tree is a screen of its own; picking something closes it.
   const [placesOpen, setPlacesOpen] = useState(false);
+  const [placesFolded, foldPlaces] = useFolded('places');
+  const [membersFolded, foldMembers] = useFolded('members');
   const routeKey = route.join('/');
   useEffect(() => setPlacesOpen(false), [routeKey]);
   if (!me || !spaces) return <div className="desktop" />;
@@ -829,6 +884,9 @@ function Shell() {
             { label: t('nav.hub'), onClick: () => navigate('#/space') },
             { label: t('nav.keys'), onClick: () => navigate('#/keys') },
             ...(bridge.mentions ? [{ label: t('menu.view.mentions'), onClick: () => void bridge.mentions!('show') }] : []),
+            'sep',
+            { label: `${placesFolded ? '' : '● '}${t('menu.view.places')}`, onClick: foldPlaces },
+            { label: `${membersFolded ? '' : '● '}${t('menu.view.members')}`, onClick: foldMembers },
             'sep',
             { label: t('menu.view.refresh'), onClick: bump },
             { label: t('menu.view.notifications'), onClick: () => setDialog({ kind: 'notify' }) },
