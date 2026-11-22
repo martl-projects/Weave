@@ -42,7 +42,8 @@ import certificate16 from './serenity/16x16/certificate.png';
 import copy16 from './serenity/16x16/edit-copy.png';
 import emoji16 from './serenity/16x16/emoji.png';
 import export16 from './serenity/16x16/file-export.png';
-// Drawn for Weave in the same style (share mode's target and check), not from SerenityOS.
+// Drawn for Weave, not from SerenityOS: share mode's target, in the same style, and its check, the checked checkbox of
+// Windows 95 (98.css's box and checkmark.svg, pixel for pixel).
 import shareTarget16 from './serenity/16x16/share-target.png';
 import shareTarget32 from './serenity/32x32/share-target.png';
 import shareCheck16 from './serenity/16x16/share-check.png';
