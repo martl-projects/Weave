@@ -14,6 +14,7 @@ import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 import { FetchersBox, ServicesBox } from './services.tsx';
 import { T, useTexts } from './texts.tsx';
+import { YourLinks } from './onboardlinks.tsx';
 
 /*
  * Identity and keys. The 24 recovery words are the identity: every root key
@@ -1249,6 +1250,8 @@ export function KeysView() {
           onClose={() => setDialog(undefined)}
         />
       )}
+      {/* The Weave links you made (share mode), with their uses: to copy one again or take it back. */}
+      <YourLinks />
       {dialog?.kind === 'permissions' && <AgentPermissionsDialog agent={dialog.key} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'avatar' && me && <AgentAvatarEditor me={me} agent={dialog.agent} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rotate' && (

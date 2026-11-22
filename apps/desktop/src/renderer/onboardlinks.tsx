@@ -9,6 +9,7 @@ import { ask, attempt, AsyncButton, BlobImage, Info, Modal, toast } from './ui.t
 import { ShareMark } from './share.tsx';
 import { useTexts } from './texts.tsx';
 import { playSoon } from './websites.tsx';
+import weaveMark from './mark.png';
 
 /*
  * Weave links (idea bZFDCQNT): one short web.martl.io link that makes a newcomer's account, makes you friends, lets them in
@@ -29,10 +30,13 @@ const EXPIRY = [1 / 48, 1, 7, 30];
 /** What a link card's picture may weigh at the storage node. */
 const MAX_PICTURE = 300 * 1024;
 
-/** A picture (wblob:) as a PNG of at most 300 KB, base64: smaller each try until it fits. */
+/** The picture a card has until another is chosen: Weave's own mark. */
+const WEAVE = 'weave';
+
+/** A picture (wblob:, or Weave's mark) as a PNG of at most 300 KB, base64: smaller each try until it fits. */
 async function cardPng(ref: string): Promise<string> {
   const image = new Image();
-  image.src = await blobUrl(ref);
+  image.src = ref === WEAVE ? weaveMark : await blobUrl(ref);
   await image.decode();
   for (let most = 1200; most >= 150; most = Math.round(most * 0.75)) {
     const scale = Math.min(1, most / Math.max(image.naturalWidth, image.naturalHeight));
@@ -70,14 +74,13 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
   // The card's title and line as written here; until then the ones the node would put (shown, and editable, as they are).
   const [cardTitle, setCardTitle] = useState<string>();
   const [cardText, setCardText] = useState<string>();
-  // The card's picture: one chosen (a wblob: reference), none, or (undefined) the first place's banner or icon.
-  const [picture, setPicture] = useState<string | null>();
+  // The card's picture: Weave's mark until another (a wblob: reference) is chosen, or none.
+  const [picture, setPicture] = useState<string | null>(WEAVE);
   const [picking, setPicking] = useState(false);
   const [made, setMade] = useState<{ link: string; svg: string }>();
-  const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks'), []);
   const { data: me } = useApi(() => api<{ name?: string }>('profile'), []);
   const line = toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title });
-  const shown = picture === undefined ? (places[0]?.background ?? places[0]?.icon) : (picture ?? undefined);
+  const shown = picture ?? undefined;
   const named = (s: SpaceInfo) => `${{ project: 'p/', community: 'r/', group: 'g/' }[s.kind as string] ?? ''}${s.name}`;
 
   const create = async () => {
@@ -94,7 +97,8 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
         ...(welcome.trim() ? { welcome: welcome.trim() } : {}),
         ...(uses ? { uses } : {}),
         days,
-        preview: noPreview ? false : { ...(cardTitle?.trim() ? { title: cardTitle.trim() } : {}), ...(cardText?.trim() ? { text: cardText.trim() } : {}), image },
+        // What the card shows is what it says: its title and line as they stand here, written or not.
+        preview: noPreview ? false : { title: (cardTitle ?? title).trim() || title, text: (cardText ?? line).trim() || line, image },
       }),
     );
     if (!link) return;
@@ -102,25 +106,13 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
     setMade({ link: link.link, svg });
     bump();
   };
-  const revoke = async (l: OnboardLinkInfo) => {
-    if (!(await ask(t('linkb.revoke.ask', { link: l.code }), t('linkb.revoke')))) return;
-    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
-  };
-
-  const heading = (name: string) => (
-    <header className="lf-head">
-      <h2>{t(name)}</h2>
-      <p className="muted">{t('linkb.step.n', { n: step, of: STEPS })}</p>
-    </header>
-  );
+  // One title, the step's, on top of the window; which step it is right under it.
+  const stepTitle = made ? t('linkb.made.title') : t(['linkb.step1', 'linkb.step2', 'linkb.step3'][step - 1]);
   return (
-    <Modal title={t('linkb.window')} onClose={() => onClose(!!made)}>
+    <Modal title={stepTitle} onClose={() => onClose(!!made)}>
       {made ? (
         <div className="form">
-          <header className="lf-head">
-            <h2>{t('linkb.made.title')}</h2>
-            <p className="muted">{t('linkb.made')}</p>
-          </header>
+          <p className="lf-sub muted">{t('linkb.made')}</p>
           <div className="onboard-made">
             <span className="qr" dangerouslySetInnerHTML={{ __html: made.svg }} />
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
@@ -134,13 +126,13 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
         </div>
       ) : (
         <div className="form link-builder">
+          <p className="lf-sub muted">{t('linkb.step.n', { n: step, of: STEPS })}</p>
           {step === 1 && (
             <>
-              {heading('linkb.step1')}
               <p className="lf-section">{t('linkb.who.gets')}</p>
               <ul className="lf-list">
                 <li>
-                  <ShareMark kind="target" /> {t('linkb.opens')} <b>{opens}</b>
+                  <ShareMark kind="target" /> {t('linkb.opens')} {opens}
                 </li>
                 {places.length > 0 && (
                   <li>
@@ -174,7 +166,6 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
 
           {step === 2 && (
             <>
-              {heading('linkb.step2')}
               <div className="lf-grid">
                 <label htmlFor="lb-uses">{t('linkb.uses')}</label>
                 <select id="lb-uses" value={uses} onChange={(e) => setUses(Number(e.target.value))}>
@@ -206,14 +197,16 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
 
           {step === 3 && (
             <>
-              {heading('linkb.step3')}
-              <div className={`link-card lf-card${noPreview ? ' off' : ''}`} aria-label={t('linkb.card.looks')}>
+              {/* The card as a messenger shows it (Signal's: the picture on the left, the bold title, the line, the site), edited in place. */}
+              <div className={`lf-card${noPreview ? ' off' : ''}${shown ? '' : ' no-picture'}`} aria-label={t('linkb.card.looks')}>
                 <button type="button" className="lf-card-picture" disabled={noPreview} title={t('linkb.card.pick')} onClick={() => setPicking(true)}>
-                  {shown ? <BlobImage src={shown} /> : <span className="muted small">{t('linkb.card.pick')}</span>}
+                  {shown === WEAVE ? <img src={weaveMark} alt="" /> : shown ? <BlobImage src={shown} /> : <span className="small">{t('linkb.card.pick')}</span>}
                 </button>
-                <span className="link-card-site">{CARD_SITE}</span>
-                <input className="lf-edit lf-edit-title" disabled={noPreview} maxLength={100} title={t('linkb.card.edit')} aria-label={t('linkb.card.title')} placeholder={title || 'Weave'} value={cardTitle ?? title} onChange={(e) => setCardTitle(e.target.value)} />
-                <textarea className="lf-edit" disabled={noPreview} maxLength={300} rows={2} title={t('linkb.card.edit')} aria-label={t('linkb.card.text')} placeholder={line} value={cardText ?? line} onChange={(e) => setCardText(e.target.value)} />
+                <div className="lf-card-body">
+                  <input className="lf-edit lf-edit-title" disabled={noPreview} maxLength={100} title={t('linkb.card.edit')} aria-label={t('linkb.card.title')} placeholder={title || 'Weave'} value={cardTitle ?? title} onChange={(e) => setCardTitle(e.target.value)} />
+                  <textarea className="lf-edit" disabled={noPreview} maxLength={300} rows={2} title={t('linkb.card.edit')} aria-label={t('linkb.card.text')} placeholder={line} value={cardText ?? line} onChange={(e) => setCardText(e.target.value)} />
+                  <span className="lf-card-site">{CARD_SITE}</span>
+                </div>
               </div>
               <p className="small muted">{t('linkb.card.open')}</p>
               <div className="field-row">
@@ -238,12 +231,11 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
           </div>
         </div>
       )}
-      {!made && <YourLinks links={links} revoke={revoke} />}
     </Modal>
   );
 }
 
-/** The pictures in the places a link leads to (their icons and banners, then pictures in their posts), to put on its card. */
+/** Pictures for a link's card: Weave's mark, the places' icons and banners, pictures in their posts, or none. */
 function PicturePicker({ places, chosen, onPick, onClose }: { places: SpaceInfo[]; chosen?: string; onPick(ref: string | null): void; onClose(): void }) {
   const { t } = useTexts();
   const { data: pictures } = useApi(async () => {
@@ -254,23 +246,31 @@ function PicturePicker({ places, chosen, onPick, onClose }: { places: SpaceInfo[
   return (
     <Modal title={t('linkb.card.picker')} onClose={onClose}>
       <div className="lf-pictures">
-        <button type="button" className={`lf-picture lf-picture-none${chosen ? '' : ' on'}`} onClick={() => onPick(null)}>
-          {t('linkb.card.nopicture')}
+        <button type="button" className={`lf-picture lf-picture-weave${chosen === WEAVE ? ' on' : ''}`} title="Weave" onClick={() => onPick(WEAVE)}>
+          <img src={weaveMark} alt="Weave" />
         </button>
         {(pictures ?? []).map((ref) => (
           <button type="button" key={ref} className={`lf-picture${ref === chosen ? ' on' : ''}`} onClick={() => onPick(ref)}>
             <BlobImage src={ref} />
           </button>
         ))}
+        <button type="button" className={`lf-picture lf-picture-none${chosen ? '' : ' on'}`} onClick={() => onPick(null)}>
+          {t('linkb.card.nopicture')}
+        </button>
       </div>
       {pictures && !pictures.length && <p className="small muted">{t('linkb.card.pictures.none')}</p>}
     </Modal>
   );
 }
 
-/** Your links, with how often each was used, to copy one again or take it back. */
-function YourLinks({ links, revoke }: { links?: OnboardLinkInfo[]; revoke(l: OnboardLinkInfo): Promise<void> }) {
+/** Your links, with how often each was used, to copy one again or take it back (Keys & devices). */
+export function YourLinks() {
   const { t } = useTexts();
+  const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks').catch(() => [] as OnboardLinkInfo[]), []);
+  const revoke = async (l: OnboardLinkInfo) => {
+    if (!(await ask(t('linkb.revoke.ask', { link: l.code }), t('linkb.revoke')))) return;
+    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
+  };
   if (!links?.length) return null;
   return (
     <fieldset className="link-list">

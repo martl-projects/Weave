@@ -659,10 +659,16 @@ menu[role='tablist'] { margin-bottom: 0; }
 .link-card-site { opacity: 0.6; font-size: 11px; }
 .link-list { margin-top: 12px; max-height: 220px; overflow: auto; }
 /* The link's steps (LinkFinish): a big title, the step under it; fields in one column of labels, one of controls. */
-.lf-head { margin: 0 0 12px; }
-.lf-head h2 { margin: 0; font-size: 20px; line-height: 1.2; }
-.lf-head p { margin: 2px 0 0; }
-.lf-section { margin: 0 0 4px; font-weight: bold; }
+/* One title, the step's, big in the window's title bar; which step it is just under it. */
+.modal:has(.link-builder) .title-bar-text, .modal:has(.onboard-made) .title-bar-text { font-size: 17px; font-weight: bold; }
+.lf-sub { margin: 0 0 12px; }
+/* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
+.link-builder { display: flex; flex-direction: column; min-height: 330px; }
+.form.link-builder > .buttons, :root[data-skin] .form.link-builder > .buttons { margin-top: auto; }
+.lf-section { margin: 0 0 4px; }
+/* Help marks open as a floating note over what follows, not pushing it down. */
+.link-builder .info { position: relative; }
+.link-builder .info > .info-body { position: absolute; left: -8px; top: calc(100% + 6px); z-index: 30; width: 260px; margin: 0; padding: 6px 10px; box-shadow: 2px 2px 6px rgb(0 0 0 / 0.25); font-weight: normal; }
 .lf-list, .lf-list ul { list-style: none; margin: 0 0 12px; padding: 0; }
 .lf-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
 .lf-list ul { flex-basis: 100%; margin: 2px 0 0 22px; }
@@ -670,18 +676,17 @@ menu[role='tablist'] { margin-bottom: 0; }
 .lf-label { display: flex; align-items: center; gap: 6px; }
 .lf-grid { display: grid; grid-template-columns: max-content minmax(0, 220px); align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 .lf-grid select { width: 100%; }
-.lf-card { padding: 0 0 8px; overflow: hidden; }
+/* The card as Signal shows a link: the picture on the left, then the bold title, the line and the site. */
+.lf-card { display: flex; gap: 12px; align-items: flex-start; margin: 0 0 8px; padding: 10px; border-radius: 10px; background: #2b2b30; color: #f2f2f4; }
 .lf-card.off { opacity: 0.4; }
-.lf-card-picture, :root[data-skin] .lf-card-picture { display: grid; place-items: center; width: 100%; min-height: 0; height: 130px; border-radius: 0; padding: 0; margin: 0 0 6px; overflow: hidden; border: none; background: color-mix(in srgb, currentColor 8%, transparent); cursor: pointer; }
-.lf-card-picture img { width: 100%; height: 100%; object-fit: cover; }
-.lf-card .link-card-site { padding: 0 10px; }
-/* The card's lines are the card's text until clicked: no field's frame, a dashed one on hover and while editing (every look). */
-.lf-card .lf-edit, :root[data-skin] .lf-card .lf-edit { display: block; box-sizing: border-box; width: calc(100% - 20px); min-height: 0; margin: 0 10px; padding: 1px 3px; border: 1px dashed transparent; border-radius: 3px; background: none; box-shadow: none; color: inherit; font: inherit; line-height: 1.35; resize: none; outline: none; }
+.lf-card-picture, :root[data-skin] .lf-card-picture { flex: none; display: grid; place-items: center; width: 72px; height: 72px; min-width: 0; min-height: 0; padding: 0; overflow: hidden; border: none; border-radius: 6px; background: #3a3a42; color: inherit; box-shadow: none; cursor: pointer; }
+.lf-card-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lf-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lf-card-site { padding: 0 3px; font-size: 12px; opacity: 0.6; }
+.lf-card .lf-edit, :root[data-skin] .lf-card .lf-edit { display: block; box-sizing: border-box; width: 100%; min-height: 0; margin: 0; padding: 1px 3px; border: 1px dashed transparent; border-radius: 3px; background: none; box-shadow: none; color: inherit; font: inherit; line-height: 1.35; resize: none; outline: none; }
 .lf-card .lf-edit:hover, .lf-card .lf-edit:focus, :root[data-skin] .lf-card .lf-edit:hover, :root[data-skin] .lf-card .lf-edit:focus { border-color: currentColor; }
-/* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
-.link-builder { display: flex; flex-direction: column; min-height: 400px; }
-.link-builder > .buttons { margin-top: auto; }
-.lf-edit-title { font-weight: bold; }
+.lf-card .lf-edit-title, :root[data-skin] .lf-card .lf-edit-title { font-weight: bold; }
+.lf-picture-weave img { object-fit: contain !important; padding: 6px; box-sizing: border-box; }
 .lf-pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; max-height: 360px; overflow: auto; }
 .lf-picture, :root[data-skin] .lf-picture { min-width: 0; min-height: 0; aspect-ratio: 1.6; padding: 0; overflow: hidden; }
 .lf-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
