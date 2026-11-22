@@ -136,7 +136,6 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
             </button>
           </span>
         ))}
-        {!also.length && <span className="small muted">{t('sharemode.hint')}</span>}
       </div>
       <div className="buttons">
         <button onClick={stopShare}>{t('button.cancel')}</button>
