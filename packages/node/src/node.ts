@@ -207,6 +207,7 @@ import { Membership, type MembershipCore } from './membership.ts';
 import type { SpaceStorage } from './ports.ts';
 import { startDeviceSignIn } from './devicecode.ts';
 import { KIND_PROFILE, meetTopic, meetSecretOf } from './shared.ts';
+import { PushTargets } from './pushtargets.ts';
 
 
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
@@ -910,6 +911,23 @@ export class WeaveNode implements Backend {
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
   #marks: Marks = new Marks(WeaveNode.servicesHost(this));
   #hints: Hints = new Hints(WeaveNode.servicesHost(this), (since) => this.#heldNotices(since));
+  /** Pushes to closed browsers (docs/web-push.md, stage 3): this browser's addresses, sealed to each place's managers; notices to others'. */
+  #push: PushTargets = new PushTargets({
+    me: () => this.identity.author,
+    places: () => [...[...this.#spaces.values()].map((space) => ({ space })), ...[...this.#kernel.directs.values()].map(({ space, peer }) => ({ space, peer }))],
+    state: (space) => this.#kernel.state(space),
+    entries: (space) => this.#kernel.entries(space),
+    publish: (input) => this.publish(input),
+    encryptionKeyOf: (person) => this.#encryptionKeyOf(person),
+    tryOpen: (open) => this.#tryOpen(open),
+    nameOf: (did) => this.nameOf(did),
+    spaceName: (space) => this.#kernel.spaceName(space),
+    rules: async () => {
+      const unread = (await this.#hints.hintServices()).find((s) => s.service === 'weave-unread');
+      const rules = (unread?.settings as { rules?: unknown } | undefined)?.rules;
+      return Array.isArray(rules) ? rules : [];
+    },
+  });
   // Kernel (kernel.ts): the node delegates.
 
   sessionAccess(...args: Parameters<Kernel['sessionAccess']>): ReturnType<Kernel['sessionAccess']> {
@@ -968,6 +986,8 @@ export class WeaveNode implements Backend {
       if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#kernel.personEvents.clear();
+      // A place, its managers or a rule may have changed: this browser's push addresses follow (a moment later).
+      if (this.#push.on) this.#push.changed();
       if (event.kind === KIND_ORG_FREEZE) this.#kernel.invalidateDecoded();
       if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
       else this.#personEventsAdd(event);
@@ -1491,7 +1511,14 @@ export class WeaveNode implements Backend {
     if (space?.kind === 'project') inner = this.#kernel.forBoard(space, inner);
     const fields: EventFields = space ? sealFor(await this.#managed.cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
+    // A message: those here who asked for pushes, and gave me their address, hear of it (docs/web-push.md).
+    if (space && canonicalKind(input.kind) === KIND_MSG && input.body && typeof input.body === 'object') void this.#push.said(space, input.body as Parameters<PushTargets['said']>[1]).catch(() => undefined);
     return this.itemFor(event)!;
+  }
+
+  /** Pushes (docs/web-push.md): a browser's addresses per place (host), and how notices leave this node (send). */
+  get pushTargets(): PushTargets {
+    return this.#push;
   }
 
   /** An agent may sign this kind, or an error saying how its person allows it. */

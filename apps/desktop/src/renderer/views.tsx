@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { NoticeSwitch } from './notify.tsx';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
@@ -186,6 +187,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
                 </button>
               )}
               {edge('follow', !p.following, t(p.following ? 'people.unfollow' : 'people.follow'))}
+              <NoticeSwitch who={p.did} />
               {edge('mute', !p.muted, t(p.muted ? 'hub.unmute' : 'hub.mute'))}
               {edge('block', !p.blocked, t(p.blocked ? 'hub.unblock' : 'hub.block'))}
               <ImprintButton did={p.did} me={false} name={name} />
@@ -609,24 +611,28 @@ function useHeroOpen(project: string): [boolean, (open: boolean) => void] {
 
 /**
  * A project's front page: a hero card (icon, banner, title, subtitle, votes)
- * over its boards and general chat. The card expands into the project's page.
+ * over its boards and general chat. The card expands into the project's page. On a phone the chat comes alone (its
+ * bar has the boards), and the card with the page is a view of its own (pageView, #/p/<id>/page).
  */
-export function ProjectHome({ project, members, meDid, meName, spaces, onInvite }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void }) {
+export function ProjectHome({ project, members, meDid, meName, spaces, onInvite, pageView = false }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void; pageView?: boolean }) {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
   const [sharing, setSharing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [heroOpen, setHeroOpen] = useHeroOpen(project.id);
+  const [expanded, setExpanded] = useState(pageView);
+  useEffect(() => setExpanded(pageView), [pageView]);
+  const [heroKept, setHeroOpen] = useHeroOpen(project.id);
+  const heroOpen = heroKept || pageView;
   const page = info?.page;
   const banner = page?.banner || project.background;
   const title = page?.title || project.name;
   return (
-    <section className="pane-main">
-      <header className="pane-head">
+    <section className={`pane-main project-home${pageView ? ' page-view' : ''}`}>
+      <header className="pane-head not-mobile">
         <b>p/{project.name}</b>
         <span className="pane-tools">
+          <NoticeSwitch space={project.id} />
           <button onClick={() => setSubmitting(true)}>
             <Icon name="pencil" /> {t('word.post')}
           </button>
@@ -664,7 +670,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
             </div>
             {page?.subtitle ? <p className="hero-subtitle">{page.subtitle}</p> : !page?.body && info && <p className="hero-subtitle muted">{t(info.maintainer ? 'phome.no.page.write' : 'phome.no.page')}</p>}
             {(page?.body || info?.maintainer) && (
-              <button className="hero-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+              <button className="hero-toggle" aria-expanded={expanded} onClick={() => (pageView ? navigate(spaceHref(project)) : setExpanded(!expanded))}>
                 {t(expanded ? 'phome.back.to.chat' : 'phome.project.page')}
               </button>
             )}

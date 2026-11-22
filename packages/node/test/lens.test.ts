@@ -55,6 +55,7 @@ beforeAll(async () => {
     'kanban:4.0': { labels: { [SERVICE_LABEL]: withLocation('rough') }, wasm: readFileSync(out) },
     'kanban:4.1': { labels: { [SERVICE_LABEL]: withLocation('rough') }, wasm: readFileSync(out) },
     'kanban:5.0': { labels: { [SERVICE_LABEL]: withLocation('exact') }, wasm: readFileSync(out) },
+    'kanban:6.0': { labels: { [SERVICE_LABEL]: JSON.stringify({ ...manifest, client: { ...(manifest.client as object), tilt: true } }) }, wasm: readFileSync(out) },
   });
 }, 180_000);
 
@@ -291,6 +292,10 @@ describe('client services', { timeout: 120_000 }, () => {
     lens = await pin('1.0');
     expect(lens).not.toHaveProperty('location');
     await expect(ola.allowLensLocation({ release: lens.release })).rejects.toThrow(/nothing to allow/);
+    // A lens whose manifest says "tilt" may follow how the device is held: its view says so, with nothing to allow.
+    expect(lens).not.toHaveProperty('tilt');
+    lens = await pin('6.0');
+    expect(lens.tilt).toBe(true);
   });
 
   it('refuses a release that isn’t a client service', async () => {

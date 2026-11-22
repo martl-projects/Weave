@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { roughLocation, type LensLocation } from '@weave/core';
+import { LENS_FILES, lensFileName, roughLocation, screenTilt, type LensLocation } from '@weave/core';
 import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
@@ -18,12 +18,28 @@ import { useTexts } from './texts.tsx';
  *                                                                  (net: the hosts in its own address, which its CSP took)
  *   to the frame    {weave: 'files', files: [{path, type, data}]}  (apps/web/src/lens-frame.html)
  *   from the frame  {weave: 'fullscreen', on?}                      fill the screen with the view (on: false, leave it)
- *   to the frame    {weave: 'fullscreen', on, corner}               it fills the screen (or no longer); corner: the
+ *   from the frame  {weave: 'edges', own: true}                     I lay out the screen's edges myself: filling the
+ *                                                                  screen, give me all of it (under notch and home bar)
+ *   to the frame    {weave: 'fullscreen', on, corner, inset}        it fills the screen (or no longer); inset {top,
+ *                                                                  right, bottom, left}: what the device covers of each
+ *                                                                  edge, px (0 unless it said 'edges'); corner: the
  *                                                                  square at its top right (px) Weave's ✕ sits in
  *   from the frame  {weave: 'locate', id}                           where am I? (only if its member allowed it)
  *   to the frame    {weave: 'location', id, lat, lon, accuracy, rough} / {weave: 'location', id, error}
  *                                                                  Weave asks the device, never the frame; rough is
  *                                                                  the middle of a 0.01° cell (roughLocation)
+ *   from the frame  {weave: 'tilt', on}                             how is the device tilted? (only if its manifest
+ *                                                                  says "tilt"; on: false, no longer)
+ *   to the frame    {weave: 'tilt', x, y}                           again and again while it is asked and in sight:
+ *                                                                  degrees to the side and forward (screenTilt)
+ *   from the frame  {weave: 'picture', id, ref}                     the bytes of a picture (wblob:…) that its view names
+ *   to the frame    {weave: 'picture', id, type, data} / {…, error}  data: an ArrayBuffer. Nothing its view doesn't name
+ *   from the frame  {weave: 'attach', id, name, type, data}         keep this picture (LENS_FILES: which, how large)
+ *   to the frame    {weave: 'attached', id, ref} / {…, error}        its reference, to put into an action's input
+ *   from the frame  {weave: 'save', id, name, type, data}           a file for its member (a PDF it made): Weave
+ *   to the frame    {weave: 'saved', id} / {…, error}                offers it in a line above the view; they save it or not
+ *
+ * The view message says what this Weave answers: can: ['picture', 'attach', 'save', 'tilt'] (what is there of it).
  *
  * A chat's widget (widgets.tsx) talks the same way: its 'view' carries {widget: {id, title}} instead of board.
  *
@@ -79,20 +95,146 @@ function locate(level: LensLocation): Promise<{ lat: number; lon: number; accura
   });
 }
 
-export function LensFrame({ title, release, base, net, location, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { title: string; release: string; base: string; net?: string[]; location?: LensLocation; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
+/**
+ * How this device is tilted, told as it changes (at most thirty times a second, and not while Weave is out of sight):
+ * the browser's reading of the device's sensors, as the screen is held (screenTilt). The frame never gets a sensor
+ * itself (its sandbox has none). Returns the way to stop.
+ */
+function watchTilt(tell: (tilt: { x: number; y: number }) => void): () => void {
+  let last = 0;
+  const heard = (e: DeviceOrientationEvent) => {
+    if (e.beta == null || e.gamma == null || document.hidden) return;
+    const now = performance.now();
+    if (now - last < 33) return;
+    last = now;
+    tell(screenTilt(e.beta, e.gamma, screen.orientation?.angle ?? 0));
+  };
+  window.addEventListener('deviceorientation', heard);
+  return () => window.removeEventListener('deviceorientation', heard);
+}
+
+/** How much of each edge of the screen the device covers (a notch, rounded corners, the home bar), in CSS pixels. */
+function screenInsets(): { top: number; right: number; bottom: number; left: number } {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+  document.body.appendChild(probe);
+  const s = getComputedStyle(probe);
+  const px = (v: string) => Math.round(parseFloat(v) || 0);
+  const inset = { top: px(s.paddingTop), right: px(s.paddingRight), bottom: px(s.paddingBottom), left: px(s.paddingLeft) };
+  probe.remove();
+  return inset;
+}
+
+/** A file a view made for its member, waiting for their word: save it (resolves when it is with them) or not. */
+export interface LensOffer {
+  name: string;
+  size: number;
+  save(): Promise<void>;
+  drop(): void;
+}
+
+const toBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+};
+
+/** Bytes to the person's files: the share sheet on a phone where there is one, the browser's download otherwise. */
+async function saveBytes(data: ArrayBuffer, name: string, type: string): Promise<void> {
+  const native = 'Capacitor' in window && (window as unknown as { Capacitor: { isNativePlatform?(): boolean } }).Capacitor.isNativePlatform?.();
+  if (native && typeof navigator.share === 'function') {
+    const shared = new File([data], name, { type });
+    if (navigator.canShare?.({ files: [shared] })) return navigator.share({ files: [shared], title: name });
+  }
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/** An iPhone asks its owner before a page hears its sensors, and only after a tap in that page: this asks. */
+const tiltAsks = (): (() => Promise<string>) | undefined => {
+  const ask = typeof DeviceOrientationEvent === 'undefined' ? undefined : (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
+  return typeof ask === 'function' ? () => ask.call(DeviceOrientationEvent) : undefined;
+};
+let tiltGranted = false;
+/** The views that wait for the iPhone's yes: each is started when it comes, whichever tap brought it. */
+const tiltWaiting = new Set<() => void>();
+const TILT_SAID = 'weave.tilt.said';
+/**
+ * Ask the iPhone (it answers without a question when it still remembers a yes, and refuses to ask unless a tap in
+ * Weave came first). A yes is kept here, so the next time Weave asks by itself at the first tap anywhere in it.
+ */
+function tiltGrant(ask: () => Promise<string>): Promise<boolean> {
+  return ask().then(
+    (answer) => {
+      if (answer !== 'granted') return false;
+      tiltGranted = true;
+      try {
+        localStorage.setItem(TILT_SAID, '1');
+      } catch {
+        // Not kept: Weave's line asks again next time.
+      }
+      for (const go of [...tiltWaiting]) go();
+      tiltWaiting.clear();
+      return true;
+    },
+    () => false,
+  );
+}
+// Someone who said yes before isn't asked by Weave again: an iPhone forgets its own yes when the page is closed, and
+// asks only after a tap, so the first tap in Weave brings its question back (or, if it remembers, nothing at all).
+if (typeof window !== 'undefined') {
+  const ask = tiltAsks();
+  let said = false;
+  try {
+    said = localStorage.getItem(TILT_SAID) === '1';
+  } catch {
+    // No storage: Weave's line asks.
+  }
+  if (ask && said) {
+    const once = () => {
+      window.removeEventListener('touchend', once, true);
+      window.removeEventListener('click', once, true);
+      if (!tiltGranted) void tiltGrant(ask);
+    };
+    window.addEventListener('touchend', once, true);
+    window.addEventListener('click', once, true);
+  }
+}
+
+export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
   const frame = useRef<HTMLIFrameElement>(null);
   // Weave Web's frame takes its CSP from its address (a Pages Function): the hosts this member allowed, or none. On a
   // computer or a phone the node's answer carries them (lensFile), so the address stays as it is.
   const hosts = net?.length ? net.join(',') : '';
   const src = bridge.web && hosts ? `${base}?net=${encodeURIComponent(hosts)}` : base;
-  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, onLocated, onFullscreen });
-  latest.current = { view, act, onOpen, release, hosts, title, t, location, onLocated, onFullscreen };
+  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
+  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
+  const tilting = useRef<(() => void) | null>(null);
+  const tiltGo = useRef<(() => void) | null>(null);
+  const attached = useRef(0);
   const send = (message: unknown) => frame.current?.contentWindow?.postMessage(message, '*');
   const sendView = () => send(latest.current.view);
   useEffect(sendView, [view]);
-  // The view hears when it fills the screen, and where Weave's ✕ is then, so it keeps that corner free.
-  useEffect(() => send({ weave: 'fullscreen', on: !!full, corner: 40 }), [full]);
+  // The view hears when it fills the screen, and where Weave's ✕ is then, so it keeps that corner free. A view that
+  // said it lays out the screen's edges itself ({weave: 'edges', own: true}) gets all of the screen, under a phone's
+  // notch and home bar too, and hears how much of each edge the device covers (inset, px): it lays its own ground
+  // there and keeps what matters clear. Any other view stays inside those edges, and its inset is 0.
+  const [edges, setEdges] = useState(false);
+  useEffect(() => {
+    const tell = () => send({ weave: 'fullscreen', on: !!full, corner: 40, inset: full && edges ? screenInsets() : { top: 0, right: 0, bottom: 0, left: 0 } });
+    tell();
+    if (!full) return;
+    window.addEventListener('resize', tell);
+    return () => window.removeEventListener('resize', tell);
+  }, [full, edges]);
 
   useEffect(() => {
     const listen = (event: MessageEvent) => {
@@ -111,6 +253,11 @@ export function LensFrame({ title, release, base, net, location, onLocated, onFu
         );
       }
       if (m?.weave === 'open' && typeof m.post === 'string') latest.current.onOpen?.(m.post);
+      if (m?.weave === 'edges') {
+        const own = (m as { own?: unknown }).own === true;
+        setEdges(own);
+        latest.current.onEdges?.(own);
+      }
       // The view asks to fill the screen (a map, a game): a click in it came first, so the browser lets the page do it.
       if (m?.weave === 'fullscreen') latest.current.onFullscreen?.((m as { on?: unknown }).on !== false);
       // Where its member is: only as its member allowed (location), asked of the device here, never in the frame.
@@ -125,6 +272,87 @@ export function LensFrame({ title, release, base, net, location, onLocated, onFu
             },
             (e: Error) => send({ weave: 'location', id: m.id, error: e.message }),
           );
+      }
+      // A picture's bytes: only one its own view names (a post's picture on this board), so it sees nothing its member
+      // doesn't see here anyway. The frame cannot open a wblob: reference itself.
+      if (m?.weave === 'picture') {
+        const ref = (m as { ref?: unknown }).ref;
+        const tell = latest.current.t;
+        if (typeof ref !== 'string' || !/^wblob:[\w.-]{20,200}$/.test(ref) || !JSON.stringify(latest.current.view ?? null).includes(JSON.stringify(ref)))
+          send({ weave: 'picture', id: m.id, error: tell('lens.picture.not.here') });
+        else
+          api<{ data: string; type: string }>('blob', ref).then(
+            ({ data, type }) => {
+              if (!type.startsWith('image/')) return send({ weave: 'picture', id: m.id, error: tell('lens.picture.not.here') });
+              const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+              frame.current?.contentWindow?.postMessage({ weave: 'picture', id: m.id, type, data: bytes.buffer }, '*', [bytes.buffer]);
+            },
+            (e: Error) => send({ weave: 'picture', id: m.id, error: e.message }),
+          );
+      }
+      // A picture the view wants kept (a photo its member chose in it): stored as theirs, encrypted, like one they
+      // attach themselves. Only pictures, each small, and not endlessly: a view cannot fill the disk.
+      if (m?.weave === 'attach') {
+        const { type, data } = m as { type?: unknown; data?: unknown };
+        const fits = data instanceof ArrayBuffer && data.byteLength > 0 && data.byteLength <= LENS_FILES.attachBytes && (LENS_FILES.attach as readonly unknown[]).includes(type);
+        if (!fits || attached.current >= LENS_FILES.attachCount) send({ weave: 'attached', id: m.id, error: latest.current.t('lens.attach.limits') });
+        else {
+          attached.current++;
+          api<string>('putBlob', { data: toBase64(new Uint8Array(data as ArrayBuffer)), type: type as string }).then(
+            (ref) => send({ weave: 'attached', id: m.id, ref }),
+            (e: Error) => send({ weave: 'attached', id: m.id, error: e.message }),
+          );
+        }
+      }
+      // A file the view made for its member (a book as a PDF): Weave shows that it is there, and they save it or not.
+      if (m?.weave === 'save') {
+        const { type, data, name } = m as { type?: unknown; data?: unknown; name?: unknown };
+        const tell = latest.current.t;
+        const offer = latest.current.onOffer;
+        if (!offer) send({ weave: 'saved', id: m.id, error: tell('lens.save.not.here') });
+        else if (!(data instanceof ArrayBuffer) || !data.byteLength || data.byteLength > LENS_FILES.saveBytes || !(LENS_FILES.save as readonly unknown[]).includes(type)) send({ weave: 'saved', id: m.id, error: tell('lens.save.limits') });
+        else {
+          const file = lensFileName(name);
+          offer({
+            name: file,
+            size: data.byteLength,
+            save: () =>
+              saveBytes(data, file, type as string).then(
+                () => send({ weave: 'saved', id: m.id }),
+                (e: Error) => send({ weave: 'saved', id: m.id, error: e.message }),
+              ),
+            drop: () => send({ weave: 'saved', id: m.id, error: tell('lens.save.declined') }),
+          });
+        }
+      }
+      // How the device is tilted: only for a view whose manifest says so, heard from the device here, never in the frame.
+      if (m?.weave === 'tilt') {
+        tilting.current?.();
+        tilting.current = null;
+        if (tiltGo.current) tiltWaiting.delete(tiltGo.current);
+        tiltGo.current = null;
+        latest.current.onTiltAsk?.(null);
+        if ((m as { on?: unknown }).on !== false && latest.current.tilt) {
+          const start = () => {
+            tilting.current?.();
+            tilting.current = watchTilt((tilt) => send({ weave: 'tilt', ...tilt }));
+          };
+          const ask = tiltAsks();
+          if (!ask || tiltGranted) start();
+          else {
+            // An iPhone: started when its yes comes. Asked silently first (it may still remember); if it wants a tap,
+            // Weave's line offers one, unless the tap anywhere in Weave (for someone who said yes before) comes first.
+            const go = () => {
+              latest.current.onTiltAsk?.(null);
+              start();
+            };
+            tiltGo.current = go;
+            tiltWaiting.add(go);
+            void tiltGrant(ask).then((yes) => {
+              if (!yes && !tiltGranted && tiltGo.current === go) latest.current.onTiltAsk?.(() => void tiltGrant(ask));
+            });
+          }
+        }
       }
       // Weave Web's frame (apps/web/src/lens-frame.html) asks for the view's files, builds its page, and says so.
       // Only to the frame this page made, with the hosts it was given: a view that sent its frame elsewhere (another
@@ -144,7 +372,11 @@ export function LensFrame({ title, release, base, net, location, onLocated, onFu
       }
     };
     window.addEventListener('message', listen);
-    return () => window.removeEventListener('message', listen);
+    return () => {
+      window.removeEventListener('message', listen);
+      tilting.current?.();
+      if (tiltGo.current) tiltWaiting.delete(tiltGo.current);
+    };
   }, []);
 
   return <iframe ref={frame} className={className ?? 'lens-frame'} style={style} title={title} src={src} sandbox="allow-scripts" referrerPolicy="no-referrer" onLoad={sendView} />;
@@ -197,10 +429,23 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
   const { t } = useTexts();
   const box = useRef<HTMLDivElement>(null);
   useFullscreen(box, full, setFull);
+  // An iPhone wants a tap in Weave before the view hears how it is tilted: what that tap does, while it is wanted.
+  const [tiltAsk, setTiltAsk] = useState<(() => void) | null>(null);
+  // A file the view made for its member, until they saved it or said no.
+  const [offer, setOffer] = useState<LensOffer | null>(null);
+  // The view lays out the screen's edges itself: filling the screen, it gets all of it.
+  const [bleed, setBleed] = useState(false);
+  const waiting = useRef<LensOffer | null>(null);
+  // One at a time: a newer file takes the place of one nobody answered (which is then not saved).
+  const offered = (next: LensOffer | null) => {
+    if (next) waiting.current?.drop();
+    waiting.current = next;
+    setOffer(next);
+  };
   const { data: view, error, reload } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
   // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
   const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
-  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid } }, [view, meDid]);
+  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid }, can: ['picture', 'attach', 'save', ...(view.lens?.tilt ? ['tilt'] : [])] }, [view, meDid]);
 
   if (error) return <p className="muted pad">{error}</p>;
   if (!view) return <p className="muted pad">{t('lens.getting.ready', { name: board.lens?.name ?? t('lens.its.view') })}</p>;
@@ -219,12 +464,13 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
     reload();
   };
   const where = view.lens.location;
+  const allowTilt = tiltAsk;
   const allowWhere = async (on: boolean) => {
     await api('allowLensLocation', { release: view.lens!.release, ...(on ? {} : { off: true }) }).catch((e: Error) => toast(e.message, 'error'));
     reload();
   };
   return (
-    <div className="lens-box" ref={box}>
+    <div className={bleed ? 'lens-box lens-bleed' : 'lens-box'} ref={box}>
       {full && (
         <button className="lens-full-exit" onClick={() => setFull(false)} title={t('lens.fullscreen.exit')} aria-label={t('lens.fullscreen.exit')}>
           ✕
@@ -264,18 +510,52 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
           <button className="link" onClick={() => void allowWhere(false)}>{t('lens.net.off')}</button>
         </div>
       )}
+      {allowTilt && (
+        <div className="lens-net ask">
+          <span>
+            <Icon name="zap" /> {t('lens.tilt.ask', { name: view.lens.name })}
+          </span>
+          <span className="muted">{t('lens.tilt.why')}</span>
+          <button onClick={allowTilt}>{t('lens.net.allow')}</button>
+        </div>
+      )}
+      {offer && (
+        <div className="lens-net ask">
+          <span>
+            <Icon name="download" /> {t('lens.save.ask', { name: view.lens.name, file: offer.name, size: offer.size < 1024 * 1024 ? `${Math.max(1, Math.round(offer.size / 1024))} KB` : `${(offer.size / 1024 / 1024).toFixed(1)} MB` })}
+          </span>
+          <button
+            className="link"
+            onClick={() => {
+              offer.drop();
+              offered(null);
+            }}
+          >
+            {t('lens.save.drop')}
+          </button>
+          <button
+            style={{ marginLeft: 0 }}
+            onClick={() => {
+              void offer.save();
+              offered(null);
+            }}
+          >
+            {t('lens.save.save')}
+          </button>
+        </div>
+      )}
       {/* A new key when the hosts change: the frame loads again with the CSP that goes with them. */}
-      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
+      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
     </div>
   );
 }
 
 /** The switch between a board's posts and its suggested client service. */
-export function LensSwitch({ board, on, choose }: { board: BoardInfo; on: boolean; choose(on: boolean): void }) {
+export function LensSwitch({ board, on, choose, className }: { board: BoardInfo; on: boolean; choose(on: boolean): void; className?: string }) {
   const { t } = useTexts();
   if (!board.lens || board.lens.mode === 'require') return null;
   return (
-    <button onClick={() => choose(!on)} title={on ? t('lens.show.list') : t('lens.suggested', { name: board.lens.name })}>
+    <button className={className} onClick={() => choose(!on)} title={on ? t('lens.show.list') : t('lens.suggested', { name: board.lens.name })}>
       <Icon name={on ? 'hash' : 'zap'} /> {on ? t('lens.posts') : board.lens.name}
     </button>
   );

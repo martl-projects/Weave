@@ -76,6 +76,58 @@ sessionStorage.removeItem(TAKEN);
 sessionStorage.removeItem(TAKE);
 
 const worker = new Worker('/worker.js', { type: 'module' });
+
+/*
+ * A start that fails or hangs must say so: until the account's Worker answered there is nothing on the page but its
+ * ground, and a person can't tell a slow start from a broken one. After a while with nothing shown, or when the start
+ * threw, the page says how far it came and what went wrong, and offers to load again. Nothing here touches the account.
+ */
+let startStage = 'the account\'s worker starts';
+let startError = '';
+const startStuck = () => {
+  const root = document.getElementById('root');
+  if (!root || root.childElementCount) return;
+  const de = navigator.language.startsWith('de');
+  const box = document.createElement('div');
+  box.style.cssText = 'max-width:420px;margin:18vh auto 0;padding:18px;background:#fff;color:#111;font:15px/1.45 system-ui,sans-serif;border-radius:10px';
+  const say = (tag: string, text: string) => {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    el.style.margin = '0 0 10px';
+    box.appendChild(el);
+    return el;
+  };
+  say('b', de ? 'Weave startet nicht' : 'Weave doesn\'t start').style.display = 'block';
+  say('p', de ? 'Dein Konto ist davon nicht berührt. Schließe Weave in anderen Tabs oder Fenstern und lade neu.' : 'Your account isn\'t touched by this. Close Weave in other tabs or windows and load again.');
+  say('p', `${de ? 'Stand' : 'It came to'}: ${startStage}${startError ? `. ${de ? 'Fehler' : 'Error'}: ${startError}` : ''}`).style.cssText += ';font-size:13px;color:#555;word-break:break-word';
+  const again = say('button', de ? 'Neu laden' : 'Load again');
+  again.style.cssText = 'font:inherit;padding:8px 14px';
+  again.onclick = () => location.reload();
+  // This browser's copy of the account can't be read any more. The account itself is with the person's other devices
+  // and the storage node: dropping the copy here and coming in again brings it back. Only on their word.
+  if (/SQLITE_(CORRUPT|NOTADB)/.test(startError)) {
+    say('p', de ? 'Die Kopie deines Kontos in diesem Browser ist beschädigt. Dein Konto selbst liegt weiter bei deinen anderen Geräten und am Speicherknoten. Du kannst die Kopie hier löschen und dich neu anmelden: mit deinem Passkey, deinen 24 Wörtern oder einem Link von deinem Computer. Was du nur hier geschrieben hast und was noch nicht bei den anderen angekommen war, geht dabei verloren.' : 'The copy of your account in this browser is damaged. Your account itself is still with your other devices and the storage node. You can delete the copy here and come in again: with your passkey, your 24 words or a link from your computer. What you wrote only here and what had not reached the others yet is lost with it.').style.marginTop = '14px';
+    const drop = say('button', de ? 'Kopie hier löschen' : 'Delete the copy here');
+    drop.style.cssText = 'font:inherit;padding:8px 14px';
+    drop.onclick = async () => {
+      if (!confirm(de ? 'Die Kopie deines Kontos in diesem Browser wirklich löschen? Das lässt sich nicht zurücknehmen.' : 'Really delete the copy of your account in this browser? This can’t be undone.')) return;
+      (drop as HTMLButtonElement).disabled = true;
+      const answer = await ask('forget');
+      if ('error' in answer) return void say('p', `${de ? 'Das ging nicht' : 'That didn’t work'}: ${JSON.stringify(answer.error)}`);
+      location.reload();
+    };
+  }
+  root.replaceChildren(box);
+};
+const startFailed = (error: unknown) => {
+  if (startError) return;
+  startError = error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+  startStuck();
+};
+window.addEventListener('error', (event) => startFailed(event.error ?? event.message));
+window.addEventListener('unhandledrejection', (event) => startFailed(event.reason));
+worker.onerror = (event) => startFailed(`worker: ${event.message || 'it did not load'}`);
+setTimeout(startStuck, 12_000);
 /** Whether this tab has the account. */
 let holding = false;
 let shown = false;
@@ -112,6 +164,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
     return void services.delete(data.key!);
   }
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
+  if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
   if (data.event === 'status') return console.info('storage node:', data.state, data.detail ?? '');
   if (typeof data.event === 'object') return listeners.forEach((listen) => listen(data.event as FeedItem));
   waiting.get(data.id)?.(data.answer);
@@ -226,6 +279,16 @@ if (arrived) {
 const LINK_KEY = 'weave.link';
 /** Where to start after this browser was emptied on purpose (reset). */
 const START_KEY = 'weave.start';
+/** A tapped notification that opened Weave (the service worker's ?open=): where it leads, once unlocked. */
+let openedFrom: Record<string, unknown> | undefined;
+try {
+  const asked = new URLSearchParams(location.search).get('open');
+  if (asked) {
+    const parsed = JSON.parse(asked) as unknown;
+    if (parsed && typeof parsed === 'object') openedFrom = parsed as Record<string, unknown>;
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+} catch {}
 const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
 if (linkSecret) {
   sessionStorage.setItem(LINK_KEY, linkSecret);
@@ -253,6 +316,7 @@ const opening = taken ? new Promise<never>(() => {}) : own<{ exists: boolean; wa
   return lock;
 });
 const lock = await Promise.race([opening, elsewhere]);
+startStage = 'the account is found, the page loads';
 let open = false;
 let passkey = !!lock?.ways.some((way) => way !== 'words');
 let given: string | undefined;
@@ -361,14 +425,36 @@ const web: Bridge['web'] = {
       const address = await own<string>('pushSubscribe', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
       const kept = await loadPushKey();
       if (kept?.address !== address) await savePushKey(makePushKey(address));
+      // Each place its own address, sealed to those who manage it (docs/web-push.md, stage 3).
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
     },
     disable: async () => {
+      await own('pushPlaces').catch(() => undefined);
       const kept = await loadPushKey();
       if (kept) await own('pushDrop', kept.address).catch(() => undefined);
       await (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe();
       await clearPushKey();
     },
     counted: async (total) => void (await saveBadge(total).catch(() => undefined)),
+    relay: () => new URL(STORAGE_AT).host,
+    // All anew: the subscription at the push service goes (whatever any relay still holds of it reaches nothing), and a
+    // new one with new addresses and keys for every place takes its place.
+    renew: async () => {
+      await web!.push.disable();
+      await web!.push.enable();
+    },
+    resume: async () => {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+      const subscription = await (await navigator.serviceWorker.ready).pushManager?.getSubscription();
+      if (!subscription || !(await loadPushKey())) return;
+      const keys = subscription.toJSON().keys ?? {};
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
+    },
+    opened: () => {
+      const kept = openedFrom;
+      openedFrom = undefined;
+      return kept;
+    },
     test: async (notice) => {
       const kept = await loadPushKey();
       if (!kept) throw new Error('notifications are off on this device');
@@ -489,10 +575,13 @@ window.weave = {
 
 // A notification tapped while Weave is open: the service worker says where it leads.
 // One that came while Weave was in front isn't shown (the node here tells it): it's said to the page.
-navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: string; notice?: unknown }>) => {
+navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: unknown; notice?: unknown }>) => {
   if (event.data?.type === 'weave-push') return void window.dispatchEvent(new CustomEvent('weave-push', { detail: event.data.notice }));
   if (event.data?.type === 'weave-push-failed') return void console.warn('a push could not be shown:', (event.data as { why?: string }).why);
-  if (event.data?.type === 'weave-open' && event.data.open) location.hash = event.data.open.startsWith('#') ? event.data.open : `#${event.data.open}`;
+  const open = event.data?.type === 'weave-open' ? event.data.open : undefined;
+  // A place as a notice says it (stage 3): the app finds its way there.
+  if (open && typeof open === 'object') return void window.dispatchEvent(new CustomEvent('weave-open', { detail: open }));
+  if (typeof open === 'string' && open) location.hash = open.startsWith('#') ? open : `#${open}`;
 });
 
 await import('../../desktop/src/renderer/main.tsx');

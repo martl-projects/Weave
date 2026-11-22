@@ -301,8 +301,20 @@ try {
     const listed = await until('the new website, in the node', async () => ((await call<Array<{ id: string }>>('websites')).result ?? []).some((w) => w.id === encore) || undefined, 30_000).catch(() => false);
     const shown = await until('the new website, on the page', () => run<boolean>(`document.querySelectorAll('.room').length > ${before}`), 15_000).catch(() => false);
     if (!listed || !shown) throw new Error(`Lena's new website: in the node ${listed}, on the page ${shown}`);
+    // A project's notifications, at its head: quiet, and still quiet when the page is shown again.
+    await run(`location.hash = '#/p/${partyId}'`);
+    await until('the notification switch', () => run<boolean>(`!!document.querySelector('.notice-switch select')`), 20_000);
+    await run(`(() => { const s = document.querySelector('.notice-switch select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'off'); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await sleep(1500);
+    await run(`location.hash = '#/'`);
+    await sleep(500);
+    await run(`location.hash = '#/p/${partyId}'`);
+    await until('the project still quiet', () => run<boolean>(`document.querySelector('.notice-switch select')?.value === 'off'`), 20_000);
+    await run(`(() => { const s = document.querySelector('.notice-switch select'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(s, 'on'); s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await sleep(500);
     await run(`location.hash = '#/'`);
     passed('a website put live on a computer shows on the page that is open, without a reload');
+    passed('a project goes quiet from its own head, and stays so');
   }
 
   await until('the service worker', () => run<boolean>(`navigator.serviceWorker.ready.then((r) => !!r.active)`));
@@ -341,8 +353,33 @@ try {
     await putKey(null);
     passed('push: one sealed to this browser is opened by its service worker');
     // The number on Weave's icon: what the app counted, kept for the service worker to count on from.
-    const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : n)));
-    passed("the app keeps its count for Weave's icon", badge);
+    const badge = await until('the count for the icon', () => run<number | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get('badge'); g.onsuccess = () => (r.result.close(), done(typeof g.result === 'number' ? g.result : null)); }; })`).then((n) => (n === null ? undefined : { n })));
+    passed("the app keeps its count for Weave's icon", badge.n);
+
+    // Stage 3: pushes on in this browser give each place an address of its own, sealed to whoever runs it. Lena runs
+    // Climb: her node opens Webby's address there, seals what she says to its key, and the service worker opens it with
+    // that place's key. (A real subscription needs a window Chrome lets ask; the storage node takes this one's word.)
+    const dev = async <T>(path: string) => (await (await fetch(`${ORIGIN}${path}`)).json()) as T;
+    const said = await call('pushPlaces', { endpoint: `https://fcm.googleapis.com/fcm/send/check-${Date.now()}`, p256dh: 'BCheck', auth: 'check' });
+    if (said.error) throw new Error(`pushes on: ${said.error}`);
+    const address = await until("Webby's address in Climb, as Lena opens it", async () => (await dev<string[]>('/dev/push-targets'))[0], 30_000);
+    const placeKey = await until("that address's key, in this browser", () =>
+      run<{ did: string } | null>(`new Promise((done) => { const r = indexedDB.open('weave-push', 1); r.onsuccess = () => { const g = r.result.transaction('keys').objectStore('keys').get(${JSON.stringify(`addr:${address}`)}); g.onsuccess = () => (r.result.close(), done(g.result ?? null)); }; })`).then((k) => k ?? undefined),
+    );
+    await fetch(`${ORIGIN}/dev/say?text=${encodeURIComponent('push from Lena')}`, { method: 'POST' });
+    const message = await until('what Lena pushed to it', async () => (await dev<Array<{ address: string; from: string; sealed: unknown }>>('/dev/pushed')).find((p) => p.address === address));
+    await send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: JSON.stringify({ from: message.from, to: address, sealed: message.sealed }) });
+    await until("Lena's push, opened with the place's key", () => run<boolean>(`window.__pushes.some((p) => p.title === 'Lena · Climb' && p.text === 'push from Lena')`));
+    passed("push: a place's own address, sealed to the one who runs it, and her message opened with that place's key", placeKey.did.slice(0, 16));
+    // Off: every address goes back, and Lena can't open one any more.
+    await call('pushPlaces');
+    await until('the address taken back', async () => (await dev<string[]>('/dev/push-targets')).length === 0, 30_000);
+    // A relay that doesn't forget sends it again: the key is gone, so it isn't shown.
+    await send('ServiceWorker.deliverPushMessage', { origin: ORIGIN, registrationId, data: JSON.stringify({ from: message.from, to: address, sealed: message.sealed }) });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const shownTimes = await run<number>(`window.__pushes.filter((p) => p.text === 'push from Lena').length`);
+    if (shownTimes !== 1) throw new Error(`a push to an address taken back was shown (${shownTimes} times in all)`);
+    passed("push off takes back every place's address, and what still comes to one isn't shown");
   }
 
   // On a phone's width: what the menu bar has on a computer is under Settings.

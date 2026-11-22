@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { playManifest, playTags } from '@weave/core';
-import { keepReconciling, linkHandovers, originMatches, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags, parseBootstrap } from '@weave/node';
+import { keepReconciling, linkHandovers, originMatches, postPush, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags, parseBootstrap } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { WebSocketServer } from 'ws';
 import { buildRooms, buildServices, buildWeb } from './build.ts';
@@ -47,6 +47,12 @@ const { node: person, words: personWords } = WeaveNode.create('Lena', join(scrat
 const testnet = process.env.TESTNET ? [parseBootstrap(process.env.TESTNET)] : undefined;
 await person.createGroup('Climb');
 await person.say({ space: 'Climb', text: 'the rope is in the van' });
+// What Lena pushes when she says something (docs/web-push.md, stage 3), kept for /dev/pushed, and posted as a computer does.
+const pushed: Array<{ address: string; from: string; sealed: unknown }> = [];
+person.pushTargets.setSender(async (target, message) => {
+  pushed.push({ address: target.address, ...message });
+  await postPush(target, message).catch(() => undefined);
+});
 
 /** Tally (a test's widget), released once in Lena's project Games, sent into Climb: the widget message. */
 let tally: Promise<void> | undefined;
@@ -141,6 +147,9 @@ const server = createServer(async (req, res) => {
   // Lena's words, as she'd type them into a browser (dev only: the words never leave a real computer).
   if (url.pathname === '/dev/words') return json({ words: personWords });
   if (url.pathname === '/dev/messages') return json((await person.messages('Climb')).map((m) => m.text));
+  // Pushes (stage 3): the addresses in Climb sealed to Lena (she runs it), and what she pushed.
+  if (url.pathname === '/dev/push-targets') return json(person.pushTargets.targetsIn((await person.spaces()).find((s) => s.name === 'Climb')!.id).map((t) => t.target.address));
+  if (url.pathname === '/dev/pushed') return json(pushed);
   if (url.pathname === '/dev/widget') return json(await sendWidget());
   if (url.pathname === '/dev/widget-state') return json((await person.widgetView({ message: url.searchParams.get('id') ?? '' })).state ?? null);
   // An onboarding link to Party, as Lena makes one in her app (idea bZFDCQNT): this storage node lets her.

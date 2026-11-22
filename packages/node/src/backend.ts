@@ -897,6 +897,8 @@ export interface WidgetViewInfo {
   net?: string[];
   /** How closely its site may know where you are (its manifest's "location"): approving the release allows it. */
   location?: 'rough' | 'exact';
+  /** Its site may ask how the device is tilted (its manifest's "tilt"). */
+  tilt?: boolean;
   /** Its view's files: lensFile({release: view, path}), in a sandboxed frame (LENS_CSP); site says it has one. */
   view: string;
   site?: true;
@@ -942,7 +944,7 @@ export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
   /** `writes`: the kinds its actions propose (its contract); whoever takes an action signs them, an agent only those its person allowed. */
-  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; writes: string[]; site?: boolean; problem?: string; net?: LensNetInfo; location?: LensLocationInfo };
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; writes: string[]; site?: boolean; problem?: string; net?: LensNetInfo; location?: LensLocationInfo; /** Its site may ask how the device is tilted (its manifest's "tilt"). */ tilt?: boolean };
   state?: Json;
   actions?: Json[];
 }

@@ -59,6 +59,36 @@ export const clearPushKey = (): Promise<unknown> => run('readwrite', (s) => s.de
 export const loadBadge = async (): Promise<number> => (await run<number | undefined>('readonly', (s) => s.get('badge'))) ?? 0;
 export const saveBadge = (count: number): Promise<unknown> => run('readwrite', (s) => s.put(count, 'badge'));
 
+/*
+ * Stage 3: a key and an address for each place (a group, a project, a direct chat), so each can be taken back on its
+ * own. The service worker finds a push's key by the address the relay names (`to`); the Worker keeps which place has
+ * which address, the browser's subscription (to make new addresses with) and this browser's name among its person's.
+ */
+export const loadKeyFor = (address: string): Promise<PushKey | undefined> => run<PushKey | undefined>('readonly', (s) => s.get(`addr:${address}`));
+export const saveKeyFor = (key: PushKey): Promise<unknown> => run('readwrite', (s) => s.put(key, `addr:${key.address}`));
+export const dropKeyFor = (address: string): Promise<unknown> => run('readwrite', (s) => s.delete(`addr:${address}`));
+/** A place's addresses, by whom each was given to (its maintainers, the other one in a direct chat). */
+export const loadPlace = async (space: string): Promise<Record<string, string>> => (await run<Record<string, string> | undefined>('readonly', (s) => s.get(`place:${space}`))) ?? {};
+export const savePlace = (space: string, given: Record<string, string>): Promise<unknown> => run('readwrite', (s) => (Object.keys(given).length ? s.put(given, `place:${space}`) : s.delete(`place:${space}`)));
+
+export interface Subscribed {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+export const loadSubscription = (): Promise<Subscribed | undefined> => run<Subscribed | undefined>('readonly', (s) => s.get('subscription'));
+export const saveSubscription = (sub: Subscribed): Promise<unknown> => run('readwrite', (s) => s.put(sub, 'subscription'));
+export const clearSubscription = (): Promise<unknown> => run('readwrite', (s) => s.delete('subscription'));
+
+/** This browser among its person's: says its targets apart from theirs. */
+export async function deviceName(): Promise<string> {
+  const kept = await run<string | undefined>('readonly', (s) => s.get('device'));
+  if (kept) return kept;
+  const made = b64u.encode(crypto.getRandomValues(new Uint8Array(9)));
+  await run('readwrite', (s) => s.put(made, 'device'));
+  return made;
+}
+
 /** A new push key, for an address. */
 export function makePushKey(address: string): PushKey {
   const { publicKey, secretKey } = generateKeyPair();
