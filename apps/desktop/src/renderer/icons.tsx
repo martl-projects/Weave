@@ -115,10 +115,15 @@ export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 /** Whether a name (from a manifest, say) is one of these icons. */
 export const isIconName = (name: unknown): name is IconName => typeof name === 'string' && (Object.hasOwn(BITMAPS, name) || Object.hasOwn(VECTORS, name));
 
-export function Icon({ name, size = 16, className = '' }: { name: IconName; size?: number; className?: string }) {
+/**
+ * An icon. `sharp`: on a screen with more pixels than CSS pixels, its 32-pixel drawing in place of the 16 (share mode's
+ * own icons, whose 16 pixels hold a lot).
+ */
+export function Icon({ name, size = 16, className = '', sharp = false }: { name: IconName; size?: number; className?: string; sharp?: boolean }) {
   if (name in BITMAPS) {
     const [small, big] = BITMAPS[name as keyof typeof BITMAPS] as [string, string?];
-    return <img className={`icon bitmap ${className}`} src={size > 16 && big ? big : small} width={size} height={size} alt="" aria-hidden="true" />;
+    const srcSet = sharp && big && size <= 16 ? `${small} 1x, ${big} 2x` : undefined;
+    return <img className={`icon bitmap ${className}`} src={size > 16 && big ? big : small} srcSet={srcSet} width={size} height={size} alt="" aria-hidden="true" />;
   }
   return <span className={`icon ${className}`} style={{ width: size, height: size }} aria-hidden="true" dangerouslySetInnerHTML={{ __html: VECTORS[name as keyof typeof VECTORS] }} />;
 }
