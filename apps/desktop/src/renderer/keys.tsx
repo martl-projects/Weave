@@ -14,6 +14,7 @@ import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 import { FetchersBox, ServicesBox } from './services.tsx';
 import { T, useTexts } from './texts.tsx';
+import weaveLogo from './weave-logo.png';
 import { YourLinks } from './onboardlinks.tsx';
 
 /*
@@ -44,6 +45,32 @@ function Words({ words }: { words: string }) {
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * Weave Web's first screen, the first of Weave anyone may see: a stage of its own, the same in every look. Weave's threads
+ * drift slowly behind (its own art, in the logo's colors: coral, yellow, mint), the logo and its name in front, then
+ * what Weave is for, and the ways in.
+ */
+function FirstStage({ children }: { children: React.ReactNode }) {
+  const { t } = useTexts();
+  return (
+    <div className="first-stage">
+      <svg className="first-threads" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <path className="thread thread-coral" d="M-200 760 C 200 520, 520 980, 900 700 S 1500 380, 1900 560" />
+        <path className="thread thread-yellow" d="M-200 420 C 260 220, 600 640, 980 420 S 1520 160, 1900 300" />
+        <path className="thread thread-mint" d="M-200 140 C 300 360, 640 -40, 1040 180 S 1540 520, 1900 260" />
+      </svg>
+      <main className="first-card">
+        <img className="first-logo" src={weaveLogo} alt="" />
+        <h1 className="first-title">Weave</h1>
+        <p className="first-tagline">
+          <span className="coral">{t('brand.build')}</span> · <span className="yellow">{t('brand.share')}</span> · <span className="mint">{t('brand.belong')}</span>
+        </p>
+        {children}
+      </main>
+    </div>
   );
 }
 
@@ -321,16 +348,11 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       setBusy(false);
       if (ok) onDone();
     };
-    const head = (
-      <div className="welcome-head">
-        <WeaveMark size={48} />
-        <p>{fromGame ? <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b> : t('web.first.hello')}</p>
-      </div>
-    );
-    const welcomeLine = invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>;
+    const head = fromGame ? <h2 className="first-invited">{t('linkb.web.invited', { by: invited.by, title: invited.title })}</h2> : <p className="first-hello">{t('brand.tagline')}</p>;
+    const welcomeLine = invited && 'welcome' in invited && invited.welcome && <p className="first-quote">“{invited.welcome}”</p>;
     if (fromGame && !signingIn)
-      return window(
-        t('onboard.welcome'),
+      return (
+        <FirstStage>
         <form
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
@@ -344,7 +366,7 @@ export function Onboarding({ onDone }: { onDone(): void }) {
             <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="first-ways">
-            <button id="first-join" className="default" disabled={busy || !name.trim()}>
+            <button id="first-join" className="first-btn primary" disabled={busy || !name.trim()}>
               <Icon name="lock" /> {t('web.join')}
             </button>
           </div>
@@ -360,39 +382,75 @@ export function Onboarding({ onDone }: { onDone(): void }) {
               </>
             )}
           </p>
-        </form>,
+        </form>
+        </FirstStage>
       );
-    return window(
-      t('onboard.welcome'),
-      <>
+    return (
+      <FirstStage>
         {head}
         {welcomeLine}
         {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
         <div className="first-ways">
-          <button id="first-passkey" className="default" disabled={busy} onClick={() => void passkey()}>
+          <button id="first-passkey" className="first-btn primary" disabled={busy} onClick={() => void passkey()}>
             <Icon name="lock" /> {t('web.first.passkey')}
           </button>
-          <button id="first-create" disabled={busy} onClick={() => (fromGame ? setSigningIn(false) : setMode('create'))}>
+          <button id="first-create" className="first-btn" disabled={busy} onClick={() => (fromGame ? setSigningIn(false) : setMode('create'))}>
             {t(fromGame ? 'web.join.new' : 'web.first.create')}
           </button>
         </div>
         <details className="first-more">
           <summary>{t('web.first.more')}</summary>
           <div className="first-ways">
-            <button id="first-words" disabled={busy} onClick={() => setMode('restore')}>
+            <button id="first-words" className="first-btn" disabled={busy} onClick={() => setMode('restore')}>
               {t('web.first.words')}
             </button>
-            <button id="first-link" disabled={busy} onClick={() => setMode('paste')}>
+            <button id="first-link" className="first-btn" disabled={busy} onClick={() => setMode('paste')}>
               {t('web.first.link')}
             </button>
           </div>
           <p className="small muted">{t('web.first.passkey.why')}</p>
           <p className="small muted">{t('web.link.hint')}</p>
         </details>
-      </>,
+      </FirstStage>
     );
   }
 
+  if (bridge.web)
+    return (
+      <FirstStage>
+        <form
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            void makeAccount();
+          }}
+        >
+          {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
+          <div className="field-row-stacked">
+            <label htmlFor="welcome-name">{t('onboard.name')}</label>
+            <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          {bridge.web.needsInvite() && (
+            <div className="field-row-stacked">
+              <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
+              <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+              <p className="small muted">{t('web.invite.why')}</p>
+            </div>
+          )}
+          <div className="first-ways">
+            <button className="first-btn primary" disabled={busy || !name.trim()}>
+              <Icon name="lock" /> {t('onboard.create')}
+            </button>
+          </div>
+          <p className="first-other small">
+            <button type="button" className="link" onClick={() => setMode('start')}>
+              {t('button.back')}
+            </button>
+          </p>
+        </form>
+      </FirstStage>
+    );
+
+  // The app on a computer: a name, then the words; or restore, or a company account. (Weave Web has its stage above.)
   return window(
     t('onboard.welcome'),
     <form
@@ -403,40 +461,21 @@ export function Onboarding({ onDone }: { onDone(): void }) {
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        {invited && 'title' in invited ? (
-          <p>
-            <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b>
-            <br />
-            {t('linkb.web.invited.how')}
-          </p>
-        ) : (
-          <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
-        )}
+        <p>{t('onboard.intro')}</p>
       </div>
-      {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
-      {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
-      {bridge.web?.needsInvite() && (
-        <div className="field-row-stacked">
-          <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
-          <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
-          <p className="small muted">{t('web.invite.why')}</p>
-        </div>
-      )}
       <div className="buttons">
-        {!bridge.web && (
-          <button type="button" onClick={() => setMode('company')}>
-            {t('onboard.company.button')}
-          </button>
-        )}
-        <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'restore')}>
-          {t(bridge.web ? 'button.back' : 'onboard.restore.button')}
+        <button type="button" onClick={() => setMode('company')}>
+          {t('onboard.company.button')}
+        </button>
+        <button type="button" onClick={() => setMode('restore')}>
+          {t('onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
-          {t(invited && 'title' in invited ? 'linkb.web.create' : 'onboard.create')}
+          {t('onboard.create')}
         </button>
       </div>
     </form>,
