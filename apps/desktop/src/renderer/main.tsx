@@ -8,7 +8,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { ShareAdd, ShareBar, startShare, stopShare, useShare } from './share.tsx';
+import { mayShare, ShareAdd, ShareBar, startShare, stopShare, useShare } from './share.tsx';
 import { joinLinkOf, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
 import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
@@ -54,15 +54,23 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind:
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra, mark }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode; mark?: 'target' | 'included' }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
+  const { t } = useTexts();
+  // Share mode (share.tsx): where the link leads has a check, the places it also lets them into are highlighted.
+  const classes = [extra ? 'tree-with-extra' : '', mark ? `share-${mark}` : ''].filter(Boolean).join(' ');
   return (
-    <li style={{ paddingLeft: depth * 14 }} className={extra ? 'tree-with-extra' : undefined}>
+    <li style={{ paddingLeft: depth * 14 }} className={classes || undefined}>
       <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
+        {mark === 'target' && (
+          <span className="share-mark" title={t('sharemode.target')} aria-label={t('sharemode.target')}>
+            ✓
+          </span>
+        )}
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
             {!!count && <span className="badge">{count}</span>}
@@ -88,6 +96,13 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
+  // Share mode: which of these the link leads to (a board, Live with a website chosen, or the space), or that it lets them in here too.
+  const share = useShare();
+  const shareable = share.on && mayShare(space);
+  const targetHere = shareable && open;
+  const boardTarget = targetHere && view === 'b' ? arg : undefined;
+  const liveTarget = targetHere && view === 'live' && !!share.website;
+  const spaceMark = targetHere && !boardTarget && !liveTarget ? 'target' : shareable && share.also.includes(space.id) ? 'included' : undefined;
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
   const shownBoards = open && space.kind === 'project' ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
@@ -96,11 +111,11 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} extra={<ShareAdd space={space} route={route} />} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} extra={<ShareAdd space={space} route={route} />} mark={spaceMark} />
       {open && (
         <>
           {space.kind === 'project' &&
-            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} />)}
+            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} mark={boardTarget === b.name ? 'target' : undefined} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
               key={c.name}
@@ -113,7 +128,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               hint={channelHint(c.name)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live')} on={view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live')} on={view === 'live'} unread={!!rooms?.length} mark={liveTarget ? 'target' : undefined} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/available`} icon="store" label={t('nav.available')} on={view === 'available'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={t('nav.services')} on={view === 'services' && !arg} />}
           {space.kind === 'project' && (services ?? []).map((s) => <TreeLink key={s.did} depth={2} href={`${base}/services/${s.did}`} icon={serviceIcon(s)} label={s.name} on={view === 'services' && arg === s.did} />)}

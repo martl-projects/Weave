@@ -477,3 +477,6 @@
 :root[data-skin='clean'] .share-bar { background: color-mix(in srgb, var(--cl-accent) 14%, var(--cl-panel)); color: var(--cl-text); border-top: 1px solid var(--cl-accent-line, var(--cl-accent)); padding: 8px 14px; }
 :root[data-skin='clean'] .app-window.sharing .panes { outline-color: var(--cl-accent); }
 :root[data-skin='clean'] :is(.share-add.on, .pane-head .pane-share.on) { background: var(--cl-accent); border-color: var(--cl-accent); color: #fff; }
+:root[data-skin='clean'] .share-mark { background: var(--cl-accent); }
+:root[data-skin='clean'] .share-target > .tree-link { box-shadow: inset 0 0 0 1.5px var(--cl-accent); }
+:root[data-skin='clean'] .share-included > .tree-link { background: var(--cl-accent-soft, color-mix(in srgb, var(--cl-accent) 18%, transparent)); }

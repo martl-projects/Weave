@@ -2299,6 +2299,7 @@
     "sharemode.also.add": "{place} mit in den Link",
     "sharemode.also.remove": "{place} aus dem Link nehmen",
     "sharemode.hint": "Geh dorthin, wo der Link hinführen soll. Mit + in der Seitenleiste kommen weitere Orte dazu.",
+    "sharemode.target": "Hierhin führt der Link",
     "linkb.tab.plain": "Einfacher Einladungslink",
     "linkb.title": "Link erstellen · {n} von {of}: {step}",
     "linkb.step.arrive": "Beim Ankommen",
