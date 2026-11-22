@@ -42,6 +42,11 @@ import certificate16 from './serenity/16x16/certificate.png';
 import copy16 from './serenity/16x16/edit-copy.png';
 import emoji16 from './serenity/16x16/emoji.png';
 import export16 from './serenity/16x16/file-export.png';
+// Drawn for Weave in the same style (share mode's target and check), not from SerenityOS.
+import shareTarget16 from './serenity/16x16/share-target.png';
+import shareTarget32 from './serenity/32x32/share-target.png';
+import shareCheck16 from './serenity/16x16/share-check.png';
+import shareCheck32 from './serenity/32x32/share-check.png';
 import text16 from './serenity/16x16/filetype-text.png';
 import find16 from './serenity/16x16/find.png';
 import home16 from './serenity/16x16/go-home.png';
@@ -87,6 +92,8 @@ const BITMAPS = {
   copy: [copy16],
   mapPin: [pin16],
   share: [export16],
+  target: [shareTarget16, shareTarget32],
+  check: [shareCheck16, shareCheck32],
   star: [priority16],
   externalLink: [internet16],
   emoji: [emoji16],

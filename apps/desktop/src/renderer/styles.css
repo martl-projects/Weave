@@ -662,15 +662,16 @@ menu[role='tablist'] { margin-bottom: 0; }
 .app-window.sharing .panes { outline: 2px solid var(--navy, #000080); outline-offset: -2px; }
 .tree-with-extra { position: relative; }
 .share-add { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); min-width: 0; min-height: 0; width: 20px; height: 18px; padding: 0; line-height: 1; font-weight: bold; }
-.share-add.on { width: 16px; height: 16px; right: 4px; border: none; border-radius: 50%; background: var(--navy, #000080); color: #fff; font-size: 11px; box-shadow: none; }
+.share-add.on { right: 3px; width: 18px; border: none; background: none; box-shadow: none; }
 .share-add .share-no, .share-add.on:hover .share-yes { display: none; }
+/* Share mode's marks (ShareMark): the icons' bitmaps here; at the far right of a row in the tree. */
+.share-mark { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; vertical-align: middle; }
+.share-marks { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; pointer-events: none; }
+:is(.share-target, .share-path, .share-included) { position: relative; }
+.share-target > .tree-link { padding-right: 42px; }
+:is(.share-path, .share-included) > .tree-link { padding-right: 24px; }
 .share-add.on:hover .share-no { display: inline; }
 /* Where the link leads: a target (ring and dot), not a check, which marks the places it lets them into. */
-.share-goal { margin-left: auto; flex: none; width: 16px; height: 16px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--navy, #000080); background: radial-gradient(circle, var(--navy, #000080) 0 3px, transparent 3.5px); }
-.tree-with-extra .share-goal { margin-right: 22px; }
-.tree-link.on .share-goal { border-color: #fff; background: radial-gradient(circle, #fff 0 3px, transparent 3.5px); }
-.share-mark { margin-left: auto; display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 50%; background: var(--navy, #000080); color: #fff; font-size: 11px; font-weight: bold; line-height: 1; }
-.tree-with-extra .share-mark { margin-right: 22px; }
 /* Every place the link adds them to has the same frame: where it leads, the space above it, and what the + added. */
 :is(.share-target, .share-path, .share-included) > .tree-link { box-shadow: inset 0 0 0 2px var(--navy, #000080); }
 /* Up the hierarchy from where it leads: the space a board or Live is in. */
@@ -1178,5 +1179,3 @@ button.session-title:hover { text-decoration: underline; }
 html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
 .lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1; opacity: 0.45; transition: opacity 0.2s; }
 .lens-full-exit:hover, .lens-full-exit:focus-visible { opacity: 1; }
-/* The check on the open place (dark behind it): light, so it still shows. */
-.tree-link.on .share-mark { background: #fff; color: var(--navy, #000080); }

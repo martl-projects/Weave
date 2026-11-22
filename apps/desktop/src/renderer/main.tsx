@@ -8,7 +8,7 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { mayShare, ShareAdd, ShareBar, startShare, stopShare, useShare } from './share.tsx';
+import { mayShare, ShareAdd, ShareBar, ShareMark, startShare, stopShare, useShare } from './share.tsx';
 import { joinLinkOf, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
 import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
@@ -58,8 +58,8 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   const { t } = useTexts();
-  // Share mode (share.tsx): where the link leads has a target, the places above it a check (it lets them in there), and so do
-  // the places the + added.
+  // Share mode (share.tsx): where the link leads has a target and a check, the places above it a check (it lets them in there),
+  // and so do the places the + added (their + turned check).
   const classes = [extra ? 'tree-with-extra' : '', mark ? `share-${mark}` : ''].filter(Boolean).join(' ');
   return (
     <li style={{ paddingLeft: depth * 14 }} className={classes || undefined}>
@@ -67,12 +67,7 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
-        {mark === 'target' && <span className="share-goal" title={t('sharemode.target')} aria-label={t('sharemode.target')} />}
-        {mark === 'path' && (
-          <span className="share-mark" title={t('sharemode.joins')} aria-label={t('sharemode.joins')}>
-            ✓
-          </span>
-        )}
+
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
             {!!count && <span className="badge">{count}</span>}
@@ -80,6 +75,12 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
           </span>
         )}
       </a>
+      {(mark === 'target' || mark === 'path') && (
+        <span className="share-marks">
+          {mark === 'target' && <ShareMark kind="target" title={t('sharemode.target')} />}
+          <ShareMark kind="check" title={t('sharemode.joins')} />
+        </span>
+      )}
       {extra}
     </li>
   );

@@ -95,7 +95,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
     <div className="share-bar" role="region" aria-label={t('sharemode.title')}>
       <div className="share-where">
         <span className="share-label">
-          <Icon name="share" /> {t('sharemode.opens')}
+          <ShareMark kind="target" /> {t('sharemode.opens')}
         </span>
         {notYours ? (
           <span className="share-crumbs muted">{t('sharemode.not.yours', { place: notYours.name })}</span>
@@ -122,7 +122,11 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
       </div>
       {/* Every place it adds them to: the one it opens (its own, it stays), then what the + added (× takes it out). */}
       <div className="share-also">
-        {(space || also.length > 0) && <span className="share-label">{t('sharemode.also')}</span>}
+        {(space || also.length > 0) && (
+          <span className="share-label">
+            <ShareMark kind="check" /> {t('sharemode.also')}
+          </span>
+        )}
         {space && <span className="share-chip">{named(space)}</span>}
         {also.map((s) => (
           <span className="share-chip" key={s.id}>
@@ -154,6 +158,18 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
   );
 }
 
+/**
+ * Share mode's marks: the target where the link leads, the check wherever it adds them. The icons' bitmaps; the Clean look
+ * draws them as round marks in its accent color instead (clean.css).
+ */
+export function ShareMark({ kind, title }: { kind: 'target' | 'check'; title?: string }) {
+  return (
+    <span className={`share-mark share-mark-${kind}`} title={title} aria-label={title}>
+      <Icon name={kind} />
+    </span>
+  );
+}
+
 /** The + beside a place in the tree while sharing. */
 export function ShareAdd({ space, route }: { space: SpaceInfo; route: string[] }) {
   const { t } = useTexts();
@@ -169,7 +185,9 @@ export function ShareAdd({ space, route }: { space: SpaceInfo; route: string[] }
     >
       {added ? (
         <>
-          <span className="share-yes">✓</span>
+          <span className="share-yes">
+            <ShareMark kind="check" />
+          </span>
           <span className="share-no">×</span>
         </>
       ) : (
