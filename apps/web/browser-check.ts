@@ -112,9 +112,14 @@ try {
   await run(`document.querySelector('#first-create').click()`);
   await until('the name', () => run<boolean>(`!!document.querySelector('#welcome-name')`));
   await run(`(() => { const input = document.querySelector('#welcome-name'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Webby'); input.dispatchEvent(new Event('input', { bubbles: true })); ${clickDefault}; })()`);
-  await until('the words', () => run<boolean>(`!!document.querySelector('#wrote')`));
+  // With a passkey a newcomer comes straight in; the words wait under Keys & devices until written down.
+  await appUp();
   if (await run<boolean>(`!!document.querySelector('.notice.alarm')`)) throw new Error('no passkey was made');
-  passed('a passkey with PRF makes an account');
+  passed('a passkey with PRF makes an account and opens it at once');
+  await run(`location.hash = '#/keys'`);
+  await until('the words waiting', () => run<boolean>(`!!document.querySelector('#later-words button.default')`));
+  await run(`document.querySelector('#later-words button.default').click()`);
+  await until('the words', () => run<boolean>(`!!document.querySelector('#later-wrote')`));
   // All 24 words to the clipboard at once, numbered: the way a restore takes them back.
   await run(`navigator.clipboard.writeText = async (text) => void (window.__copied = text)`);
   await run(`document.querySelector('#copy-words').click()`);
@@ -129,10 +134,13 @@ try {
     await until('a contact Weave ships with', async () => (await call<{ following?: boolean }>('profile', did)).result?.following);
   }
   passed('it knows the contacts Weave ships with');
-  await run(`document.querySelector('#wrote').click()`);
+  await run(`document.querySelector('#later-wrote').click()`);
   await sleep(100);
-  await run(clickDefault);
-  await appUp();
+  await run(`document.querySelector('#later-words .buttons button:not(#copy-words)').click()`);
+  await until('the words forgotten', () => run<boolean>(`!document.querySelector('#later-words')`));
+  if (await run<string | undefined>(`window.weave.web.laterWords()`)) throw new Error('the browser still keeps the words');
+  passed('written down, the browser forgets the words');
+  await run(`location.hash = '#/'`);
 
   const { link } = await run<{ link: string }>(`fetch('/dev/invite').then((r) => r.json())`);
   // What "Open link" shows before joining.
