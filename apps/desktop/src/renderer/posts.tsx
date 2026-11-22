@@ -70,8 +70,14 @@ export const SORTS = [
   { value: 'top', icon: 'trophy' as const },
 ];
 
-/** Remembers a sort choice per list, in this browser only. */
-function useSort(key: string, fallback?: string): [string | undefined, (s: string) => void] {
+/** Which list a sort choice belongs to. */
+export const sortKey = (query: PostsQuery) => `${query.space ?? 'home'}/${query.board ?? ''}${query.saved ? '/saved' : ''}`;
+
+/**
+ * Remembers a sort choice per list, in this browser only. The list and a phone's menu (SpaceBar) both pick it, so a
+ * choice in one shows in the other.
+ */
+export function useSort(key: string, fallback?: string): [string | undefined, (s: string) => void] {
   const read = () => {
     try {
       return localStorage.getItem(`weave.sort.${key}`) ?? fallback;
@@ -80,6 +86,12 @@ function useSort(key: string, fallback?: string): [string | undefined, (s: strin
     }
   };
   const [sort, setSort] = useState(read);
+  useEffect(() => {
+    setSort(read());
+    const changed = (event: Event) => (event as CustomEvent<string>).detail === key && setSort(read());
+    addEventListener('weave-sort', changed);
+    return () => removeEventListener('weave-sort', changed);
+  }, [key, fallback]);
   return [
     sort,
     (s: string) => {
@@ -87,8 +99,39 @@ function useSort(key: string, fallback?: string): [string | undefined, (s: strin
       try {
         localStorage.setItem(`weave.sort.${key}`, s);
       } catch {}
+      dispatchEvent(new CustomEvent('weave-sort', { detail: key }));
     },
   ];
+}
+
+/** The sorts as buttons side by side (a phone's menu), the chosen one pressed. */
+export function SortButtons({ query, board }: { query: PostsQuery; board?: BoardInfo }) {
+  const { t } = useTexts();
+  const [sort, setSort] = useSort(sortKey(query), board?.sort);
+  return (
+    <>
+      {SORTS.map((s) => (
+        <button key={s.value} className={(sort ?? 'hot') === s.value ? 'chosen' : ''} aria-pressed={(sort ?? 'hot') === s.value} onClick={() => setSort(s.value)}>
+          <Icon name={s.icon} /> {t(`sort.${s.value}`)}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** Following a board: its posts on your Home, and notices of new ones. */
+export function FollowButton({ space, board }: { space: string; board: BoardInfo }) {
+  const { t } = useTexts();
+  if (board.following === undefined) return null;
+  return (
+    <button
+      className={board.following ? 'chosen' : ''}
+      title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
+      onClick={() => attempt(() => api('followBoard', { project: space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
+    >
+      {t(board.following ? 'board.following' : 'board.follow')}
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------- votes and actions
@@ -294,24 +337,17 @@ export function PostList({
   above?: ReactNode;
 }) {
   const { t } = useTexts();
-  const [sort, setSort] = useSort(`${query.space ?? 'home'}/${query.board ?? ''}${query.saved ? '/saved' : ''}`, board?.sort);
+  const [sort, setSort] = useSort(sortKey(query), board?.sort);
   const { data: posts } = useApi(() => api<PostInfo[]>('posts', { ...query, sort }), [query, sort]);
   const curate = useCurate(query.space, board, canCurate);
   return (
     <section className="pane-main">
-      <header className="pane-head">
+      {/* In a place on a phone, these are in its bar's menu (SpaceBar). */}
+      <header className={`pane-head${query.space ? ' not-mobile' : ''}`}>
         <b>{title}</b>
         <span className="pane-tools">
           {query.space && <NoticeSwitch space={query.space} />}
-          {board?.following !== undefined && query.space && (
-            <button
-              className={board.following ? 'chosen' : ''}
-              title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
-              onClick={() => attempt(() => api('followBoard', { project: query.space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
-            >
-              {t(board.following ? 'board.following' : 'board.follow')}
-            </button>
-          )}
+          {board && query.space && <FollowButton space={query.space} board={board} />}
           {toolbar}
           <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label={t('posts.sort')}>
             {SORTS.map((s) => (

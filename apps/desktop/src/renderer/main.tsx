@@ -25,7 +25,7 @@ import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useSeenTick, type AppState, type Mode, type Skin } from './lib.ts';
-import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
+import { boardIcon, FollowButton, postHref, PostList, PostView, spaceHref, spaceLabel, SortButtons, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
 import { backFrom, rememberOutside, useBarsFolded, useIsPhone, useSwipeBack } from './phonechrome.ts';
@@ -319,10 +319,11 @@ type Bars = { folded: boolean; unfold(): void };
 /**
  * On a phone, the head of a place (a project, group, community or direct chat), and the only bar there: back, the
  * place's icon, its boards as chips (those with something new first, then Live when it has websites), and a menu
- * with the rest (its page, services, invite, notifications…), which a tap on the icon opens too. Folded away while
- * reading on, it leaves the place's icon alone; a tap on it, or pulling the page down, brings it back.
+ * with the rest, which a tap on the icon opens too: a popover in sections (all its boards, its services, sharing it,
+ * how the list is sorted). Folded away while reading on, it leaves the place's icon alone; a tap on it, or pulling the
+ * page down, brings it back.
  */
-function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo }: { space?: SpaceInfo; chat?: ChatInfo; route: string[]; boards: BoardInfo[]; bars: Bars; open(d: Dialog): void; onInviteTo?(): void }) {
+function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting }: { space?: SpaceInfo; chat?: ChatInfo; route: string[]; boards: BoardInfo[]; bars: Bars; open(d: Dialog): void; onInviteTo?(): void; sorting?: ReactNode }) {
   const { t } = useTexts();
   useSeenTick(); // unread channels live in localStorage
   const [menu, setMenu] = useState(false);
@@ -356,6 +357,7 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo }: { spac
       .sort((x, y) => Number(y.fresh) - Number(x.fresh) || (y.c.name === 'general' ? 1 : 0) - (x.c.name === 'general' ? 1 : 0))
       .map(({ c, fresh }) => ({ href: c.name === 'general' ? base : `${base}/c/${c.name}`, icon: 'hash', label: c.name, on: here === c.name, fresh: fresh && here !== c.name }));
   }
+  const boardItems = chips;
   if (chips.length < 2) chips = [];
 
   if (bars.folded && !menu)
@@ -365,32 +367,54 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo }: { spac
       </button>
     );
 
-  type Item = { icon: IconName; label: string; go: string | (() => void) };
-  const items: Item[] = chat
-    ? [{ icon: 'user', label: t('chat.hub'), go: `#/space/${encodeURIComponent(chat.peer.did)}` }, ...(onInviteTo ? [{ icon: 'userPlus' as IconName, label: t('chat.invite.to'), go: onInviteTo }] : [])]
+  type Item = { icon: IconName; label: string; go: string | (() => void); on?: boolean; count?: number };
+  const page = (path: string) => view === path;
+  const services: Item[] = chat
+    ? [{ icon: 'user', label: t('chat.hub'), go: `#/space/${encodeURIComponent(chat.peer.did)}` }]
     : project
       ? [
-          { icon: 'notes', label: t('space.page'), go: `${base}/page` },
-          { icon: 'pencil', label: t('word.post'), go: () => open({ kind: 'submit', space: id }) },
-          { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
-          { icon: 'store', label: t('nav.available'), go: `${base}/available` },
-          { icon: 'zap', label: t('nav.services'), go: `${base}/services` },
-          { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
-          ...(!bridge.web ? [{ icon: 'clock' as IconName, label: t('nav.routines'), go: `${base}/routines` }] : []),
-          { icon: 'gear', label: t('nav.settings'), go: `${base}/settings` },
+          { icon: 'notes', label: t('space.page'), go: `${base}/page`, on: page('page') },
+          { icon: 'store', label: t('nav.available'), go: `${base}/available`, on: page('available') },
+          { icon: 'zap', label: t('nav.services'), go: `${base}/services`, on: page('services') },
+          { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
+          ...(!bridge.web ? [{ icon: 'clock' as IconName, label: t('nav.routines'), go: `${base}/routines`, on: page('routines') }] : []),
+          { icon: 'gear', label: t('nav.settings'), go: `${base}/settings`, on: page('settings') },
         ]
       : space?.kind === 'community'
         ? [
-            { icon: 'pencil', label: t('word.post'), go: () => open({ kind: 'submit', space: id }) },
-            { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
-            { icon: 'info', label: t('nav.about'), go: `${base}/about` },
-            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
+            { icon: 'info', label: t('nav.about'), go: `${base}/about`, on: page('about') },
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
           ]
         : [
-            { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
-            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
-            { icon: 'gear', label: t('nav.settings'), go: `${base}/settings` },
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
+            { icon: 'gear', label: t('nav.settings'), go: `${base}/settings`, on: page('settings') },
           ];
+  const share: Item[] = chat
+    ? onInviteTo
+      ? [{ icon: 'userPlus', label: t('chat.invite.to'), go: onInviteTo }]
+      : []
+    : [
+        ...(project || space?.kind === 'community' ? [{ icon: 'pencil' as IconName, label: t('word.post'), go: () => open({ kind: 'submit', space: id }) }] : []),
+        { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
+      ];
+  const boardsList: Item[] = boardItems.map((c) => ({ icon: c.icon, label: c.label, go: c.href, on: c.on, count: c.count }));
+  const item = (it: Item) =>
+    typeof it.go === 'string' ? (
+      <a key={it.label} className={`space-menu-item${it.on ? ' on' : ''}`} href={it.go} onClick={() => setMenu(false)}>
+        <Icon name={it.icon} /> <span>{it.label}</span>
+        {!!it.count && <span className="badge">{it.count}</span>}
+      </a>
+    ) : (
+      <button key={it.label} className="space-menu-item" onClick={() => (setMenu(false), (it.go as () => void)())}>
+        <Icon name={it.icon} /> <span>{it.label}</span>
+      </button>
+    );
+  const section = (title: string, body: ReactNode, className = 'space-menu-items') => (
+    <section className="space-menu-section">
+      <h4>{title}</h4>
+      <div className={className}>{body}</div>
+    </section>
+  );
 
   return (
     <header className={`space-bar mobile-only${menu ? ' open' : ''}`}>
@@ -417,22 +441,21 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo }: { spac
         </button>
       </div>
       {menu && (
-        <div className="space-menu">
-          <div className="space-menu-items">
-            {items.map((item) =>
-              typeof item.go === 'string' ? (
-                <a key={item.label} className="space-menu-item" href={item.go}>
-                  <Icon name={item.icon} /> {item.label}
-                </a>
-              ) : (
-                <button key={item.label} className="space-menu-item" onClick={item.go}>
-                  <Icon name={item.icon} /> {item.label}
-                </button>
-              ),
+        <>
+          <div className="space-menu-scrim" onClick={() => setMenu(false)} />
+          <div className="space-menu" role="menu">
+            {boardsList.length > 1 && section(t(project ? 'space.menu.boards' : 'space.menu.channels'), boardsList.map(item))}
+            {services.length > 0 && section(t('space.menu.services'), services.map(item))}
+            {section(
+              t('space.menu.share'),
+              <>
+                {share.map(item)}
+                <span className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</span>
+              </>,
             )}
+            {sorting && section(t('space.menu.sort'), sorting, 'space-menu-tools')}
           </div>
-          <div className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</div>
-        </div>
+        </>
       )}
     </header>
   );
@@ -560,6 +583,16 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
   }
   // On a phone, posting to a board is a button of its own, low on the right, and only in boards.
   const board = view === 'b' && arg && !postId && !(lensBoard?.lens && lensOn) ? boards?.find((b) => b.name === arg) : undefined;
+  // How a list of posts is sorted (and following it, its lens): on a phone in the bar's menu, not over the list.
+  const sorting = board ? (
+    <>
+      <SortButtons query={{ space: space.id, board: board.name }} board={board} />
+      <FollowButton space={space.id} board={board} />
+      <LensSwitch board={board} on={lensOn} choose={chooseLens} />
+    </>
+  ) : space.kind === 'community' && !view ? (
+    <SortButtons query={{ space: space.id }} />
+  ) : undefined;
   const fab = board && (
     <button className="fab mobile-only" onClick={() => open({ kind: 'submit', space: space.id, board: board.name })}>
       <Icon name="pencil" /> {t(board.type === 'issues' ? 'board.open.issue' : board.type === 'proposals' ? 'board.propose' : 'board.post')}
@@ -569,7 +602,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
   return (
     <>
       <div className="center">
-        <SpaceBar space={space} route={route} boards={boards ?? []} bars={bars} open={open} />
+        <SpaceBar space={space} route={route} boards={boards ?? []} bars={bars} open={open} sorting={sorting} />
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings/people`}>
             <Icon name="inbox" /> {t('space.waiting', { name: mine[0].name ?? t('word.someone'), group: mine[0].group.name, more: mine.length - 1 })}
