@@ -478,9 +478,9 @@
 :root[data-skin='clean'] .app-window.sharing .panes { outline-color: var(--cl-accent); }
 :root[data-skin='clean'] :is(.share-add.on, .pane-head .pane-share.on) { background: var(--cl-accent); border-color: var(--cl-accent); color: #fff; }
 :root[data-skin='clean'] .share-mark { background: var(--cl-accent); }
-:root[data-skin='clean'] .share-target > .tree-link { box-shadow: inset 0 0 0 1.5px var(--cl-accent); }
-:root[data-skin='clean'] .share-included > .tree-link { background: var(--cl-accent-soft, color-mix(in srgb, var(--cl-accent) 18%, transparent)); }
-:root[data-skin='clean'] .share-path > .tree-link { box-shadow: inset 3px 0 0 var(--cl-accent); background: color-mix(in srgb, var(--cl-accent) 10%, transparent); }
+:root[data-skin='clean'] :is(.share-target, .share-path, .share-included) > .tree-link { box-shadow: inset 0 0 0 1.5px var(--cl-accent); }
+:root[data-skin='clean'] .share-included > .tree-link { background: color-mix(in srgb, var(--cl-accent) 10%, transparent); }
+:root[data-skin='clean'] .share-path > .tree-link { background: color-mix(in srgb, var(--cl-accent) 10%, transparent); }
 :root[data-skin='clean'] .share-add.on { background: var(--cl-accent); }
 :root[data-skin='clean'] .share-goal { border-color: var(--cl-accent); background: radial-gradient(circle, var(--cl-accent) 0 3px, transparent 3.5px); }
 /* The + and its check are round marks, not the look's buttons; the target keeps the accent on the open row too. */
