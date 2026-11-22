@@ -367,6 +367,10 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .post-full-main { display: flex; gap: 10px; }
 .post-full h2.post-title { color: #000; font-size: 17px; }
 .post-full .md { font-size: 13px; margin: 6px 0; }
+/* Long links and words break inside the text instead of widening the page. */
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md pre { max-width: 100%; }
+.post-full-main > * { min-width: 0; }
 .work { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; background: var(--face); font-size: 12px; }
 .work .vote-buttons { display: flex; gap: 4px; }
 .work > .grow { min-width: 260px; }
