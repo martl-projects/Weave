@@ -148,7 +148,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
           target={target}
           also={also.map((s) => s.id)}
           title={title}
-          opens={crumbs.join(' › ')}
+          opens={crumbs}
           places={[...(space ? [space] : []), ...also]}
           onClose={(made) => (setFinishing(false), made && stopShare())}
         />

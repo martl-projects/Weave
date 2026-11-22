@@ -5,7 +5,8 @@ import { bridge } from './bridge.ts';
 import { Icon, type IconName } from './icons.tsx';
 import { api, blobUrl, bump, navigate, useApi } from './lib.ts';
 import { copy, startChat } from './posts.tsx';
-import { ask, attempt, AsyncButton, BlobImage, Info, Modal, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, BlobImage, Info, Modal, ProjectIcon, toast } from './ui.tsx';
+import { GroupIcon } from './avatar-editor.tsx';
 import { ShareMark } from './share.tsx';
 import { useTexts } from './texts.tsx';
 import { playSoon } from './websites.tsx';
@@ -59,9 +60,10 @@ async function cardPng(ref: string): Promise<string> {
  * The rest of a Weave link, once share mode (share.tsx) said where it leads, in three steps with big titles: who gets it
  * (where it opens, what they become part of, a message), access (how often, how long, whether you confirm each), and its
  * preview, edited in place (click a line to change it, the picture to choose one from the places it leads to). Then the
- * link. `opens`: where it leads, as the bar names it; `places`: the spaces it lets them into. `onClose(made)`.
+ * link. `opens`: where it leads, as the bar names it (the space first, unless it's you); `places`: the spaces it lets them
+ * into, the one it opens first. `onClose(made)`.
  */
-export function LinkFinish({ target, also, title, opens, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string; places: SpaceInfo[]; onClose(made: boolean): void }) {
+export function LinkFinish({ target, also, title, opens, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string[]; places: SpaceInfo[]; onClose(made: boolean): void }) {
   const { t } = useTexts();
   const toMe = target.kind === 'me';
   const [step, setStep] = useState(1);
@@ -81,7 +83,6 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
   const { data: me } = useApi(() => api<{ name?: string }>('profile'), []);
   const line = toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title });
   const shown = picture ?? undefined;
-  const named = (s: SpaceInfo) => `${{ project: 'p/', community: 'r/', group: 'g/' }[s.kind as string] ?? ''}${s.name}`;
 
   const create = async () => {
     const image = noPreview ? undefined : shown ? { png: await cardPng(shown) } : 'none';
@@ -129,19 +130,33 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
           <p className="lf-sub muted">{t('linkb.step.n', { n: step, of: STEPS })}</p>
           {step === 1 && (
             <>
+              {/* The message first; then who gets the link, as a little tree: where it opens, what they join, that you're friends. */}
+              <div className="field-row-stacked">
+                <span className="lf-label">
+                  <label htmlFor="lb-welcome">{t('linkb.message')}</label>
+                  <Info>{t('linkb.message.help')}</Info>
+                </span>
+                <input id="lb-welcome" maxLength={300} placeholder={t('linkb.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
+              </div>
               <p className="lf-section">{t('linkb.who.gets')}</p>
-              <ul className="lf-list">
+              <ul className="lf-tree">
                 <li>
-                  <ShareMark kind="target" /> {t('linkb.opens')} {opens}
+                  <ShareMark kind="target" /> {t('linkb.opens')}
+                  <div className="lf-tree-items">
+                    <span>
+                      {toMe ? <b>{opens[0]}</b> : <PlaceName space={places[0]} />}
+                      {opens.slice(1).map((c) => ` › ${c}`)}
+                    </span>
+                  </div>
                 </li>
                 {places.length > 0 && (
                   <li>
                     <ShareMark kind="check" /> {t('linkb.joins')}
-                    <ul>
+                    <div className="lf-tree-items">
                       {places.map((s) => (
-                        <li key={s.id}>{named(s)}</li>
+                        <PlaceName key={s.id} space={s} />
                       ))}
-                    </ul>
+                    </div>
                   </li>
                 )}
                 <li>
@@ -154,13 +169,6 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
                   <label htmlFor="lb-play">{t('linkb.start')}</label>
                 </div>
               )}
-              <div className="field-row-stacked">
-                <span className="lf-label">
-                  <label htmlFor="lb-welcome">{t('linkb.message')}</label>
-                  <Info>{t('linkb.message.help')}</Info>
-                </span>
-                <input id="lb-welcome" maxLength={300} placeholder={t('linkb.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
-              </div>
             </>
           )}
 
@@ -232,6 +240,19 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
         </div>
       )}
     </Modal>
+  );
+}
+
+/** A place as the link's steps name it: its icon, then p/, g/ or r/ and its name, bold. */
+function PlaceName({ space }: { space: SpaceInfo }) {
+  return (
+    <span className="lf-place">
+      {space.kind === 'group' ? <GroupIcon space={space} size={16} /> : <ProjectIcon id={space.id} icon={space.icon} size={16} />}
+      <b>
+        {{ project: 'p/', community: 'r/', group: 'g/' }[space.kind as string] ?? ''}
+        {space.name}
+      </b>
+    </span>
   );
 }
 

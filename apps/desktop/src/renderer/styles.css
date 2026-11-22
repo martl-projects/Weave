@@ -665,14 +665,20 @@ menu[role='tablist'] { margin-bottom: 0; }
 /* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
 .link-builder { display: flex; flex-direction: column; min-height: 330px; }
 .form.link-builder > .buttons, :root[data-skin] .form.link-builder > .buttons { margin-top: auto; }
-.lf-section { margin: 0 0 4px; }
 /* Help marks open as a floating note over what follows, not pushing it down. */
 .link-builder .info { position: relative; }
 .link-builder .info > .info-body { position: absolute; left: -8px; top: calc(100% + 6px); z-index: 30; width: 260px; margin: 0; padding: 6px 10px; box-shadow: 2px 2px 6px rgb(0 0 0 / 0.25); font-weight: normal; }
-.lf-list, .lf-list ul { list-style: none; margin: 0 0 12px; padding: 0; }
-.lf-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
-.lf-list ul { flex-basis: 100%; margin: 2px 0 0 22px; }
-.lf-list ul li { margin: 1px 0; }
+/* Who gets the link, as a tree: a line down the left, a branch to each item, the last ending at its branch. */
+.lf-section { margin: 14px 0 2px; }
+.lf-tree { --lf-line: color-mix(in srgb, currentColor 35%, transparent); list-style: none; margin: 0 0 8px 6px; padding: 0; }
+.lf-tree > li { position: relative; padding: 4px 0 4px 18px; }
+.lf-tree > li::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--lf-line); }
+.lf-tree > li:last-child::before { bottom: auto; height: 13px; }
+.lf-tree > li::after { content: ''; position: absolute; left: 0; top: 13px; width: 12px; border-top: 1px solid var(--lf-line); }
+.lf-tree .share-mark { vertical-align: -3px; }
+.lf-tree-items { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 0 22px; }
+.lf-place { display: inline-flex; align-items: center; gap: 5px; }
+.lf-place .sprite, .lf-place .project-icon, .lf-place .group-icon { flex: none; }
 .lf-label { display: flex; align-items: center; gap: 6px; }
 .lf-grid { display: grid; grid-template-columns: max-content minmax(0, 220px); align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 .lf-grid select { width: 100%; }
