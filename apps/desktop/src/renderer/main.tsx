@@ -28,7 +28,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, FollowButton, postHref, PostList, PostView, spaceHref, spaceLabel, SortButtons, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
-import { backFrom, rememberOutside, useBarsFolded, useIsPhone, useSwipeBack } from './phonechrome.ts';
+import { backFrom, rememberOutside, useBarsFolded, useFoldPlay, useIsPhone, useSwipeBack } from './phonechrome.ts';
 import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
@@ -315,8 +315,6 @@ const GENERAL = 'general';
 
 /** The bars on a phone: folded while reading on (phonechrome.ts), and how to bring them back. */
 type Bars = { folded: boolean; unfold(): void };
-/** How long a place's bar takes to fold away (styles.css: space-bar-out). */
-const FOLD_MS = 160;
 
 /**
  * On a phone, the head of a place (a project, group, community or direct chat), and the only bar there: back, the
@@ -363,17 +361,9 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
   if (chips.length < 2) chips = [];
 
   // Folding plays the bar away first, then shows the place's icon (with back beside it); unfolding plays it back in.
-  const [dotShown, setDotShown] = useState(bars.folded);
-  const [moved, setMoved] = useState(false);
-  useEffect(() => {
-    if (bars.folded === dotShown) return;
-    setMoved(true);
-    if (!bars.folded) return setDotShown(false);
-    const later = setTimeout(() => setDotShown(true), FOLD_MS);
-    return () => clearTimeout(later);
-  }, [bars.folded]);
+  const play = useFoldPlay(bars.folded);
 
-  if (dotShown && bars.folded && !menu)
+  if (play.away && !menu)
     return (
       <div className="space-float mobile-only">
         <button className="space-float-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
@@ -439,7 +429,7 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
   );
 
   return (
-    <header className={`space-bar mobile-only${menu ? ' open' : ''}${bars.folded && !menu ? ' folding' : moved ? ' unfolding' : ''}`}>
+    <header className={`space-bar mobile-only${menu ? ' open' : ''}${menu ? '' : play.className}`}>
       <div className="space-bar-row">
         <button className="space-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
           ‹
@@ -969,8 +959,11 @@ function Shell() {
   // On a phone: in a place there's only its own bar (SpaceBar), elsewhere the tabs; both fold while reading on.
   const phone = useIsPhone();
   const inPlace = ['p', 'g', 'r', 'd'].includes(route[0]);
-  const [barsFolded, setBarsFolded] = useBarsFolded(phone, routeKey);
+  // Outside a place they start folded: Home's icon floats at the top (with back beside it elsewhere), and the tabs at the
+  // bottom are only Places; a tap on the icon, or pulling the page down, brings the title back and widens the tabs.
+  const [barsFolded, setBarsFolded] = useBarsFolded(phone, routeKey, !inPlace);
   const bars: Bars = { folded: barsFolded, unfold: () => setBarsFolded(false) };
+  const titlePlay = useFoldPlay(barsFolded);
   useEffect(() => {
     if (!inPlace) rememberOutside(location.hash);
   }, [routeKey]);
@@ -1035,8 +1028,20 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
-      <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+      {phone && !inPlace && titlePlay.away && (
+        <div className="space-float home-float mobile-only">
+          {route.length > 0 && (
+            <button className="space-float-back" onClick={back} title={t('nav.back')} aria-label={t('nav.back')}>
+              ‹
+            </button>
+          )}
+          <button className="space-dot" onClick={() => setBarsFolded(false)} title={t('tabs.show')} aria-label={t('tabs.show')}>
+            <WeaveMark size={40} />
+          </button>
+        </div>
+      )}
+      <div className={`title-bar app-title${phone && !inPlace ? titlePlay.className : ''}`} onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
           {route.length > 0 && (
             <button className="title-back mobile-only" onClick={back} title={t('nav.back')} aria-label={t('nav.back')}>
@@ -1118,7 +1123,7 @@ function Shell() {
           ]}
         />
       </nav>
-      <div className="toolbar" onClick={barsFolded ? () => setBarsFolded(false) : undefined} title={barsFolded ? t('tabs.show') : undefined}>
+      <div className="toolbar">
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
         <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" href="#/places" on={placesOpen} />
         <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0} className="not-mobile" />

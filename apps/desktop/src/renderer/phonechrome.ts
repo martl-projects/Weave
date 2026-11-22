@@ -28,10 +28,13 @@ const typing = () => {
   return !!active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && (active as HTMLInputElement).type !== 'checkbox') || (active as HTMLElement).isContentEditable);
 };
 
-/** Whether the bars are folded away; `again` unfolds them on every new place. */
-export function useBarsFolded(on: boolean, again: string): [boolean, (folded: boolean) => void] {
-  const [folded, setFolded] = useState(false);
-  useEffect(() => setFolded(false), [again, on]);
+/**
+ * Whether the bars are folded away; `again` sets them back to `start` on every new screen: a place opens with its bar,
+ * Home and the lists beside it with their bars folded (a button floating for each).
+ */
+export function useBarsFolded(on: boolean, again: string, start = false): [boolean, (folded: boolean) => void] {
+  const [folded, setFolded] = useState(on && start);
+  useEffect(() => setFolded(on && start), [again, on, start]);
   useEffect(() => {
     if (!on) return;
     let last: { x: number; y: number } | undefined;
@@ -70,6 +73,26 @@ export function useBarsFolded(on: boolean, again: string): [boolean, (folded: bo
     };
   }, [on]);
   return [folded, setFolded];
+}
+
+/** How long a bar takes to fold away (styles.css: space-bar-out). */
+const FOLD_MS = 160;
+
+/**
+ * Folding plays a bar away first (its class: folding), then what stands in for it shows (away); unfolding shows the
+ * bar at once and plays it in (unfolding).
+ */
+export function useFoldPlay(folded: boolean): { away: boolean; className: string } {
+  const [away, setAway] = useState(folded);
+  const [moved, setMoved] = useState(false);
+  useEffect(() => {
+    if (folded === away) return;
+    setMoved(true);
+    if (!folded) return setAway(false);
+    const later = setTimeout(() => setAway(true), FOLD_MS);
+    return () => clearTimeout(later);
+  }, [folded]);
+  return { away: away && folded, className: folded && !away ? ' folding' : moved && !folded ? ' unfolding' : '' };
 }
 
 /** Where back leads out of a place: the list it was opened from (Places, Inbox, People, a hub), else Home. */
