@@ -20,6 +20,23 @@ export function useIsPhone(): boolean {
   return phone;
 }
 
+/**
+ * On an iPhone's home screen the page gets less than the screen: its viewport (100%, 100dvh) stops above the home
+ * indicator, and below it the page's ground shows. There the window takes the screen's height (--app-height).
+ */
+export function fitHomeScreen(): void {
+  if (!(navigator as Navigator & { standalone?: boolean }).standalone) return;
+  const fit = () => {
+    // iOS keeps screen.width and .height as in portrait.
+    const height = matchMedia('(orientation: landscape)').matches ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
+    if (innerHeight < height) document.documentElement.style.setProperty('--app-height', `${height}px`);
+    else document.documentElement.style.removeProperty('--app-height');
+  };
+  fit();
+  addEventListener('resize', fit);
+  addEventListener('orientationchange', fit);
+}
+
 /** How far a finger goes before the bars follow it, in pixels. */
 const STEP = 24;
 

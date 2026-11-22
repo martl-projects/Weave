@@ -28,7 +28,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, FollowButton, postHref, PostList, PostView, spaceHref, spaceLabel, SortButtons, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
-import { backFrom, rememberOutside, useBarsFolded, useFoldPlay, useIsPhone, useSwipeBack } from './phonechrome.ts';
+import { backFrom, fitHomeScreen, rememberOutside, useBarsFolded, useFoldPlay, useIsPhone, useSwipeBack } from './phonechrome.ts';
 import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
@@ -1237,6 +1237,7 @@ function App() {
 
 applySkin(loadSkin());
 applyMode(loadMode());
+fitHomeScreen();
 startNotifications();
 startAppOpens();
 createRoot(document.getElementById('root')!).render(

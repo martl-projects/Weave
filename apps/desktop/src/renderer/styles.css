@@ -858,10 +858,11 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   :root[data-skin] .app-window > .toolbar .tool .icon { width: 22px !important; height: 22px !important; }
   .tool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panes { padding: 0; gap: 0; }
-  /* Edge to edge: the window is the whole screen, under the status bar and the home indicator too (an iPhone's home
-     screen counts 100% short of the bottom edge; the dynamic viewport doesn't), with no frame of its own. */
-  html, body, #root { height: 100dvh; }
-  :root[data-skin] .app-window { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  /* Edge to edge: the window is the whole screen, under the status bar and the home indicator too, with no frame of
+     its own. On an iPhone's home screen the viewport stops short of the bottom edge: there it's the screen's height
+     (--app-height, phonechrome.ts: fitHomeScreen). */
+  html, body, #root { height: var(--app-height, 100dvh); }
+  :root[data-skin] .app-window { bottom: auto; height: var(--app-height, 100dvh); padding: 0; border: 0; border-radius: 0; box-shadow: none; }
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
