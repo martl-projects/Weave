@@ -1224,6 +1224,23 @@ button.session-title:hover { text-decoration: underline; }
   .app-window.bars-folded > .toolbar::before { content: ''; position: absolute; top: 6px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: currentColor; opacity: 0.45; }
 }
 @media (max-width: 700px) {
+  /* Windows 95: the bar is a title bar, the menu a grey window of raised buttons, the chosen one pressed in. */
+  :root[data-skin='win95'] .space-bar { background: linear-gradient(90deg, var(--navy), #1084d0); }
+  :root[data-skin='win95'] .space-bar button:active { background: none; }
+  :root[data-skin='win95'] .space-chip { border-radius: 0; padding: 4px 8px; }
+  :root[data-skin='win95'] .space-chip.on { background: var(--face); color: #000; box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
+  :root[data-skin='win95'] .space-chip .badge { border-radius: 0; }
+  :root[data-skin='win95'] .space-menu-scrim { background: none; }
+  :root[data-skin='win95'] .space-menu { top: 100%; left: 2px; right: 2px; padding: 3px 8px 8px; border-radius: 0; background: var(--face); color: #000; font-family: var(--content-font); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 2px 2px 0 #0006; }
+  :root[data-skin='win95'] .space-menu-section h4 { margin: 8px 0 5px; padding-bottom: 2px; border-bottom: 1px solid #808080; box-shadow: 0 1px #fff; font-size: 12px; letter-spacing: 0; text-transform: none; opacity: 1; }
+  :root[data-skin='win95'] .space-bar .space-menu-item, :root[data-skin='win95'] .space-bar .space-menu-tools button { border-radius: 0; background: var(--face); color: #000; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+  :root[data-skin='win95'] .space-bar .space-menu-item:active, :root[data-skin='win95'] .space-bar .space-menu-tools button:active,
+  :root[data-skin='win95'] .space-bar .space-menu-item.on, :root[data-skin='win95'] .space-bar .space-menu-tools .chosen { background: #d6d6d6; color: #000; font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
+  :root[data-skin='win95'] .space-menu-item .badge { border-radius: 0; }
+  :root[data-skin='win95'] .space-dot { border-radius: 0; background: var(--face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
+  :root[data-skin='win95'] .space-dot :is(.sprite, .project-icon, .avatar, img) { border-radius: 0; }
+  :root[data-skin='win95'] .fab { border-radius: 0; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
+  :root[data-skin='win95'] .fab:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
   :root[data-skin='clean'] .space-bar, :root[data-skin='clean'] .space-dot { background: var(--cl-panel); color: var(--cl-text); }
   :root[data-skin='clean'] .space-bar { border-bottom: 1px solid var(--cl-line); }
   :root[data-skin='clean'] .space-chip.on { background: var(--cl-accent-soft); color: var(--cl-accent); }
