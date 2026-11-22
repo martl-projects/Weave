@@ -315,6 +315,8 @@ const GENERAL = 'general';
 
 /** The bars on a phone: folded while reading on (phonechrome.ts), and how to bring them back. */
 type Bars = { folded: boolean; unfold(): void };
+/** How long a place's bar takes to fold away (styles.css: space-bar-out). */
+const FOLD_MS = 160;
 
 /**
  * On a phone, the head of a place (a project, group, community or direct chat), and the only bar there: back, the
@@ -360,11 +362,27 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
   const boardItems = chips;
   if (chips.length < 2) chips = [];
 
-  if (bars.folded && !menu)
+  // Folding plays the bar away first, then shows the place's icon (with back beside it); unfolding plays it back in.
+  const [dotShown, setDotShown] = useState(bars.folded);
+  const [moved, setMoved] = useState(false);
+  useEffect(() => {
+    if (bars.folded === dotShown) return;
+    setMoved(true);
+    if (!bars.folded) return setDotShown(false);
+    const later = setTimeout(() => setDotShown(true), FOLD_MS);
+    return () => clearTimeout(later);
+  }, [bars.folded]);
+
+  if (dotShown && bars.folded && !menu)
     return (
-      <button className="space-dot mobile-only" onClick={bars.unfold} title={name} aria-label={name}>
-        {icon(30)}
-      </button>
+      <div className="space-float mobile-only">
+        <button className="space-float-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
+          ‹
+        </button>
+        <button className="space-dot" onClick={bars.unfold} title={name} aria-label={name}>
+          {icon(40)}
+        </button>
+      </div>
     );
 
   type Item = { icon: IconName; label: string; go: string | (() => void); on?: boolean; count?: number };
@@ -421,13 +439,13 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
   );
 
   return (
-    <header className={`space-bar mobile-only${menu ? ' open' : ''}`}>
+    <header className={`space-bar mobile-only${menu ? ' open' : ''}${bars.folded && !menu ? ' folding' : moved ? ' unfolding' : ''}`}>
       <div className="space-bar-row">
         <button className="space-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
           ‹
         </button>
         <button className="space-id" onClick={() => setMenu(!menu)} aria-expanded={menu} title={name}>
-          {icon(28)}
+          {icon(32)}
           {(chips.length === 0 || menu) && <b>{name}</b>}
         </button>
         {chips.length > 0 && !menu && (
