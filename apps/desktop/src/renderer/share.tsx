@@ -61,7 +61,9 @@ function targetOf(route: string[], spaces: SpaceInfo[], website: string, postSpa
   return { target: { kind: 'space', space: inSpace.id }, space: inSpace };
 }
 
-const PREFIX: Record<string, string> = { project: 'p/', community: 'r/', group: '' };
+const PREFIX: Record<string, string> = { project: 'p/', community: 'r/', group: 'g/' };
+/** A place as the bar names it: p/Pilzfinder, g/Kletterfreunde, r/Pilze. */
+const named = (s: SpaceInfo) => `${PREFIX[s.kind] ?? ''}${s.name}`;
 
 /** The bar at the bottom while sharing: where the link leads, where else it lets them in, and Next. */
 export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo[] }) {
@@ -84,7 +86,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
     ? []
     : target.kind === 'me'
       ? [t('sharemode.to.me', { name: me?.name ?? '' })]
-      : [`${PREFIX[space!.kind] ?? ''}${space!.name}`, ...(board ? [board.title] : []), ...(target.kind === 'post' ? [post?.title || t('word.post')] : []), ...(site ? [site.name] : [])];
+      : [named(space!), ...(board ? [board.title] : []), ...(target.kind === 'post' ? [post?.title || t('word.post')] : []), ...(site ? [site.name] : [])];
   const title = target?.kind === 'me' ? (me?.name ?? '') : (crumbs[crumbs.length - 1] ?? '');
   // Places in the plan beside the one it opens; the one it opens doesn't count twice.
   const also = share.also.filter((id) => id !== space?.id).map((id) => spaces.find((s) => s.id === id)).filter((s): s is SpaceInfo => !!s && mayShare(s));
@@ -118,22 +120,19 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
           </select>
         )}
       </div>
+      {/* Every place it adds them to: the one it opens (its own, it stays), then what the + added (× takes it out). */}
       <div className="share-also">
-        {also.length ? (
-          <>
-            <span className="share-label">{t('sharemode.also')}</span>
-            {also.map((s) => (
-              <span className="share-chip" key={s.id}>
-                {s.name}
-                <button className="link" aria-label={t('sharemode.also.remove', { place: s.name })} onClick={() => toggleAlso(s.id)}>
-                  ×
-                </button>
-              </span>
-            ))}
-          </>
-        ) : (
-          <span className="small muted">{t('sharemode.hint')}</span>
-        )}
+        {(space || also.length > 0) && <span className="share-label">{t('sharemode.also')}</span>}
+        {space && <span className="share-chip">{named(space)}</span>}
+        {also.map((s) => (
+          <span className="share-chip" key={s.id}>
+            {named(s)}
+            <button className="link" aria-label={t('sharemode.also.remove', { place: s.name })} onClick={() => toggleAlso(s.id)}>
+              ×
+            </button>
+          </span>
+        ))}
+        {!also.length && <span className="small muted">{t('sharemode.hint')}</span>}
       </div>
       <div className="buttons">
         <button onClick={stopShare}>{t('button.cancel')}</button>
@@ -147,7 +146,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
           space={space}
           also={also.map((s) => s.id)}
           title={title}
-          crumbs={[...crumbs, ...also.map((s) => `+ ${s.name}`)]}
+          crumbs={[...crumbs, ...also.map((s) => `+ ${named(s)}`)]}
           onClose={(made) => (setFinishing(false), made && stopShare())}
         />
       )}
@@ -168,7 +167,14 @@ export function ShareAdd({ space, route }: { space: SpaceInfo; route: string[] }
       aria-pressed={added}
       onClick={(e) => (e.preventDefault(), toggleAlso(space.id))}
     >
-      {added ? '✓' : '+'}
+      {added ? (
+        <>
+          <span className="share-yes">✓</span>
+          <span className="share-no">×</span>
+        </>
+      ) : (
+        '+'
+      )}
     </button>
   );
 }

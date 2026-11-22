@@ -58,8 +58,8 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   const { t } = useTexts();
-  // Share mode (share.tsx): where the link leads has a check and the places above it are highlighted (its path); the places it
-  // also lets them into are highlighted too.
+  // Share mode (share.tsx): where the link leads has a target, the places above it a check (it lets them in there), and so do
+  // the places the + added.
   const classes = [extra ? 'tree-with-extra' : '', mark ? `share-${mark}` : ''].filter(Boolean).join(' ');
   return (
     <li style={{ paddingLeft: depth * 14 }} className={classes || undefined}>
@@ -67,8 +67,9 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
-        {mark === 'target' && (
-          <span className="share-mark" title={t('sharemode.target')} aria-label={t('sharemode.target')}>
+        {mark === 'target' && <span className="share-goal" title={t('sharemode.target')} aria-label={t('sharemode.target')} />}
+        {mark === 'path' && (
+          <span className="share-mark" title={t('sharemode.joins')} aria-label={t('sharemode.joins')}>
             ✓
           </span>
         )}
