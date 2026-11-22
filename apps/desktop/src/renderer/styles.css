@@ -1235,6 +1235,10 @@ button.session-title:hover { text-decoration: underline; }
   :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
   .home-float { position: fixed; }
   .app-window.bars-away:not(.phone-place) > .title-bar { display: none; }
+  /* Home's own bar (posting, its sources, the sort) goes and comes back with the title. */
+  .app-window.at-home .pane-main > .pane-head { overflow: hidden; animation: space-bar-in 0.2s ease-out; }
+  .app-window.at-home.bars-folded .pane-main > .pane-head { animation: space-bar-out 0.16s ease-in forwards; }
+  .app-window.at-home.bars-away .pane-main > .pane-head { display: none; }
   .app-window.bars-away:not(.phone-place) > .panes { padding-top: env(safe-area-inset-top); }
   .app-window > .title-bar.folding, .app-window > .title-bar.unfolding { overflow: hidden; }
   .app-window > .title-bar.folding { animation: space-bar-out 0.16s ease-in forwards; }
