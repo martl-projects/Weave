@@ -658,6 +658,34 @@ menu[role='tablist'] { margin-bottom: 0; }
 .link-card { display: grid; gap: 2px; margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent, #3b6cf6); background: var(--surface-2, #0001); border-radius: 4px; font-size: 12px; }
 .link-card-site { opacity: 0.6; font-size: 11px; }
 .link-list { margin-top: 12px; max-height: 220px; overflow: auto; }
+/* The link's steps (LinkFinish): a big title, the step under it; fields in one column of labels, one of controls. */
+.lf-head { margin: 0 0 12px; }
+.lf-head h2 { margin: 0; font-size: 20px; line-height: 1.2; }
+.lf-head p { margin: 2px 0 0; }
+.lf-section { margin: 0 0 4px; font-weight: bold; }
+.lf-list, .lf-list ul { list-style: none; margin: 0 0 12px; padding: 0; }
+.lf-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.lf-list ul { flex-basis: 100%; margin: 2px 0 0 22px; }
+.lf-list ul li { margin: 1px 0; }
+.lf-label { display: flex; align-items: center; gap: 6px; }
+.lf-grid { display: grid; grid-template-columns: max-content minmax(0, 220px); align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.lf-grid select { width: 100%; }
+.lf-card { padding: 0 0 8px; overflow: hidden; }
+.lf-card.off { opacity: 0.4; }
+.lf-card-picture, :root[data-skin] .lf-card-picture { display: grid; place-items: center; width: 100%; min-height: 0; height: 130px; border-radius: 0; padding: 0; margin: 0 0 6px; overflow: hidden; border: none; background: color-mix(in srgb, currentColor 8%, transparent); cursor: pointer; }
+.lf-card-picture img { width: 100%; height: 100%; object-fit: cover; }
+.lf-card .link-card-site { padding: 0 10px; }
+/* The card's lines are the card's text until clicked: no field's frame, a dashed one on hover and while editing (every look). */
+.lf-card .lf-edit, :root[data-skin] .lf-card .lf-edit { display: block; box-sizing: border-box; width: calc(100% - 20px); min-height: 0; margin: 0 10px; padding: 1px 3px; border: 1px dashed transparent; border-radius: 3px; background: none; box-shadow: none; color: inherit; font: inherit; line-height: 1.35; resize: none; outline: none; }
+.lf-card .lf-edit:hover, .lf-card .lf-edit:focus, :root[data-skin] .lf-card .lf-edit:hover, :root[data-skin] .lf-card .lf-edit:focus { border-color: currentColor; }
+/* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
+.link-builder { display: flex; flex-direction: column; min-height: 400px; }
+.link-builder > .buttons { margin-top: auto; }
+.lf-edit-title { font-weight: bold; }
+.lf-pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; max-height: 360px; overflow: auto; }
+.lf-picture, :root[data-skin] .lf-picture { min-width: 0; min-height: 0; aspect-ratio: 1.6; padding: 0; overflow: hidden; }
+.lf-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lf-picture.on { outline: 3px solid var(--navy, #000080); outline-offset: -3px; }
 /* Share mode (share.tsx): a frame around the app, a + beside each place in the tree, and the bar saying what the link does. */
 .app-window.sharing .panes { outline: 2px solid var(--navy, #000080); outline-offset: -2px; }
 .tree-with-extra { position: relative; }

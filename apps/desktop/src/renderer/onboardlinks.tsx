@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, SpaceInfo } from '@weave/node/client';
+import type { LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, PostInfo, SpaceInfo } from '@weave/node/client';
 import { bridge } from './bridge.ts';
 import { Icon, type IconName } from './icons.tsx';
-import { api, bump, navigate, useApi } from './lib.ts';
+import { api, blobUrl, bump, navigate, useApi } from './lib.ts';
 import { copy, startChat } from './posts.tsx';
-import { ask, attempt, AsyncButton, Modal, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, BlobImage, Info, Modal, toast } from './ui.tsx';
+import { ShareMark } from './share.tsx';
 import { useTexts } from './texts.tsx';
 import { playSoon } from './websites.tsx';
 
 /*
  * Weave links (idea bZFDCQNT): one short web.martl.io link that makes a newcomer's account, makes you friends, lets them in
- * and opens what it leads to. Where it leads is chosen in share mode (share.tsx), by going there; then three steps: what
- * happens on arrival, who may use it and how long, and how its card looks where it's shared. Its plan goes sealed to the
+ * and opens what it leads to. Where it leads is chosen in share mode (share.tsx), by going there; then three steps: who
+ * gets it (and a message for them), access (how often, how long, confirmed by you or not), and its preview where it's shared. Its plan goes sealed to the
  * storage node; only the card is open. Below, your links with how often each was used, to take one back.
  *
  * Following one (Open link, a link handed over by the OS, Weave Web's /j/…) asks "Join?" once; a link to where you are
@@ -23,44 +24,77 @@ const STEPS = 3;
 /** Where the card says the link is from: Weave Web's page, where links live. */
 const CARD_SITE = bridge.web ? location.host : new URL('https://web.martl.io').host;
 const USES = [0, 1, 10, 50];
-const DAYS = [7, 30, 365];
+/** How long a link works, in days: half an hour, a day, a week, a month. */
+const EXPIRY = [1 / 48, 1, 7, 30];
+/** What a link card's picture may weigh at the storage node. */
+const MAX_PICTURE = 300 * 1024;
+
+/** A picture (wblob:) as a PNG of at most 300 KB, base64: smaller each try until it fits. */
+async function cardPng(ref: string): Promise<string> {
+  const image = new Image();
+  image.src = await blobUrl(ref);
+  await image.decode();
+  for (let most = 1200; most >= 150; most = Math.round(most * 0.75)) {
+    const scale = Math.min(1, most / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (png && png.size <= MAX_PICTURE) {
+      const bytes = new Uint8Array(await png.arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(text);
+    }
+  }
+  throw new Error("that picture doesn't fit on a link card");
+}
 
 /**
- * The rest of a Weave link, once share mode (share.tsx) said where it leads: what happens on arrival, who may use it and
- * how long, and its card; then the link. `crumbs`: where it leads, as the bar said it. `onClose(made)`: whether a link was made.
+ * The rest of a Weave link, once share mode (share.tsx) said where it leads, in three steps with big titles: who gets it
+ * (where it opens, what they become part of, a message), access (how often, how long, whether you confirm each), and its
+ * preview, edited in place (click a line to change it, the picture to choose one from the places it leads to). Then the
+ * link. `opens`: where it leads, as the bar names it; `places`: the spaces it lets them into. `onClose(made)`.
  */
-export function LinkFinish({ target, space, also, title, crumbs, onClose }: { target: LinkTarget; space?: SpaceInfo; also: string[]; title: string; crumbs: string[]; onClose(made: boolean): void }) {
+export function LinkFinish({ target, also, title, opens, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string; places: SpaceInfo[]; onClose(made: boolean): void }) {
   const { t } = useTexts();
   const toMe = target.kind === 'me';
   const [step, setStep] = useState(1);
-  const [friends, setFriends] = useState(true);
   const [play, setPlay] = useState(true);
-  const [askFirst, setAskFirst] = useState(false);
+  const [confirm, setConfirm] = useState(false);
   const [welcome, setWelcome] = useState('');
   const [uses, setUses] = useState(0);
   const [days, setDays] = useState(30);
-  const [preview, setPreview] = useState(true);
-  const [previewText, setPreviewText] = useState('');
-  const [image, setImage] = useState<'banner' | 'icon' | 'none'>('banner');
+  const [noPreview, setNoPreview] = useState(false);
+  // The card's title and line as written here; until then the ones the node would put (shown, and editable, as they are).
+  const [cardTitle, setCardTitle] = useState<string>();
+  const [cardText, setCardText] = useState<string>();
+  // The card's picture: one chosen (a wblob: reference), none, or (undefined) the first place's banner or icon.
+  const [picture, setPicture] = useState<string | null>();
+  const [picking, setPicking] = useState(false);
   const [made, setMade] = useState<{ link: string; svg: string }>();
   const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks'), []);
   const { data: me } = useApi(() => api<{ name?: string }>('profile'), []);
-  const line = previewText.trim() || (toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title }));
+  const line = toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title });
+  const shown = picture === undefined ? (places[0]?.background ?? places[0]?.icon) : (picture ?? undefined);
+  const named = (s: SpaceInfo) => `${{ project: 'p/', community: 'r/', group: 'g/' }[s.kind as string] ?? ''}${s.name}`;
 
   const create = async () => {
+    const image = noPreview ? undefined : shown ? { png: await cardPng(shown) } : 'none';
     const link = await attempt(() =>
       api<OnboardLinkInfo>('createOnboardLink', {
         target,
         // Weave Web makes links for its own page (and the storage node behind it); the desktop for web.martl.io.
         ...(bridge.web ? { page: location.origin } : {}),
         also,
-        friends: toMe || friends,
+        friends: true,
         play: target.kind === 'website' ? play : false,
-        ask: !toMe && askFirst,
+        ask: !toMe && confirm,
         ...(welcome.trim() ? { welcome: welcome.trim() } : {}),
         ...(uses ? { uses } : {}),
         days,
-        preview: preview ? { ...(previewText.trim() ? { text: previewText.trim() } : {}), image } : false,
+        preview: noPreview ? false : { ...(cardTitle?.trim() ? { title: cardTitle.trim() } : {}), ...(cardText?.trim() ? { text: cardText.trim() } : {}), image },
       }),
     );
     if (!link) return;
@@ -73,12 +107,20 @@ export function LinkFinish({ target, space, also, title, crumbs, onClose }: { ta
     await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
   };
 
-  const stepTitle = [t('linkb.step.arrive'), t('linkb.step.who'), t('linkb.step.card')][step - 1];
+  const heading = (name: string) => (
+    <header className="lf-head">
+      <h2>{t(name)}</h2>
+      <p className="muted">{t('linkb.step.n', { n: step, of: STEPS })}</p>
+    </header>
+  );
   return (
-    <Modal title={made ? t('linkb.made.title') : t('linkb.title', { n: step, of: STEPS, step: stepTitle })} onClose={() => onClose(!!made)}>
+    <Modal title={t('linkb.window')} onClose={() => onClose(!!made)}>
       {made ? (
         <div className="form">
-          <p className="small">{t('linkb.made')}</p>
+          <header className="lf-head">
+            <h2>{t('linkb.made.title')}</h2>
+            <p className="muted">{t('linkb.made')}</p>
+          </header>
           <div className="onboard-made">
             <span className="qr" dangerouslySetInnerHTML={{ __html: made.svg }} />
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
@@ -92,35 +134,39 @@ export function LinkFinish({ target, space, also, title, crumbs, onClose }: { ta
         </div>
       ) : (
         <div className="form link-builder">
-          <ol className="steps-dots" aria-hidden>
-            {Array.from({ length: STEPS }, (_, i) => (
-              <li key={i} className={i + 1 === step ? 'on' : i + 1 < step ? 'done' : ''} />
-            ))}
-          </ol>
-          <p className="link-leads">
-            <Icon name={KIND_ICON[target.kind]} /> {crumbs.join(' › ')}
-          </p>
-
           {step === 1 && (
             <>
-              <div className="field-row">
-                <input type="checkbox" id="lb-friends" checked={toMe || friends} disabled={toMe} onChange={(e) => setFriends(e.target.checked)} />
-                <label htmlFor="lb-friends">{t('linkb.friends')}</label>
-              </div>
+              {heading('linkb.step1')}
+              <p className="lf-section">{t('linkb.who.gets')}</p>
+              <ul className="lf-list">
+                <li>
+                  <ShareMark kind="target" /> {t('linkb.opens')} <b>{opens}</b>
+                </li>
+                {places.length > 0 && (
+                  <li>
+                    <ShareMark kind="check" /> {t('linkb.joins')}
+                    <ul>
+                      {places.map((s) => (
+                        <li key={s.id}>{named(s)}</li>
+                      ))}
+                    </ul>
+                  </li>
+                )}
+                <li>
+                  <ShareMark kind="check" /> {t('linkb.friends.always', { name: me?.name ?? '' })}
+                </li>
+              </ul>
               {target.kind === 'website' && (
                 <div className="field-row">
                   <input type="checkbox" id="lb-play" checked={play} onChange={(e) => setPlay(e.target.checked)} />
                   <label htmlFor="lb-play">{t('linkb.start')}</label>
                 </div>
               )}
-              {!toMe && (
-                <div className="field-row">
-                  <input type="checkbox" id="lb-ask" checked={askFirst} onChange={(e) => setAskFirst(e.target.checked)} />
-                  <label htmlFor="lb-ask">{t('linkb.ask')}</label>
-                </div>
-              )}
               <div className="field-row-stacked">
-                <label htmlFor="lb-welcome">{t('linkb.welcome')}</label>
+                <span className="lf-label">
+                  <label htmlFor="lb-welcome">{t('linkb.message')}</label>
+                  <Info>{t('linkb.message.help')}</Info>
+                </span>
                 <input id="lb-welcome" maxLength={300} placeholder={t('linkb.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
               </div>
             </>
@@ -128,7 +174,8 @@ export function LinkFinish({ target, space, also, title, crumbs, onClose }: { ta
 
           {step === 2 && (
             <>
-              <div className="field-row">
+              {heading('linkb.step2')}
+              <div className="lf-grid">
                 <label htmlFor="lb-uses">{t('linkb.uses')}</label>
                 <select id="lb-uses" value={uses} onChange={(e) => setUses(Number(e.target.value))}>
                   {USES.map((n) => (
@@ -137,56 +184,48 @@ export function LinkFinish({ target, space, also, title, crumbs, onClose }: { ta
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="field-row">
-                <label htmlFor="lb-days">{t('invite.expires.after')}</label>
+                <label htmlFor="lb-days">{t('linkb.expires')}</label>
                 <select id="lb-days" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-                  {DAYS.map((n) => (
+                  {EXPIRY.map((n) => (
                     <option key={n} value={n}>
-                      {t('invite.days', { n })}
+                      {n < 1 ? t('linkb.expiry.30m') : t('linkb.expiry.days', { n })}
                     </option>
                   ))}
                 </select>
               </div>
+              {!toMe && (
+                <div className="field-row">
+                  <input type="checkbox" id="lb-confirm" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
+                  <label htmlFor="lb-confirm">{t('linkb.confirm')}</label>
+                  <Info>{t('linkb.confirm.help')}</Info>
+                </div>
+              )}
               <p className="small muted">{t('linkb.who.note')}</p>
             </>
           )}
 
           {step === 3 && (
             <>
-              <div className="field-row">
-                <input type="checkbox" id="lb-preview" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
-                <label htmlFor="lb-preview">{t('linkb.card.on')}</label>
+              {heading('linkb.step3')}
+              <div className={`link-card lf-card${noPreview ? ' off' : ''}`} aria-label={t('linkb.card.looks')}>
+                <button type="button" className="lf-card-picture" disabled={noPreview} title={t('linkb.card.pick')} onClick={() => setPicking(true)}>
+                  {shown ? <BlobImage src={shown} /> : <span className="muted small">{t('linkb.card.pick')}</span>}
+                </button>
+                <span className="link-card-site">{CARD_SITE}</span>
+                <input className="lf-edit lf-edit-title" disabled={noPreview} maxLength={100} title={t('linkb.card.edit')} aria-label={t('linkb.card.title')} placeholder={title || 'Weave'} value={cardTitle ?? title} onChange={(e) => setCardTitle(e.target.value)} />
+                <textarea className="lf-edit" disabled={noPreview} maxLength={300} rows={2} title={t('linkb.card.edit')} aria-label={t('linkb.card.text')} placeholder={line} value={cardText ?? line} onChange={(e) => setCardText(e.target.value)} />
               </div>
-              {preview && (
-                <>
-                  <div className="field-row-stacked">
-                    <label htmlFor="lb-card-text">{t('linkb.card.text')}</label>
-                    <input id="lb-card-text" maxLength={300} placeholder={line} value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
-                  </div>
-                  {space?.kind === 'project' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-image">{t('linkb.card.image')}</label>
-                      <select id="lb-image" value={image} onChange={(e) => setImage(e.target.value as typeof image)}>
-                        <option value="banner">{t('linkb.image.banner')}</option>
-                        <option value="icon">{t('linkb.image.icon')}</option>
-                        <option value="none">{t('linkb.image.none')}</option>
-                      </select>
-                    </div>
-                  )}
-                  <div className="link-card" aria-label={t('linkb.card.looks')}>
-                    <span className="link-card-site">{CARD_SITE}</span>
-                    <b>{title || 'Weave'}</b>
-                    <span>{line}</span>
-                  </div>
-                  <p className="small muted">{t('linkb.card.open')}</p>
-                </>
-              )}
+              <p className="small muted">{t('linkb.card.open')}</p>
+              <div className="field-row">
+                <input type="checkbox" id="lb-no-preview" checked={noPreview} onChange={(e) => setNoPreview(e.target.checked)} />
+                <label htmlFor="lb-no-preview">{t('linkb.card.none')}</label>
+              </div>
+              {picking && <PicturePicker places={places} chosen={shown} onPick={(ref) => (setPicture(ref), setPicking(false))} onClose={() => setPicking(false)} />}
             </>
           )}
 
           <div className="buttons">
-            {step > 1 ? <button onClick={() => setStep(step - 1)}>{t('linkb.back')}</button> : <button onClick={() => onClose(false)}>{t('linkb.back')}</button>}
+            <button onClick={() => (step > 1 ? setStep(step - 1) : onClose(false))}>{t('linkb.back')}</button>
             {step < STEPS ? (
               <button className="default" onClick={() => setStep(step + 1)}>
                 {t('linkb.next')}
@@ -200,6 +239,31 @@ export function LinkFinish({ target, space, also, title, crumbs, onClose }: { ta
         </div>
       )}
       {!made && <YourLinks links={links} revoke={revoke} />}
+    </Modal>
+  );
+}
+
+/** The pictures in the places a link leads to (their icons and banners, then pictures in their posts), to put on its card. */
+function PicturePicker({ places, chosen, onPick, onClose }: { places: SpaceInfo[]; chosen?: string; onPick(ref: string | null): void; onClose(): void }) {
+  const { t } = useTexts();
+  const { data: pictures } = useApi(async () => {
+    const own = places.flatMap((s) => [s.background, s.icon]).filter((r): r is string => !!r);
+    const posted = (await Promise.all(places.map((s) => api<PostInfo[]>('posts', { space: s.id, sort: 'new' }).catch(() => [] as PostInfo[])))).flat().map((p) => p.image).filter((r): r is string => !!r);
+    return [...new Set([...own, ...posted])].slice(0, 40);
+  }, [places.map((s) => s.id).join()]);
+  return (
+    <Modal title={t('linkb.card.picker')} onClose={onClose}>
+      <div className="lf-pictures">
+        <button type="button" className={`lf-picture lf-picture-none${chosen ? '' : ' on'}`} onClick={() => onPick(null)}>
+          {t('linkb.card.nopicture')}
+        </button>
+        {(pictures ?? []).map((ref) => (
+          <button type="button" key={ref} className={`lf-picture${ref === chosen ? ' on' : ''}`} onClick={() => onPick(ref)}>
+            <BlobImage src={ref} />
+          </button>
+        ))}
+      </div>
+      {pictures && !pictures.length && <p className="small muted">{t('linkb.card.pictures.none')}</p>}
     </Modal>
   );
 }

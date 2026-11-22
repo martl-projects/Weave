@@ -146,10 +146,10 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
       {finishing && target && (
         <LinkFinish
           target={target}
-          space={space}
           also={also.map((s) => s.id)}
           title={title}
-          crumbs={[...crumbs, ...also.map((s) => `+ ${named(s)}`)]}
+          opens={crumbs.join(' › ')}
+          places={[...(space ? [space] : []), ...also]}
           onClose={(made) => (setFinishing(false), made && stopShare())}
         />
       )}
