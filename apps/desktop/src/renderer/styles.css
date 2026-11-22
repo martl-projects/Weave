@@ -660,8 +660,7 @@ menu[role='tablist'] { margin-bottom: 0; }
 .link-list { margin-top: 12px; max-height: 220px; overflow: auto; }
 /* The link's steps (LinkFinish): a big title, the step under it; fields in one column of labels, one of controls. */
 /* One title, the step's, big in the window's title bar; which step it is just under it. */
-.modal:has(.link-builder) .title-bar-text, .modal:has(.onboard-made) .title-bar-text { font-size: 17px; font-weight: bold; }
-.lf-sub { margin: 0 0 12px; }
+.modal:has(.link-builder, .onboard-made) .title-bar-text, :root[data-skin] .modal:has(.link-builder, .onboard-made) .title-bar-text { font-size: 17px; font-weight: bold; }
 /* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
 .link-builder { display: flex; flex-direction: column; min-height: 330px; }
 .form.link-builder > .buttons, :root[data-skin] .form.link-builder > .buttons { margin-top: auto; }
@@ -677,7 +676,13 @@ menu[role='tablist'] { margin-bottom: 0; }
 .lf-tree > li::after { content: ''; position: absolute; left: 0; top: 13px; width: 12px; border-top: 1px solid var(--lf-line); }
 .lf-tree .share-mark { vertical-align: -3px; }
 .lf-tree-items { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 0 22px; }
-.lf-place { display: inline-flex; align-items: center; gap: 5px; }
+.lf-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.lf-place { display: inline-flex; align-items: center; gap: 5px; line-height: 16px; }
+.lf-sep { opacity: 0.6; }
+/* A dialog's line under its title (Modal's subtitle): smaller, in the head with it. */
+.title-bar:has(.title-bar-sub) { height: auto; align-items: flex-start; padding-top: 4px; padding-bottom: 4px; }
+.title-bar-text:has(.title-bar-sub), :root[data-skin] .title-bar-text:has(.title-bar-sub) { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.title-bar-sub, :root[data-skin] .title-bar-sub { display: block; font-size: 12px; font-weight: normal; opacity: 0.75; }
 .lf-place .sprite, .lf-place .project-icon, .lf-place .group-icon { flex: none; }
 .lf-label { display: flex; align-items: center; gap: 6px; }
 .lf-grid { display: grid; grid-template-columns: max-content minmax(0, 220px); align-items: center; gap: 8px 12px; margin: 0 0 12px; }

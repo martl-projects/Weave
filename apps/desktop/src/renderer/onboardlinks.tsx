@@ -61,9 +61,9 @@ async function cardPng(ref: string): Promise<string> {
  * (where it opens, what they become part of, a message), access (how often, how long, whether you confirm each), and its
  * preview, edited in place (click a line to change it, the picture to choose one from the places it leads to). Then the
  * link. `opens`: where it leads, as the bar names it (the space first, unless it's you); `places`: the spaces it lets them
- * into, the one it opens first. `onClose(made)`.
+ * into, the one it opens first; `path`: what follows the space (a board, a post, a website), with icons. `onClose(made)`.
  */
-export function LinkFinish({ target, also, title, opens, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string[]; places: SpaceInfo[]; onClose(made: boolean): void }) {
+export function LinkFinish({ target, also, title, opens, path, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string[]; path: Array<{ label: string; icon: IconName }>; places: SpaceInfo[]; onClose(made: boolean): void }) {
   const { t } = useTexts();
   const toMe = target.kind === 'me';
   const [step, setStep] = useState(1);
@@ -110,10 +110,9 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
   // One title, the step's, on top of the window; which step it is right under it.
   const stepTitle = made ? t('linkb.made.title') : t(['linkb.step1', 'linkb.step2', 'linkb.step3'][step - 1]);
   return (
-    <Modal title={stepTitle} onClose={() => onClose(!!made)}>
+    <Modal title={stepTitle} subtitle={made ? t('linkb.made') : t('linkb.step.n', { n: step, of: STEPS })} onClose={() => onClose(!!made)}>
       {made ? (
         <div className="form">
-          <p className="lf-sub muted">{t('linkb.made')}</p>
           <div className="onboard-made">
             <span className="qr" dangerouslySetInnerHTML={{ __html: made.svg }} />
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
@@ -127,7 +126,6 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
         </div>
       ) : (
         <div className="form link-builder">
-          <p className="lf-sub muted">{t('linkb.step.n', { n: step, of: STEPS })}</p>
           {step === 1 && (
             <>
               {/* The message first; then who gets the link, as a little tree: where it opens, what they join, that you're friends. */}
@@ -143,9 +141,15 @@ export function LinkFinish({ target, also, title, opens, places, onClose }: { ta
                 <li>
                   <ShareMark kind="target" /> {t('linkb.opens')}
                   <div className="lf-tree-items">
-                    <span>
+                    <span className="lf-path">
                       {toMe ? <b>{opens[0]}</b> : <PlaceName space={places[0]} />}
-                      {opens.slice(1).map((c) => ` › ${c}`)}
+                      {path.map((c) => (
+                        <span key={c.label} className="lf-place">
+                          <span className="lf-sep">›</span>
+                          <Icon name={c.icon} />
+                          <b>{c.label}</b>
+                        </span>
+                      ))}
                     </span>
                   </div>
                 </li>

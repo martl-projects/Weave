@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from 'react';
 import type { BoardInfo, LinkTarget, PostInfo, SpaceInfo, WebsiteInfo } from '@weave/node/client';
-import { Icon } from './icons.tsx';
+import { Icon, type IconName } from './icons.tsx';
+import { boardIcon } from './posts.tsx';
 import { api, useApi } from './lib.ts';
 import { LinkFinish } from './onboardlinks.tsx';
 import { useTexts } from './texts.tsx';
@@ -88,6 +89,8 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
       ? [t('sharemode.to.me', { name: me?.name ?? '' })]
       : [named(space!), ...(board ? [board.title] : []), ...(target.kind === 'post' ? [post?.title || t('word.post')] : []), ...(site ? [site.name] : [])];
   const title = target?.kind === 'me' ? (me?.name ?? '') : (crumbs[crumbs.length - 1] ?? '');
+  // The same way after the space, with icons, for the link's first step.
+  const path: Array<{ label: string; icon: IconName }> = !target || target.kind === 'me' ? [] : [...(board ? [{ label: board.title, icon: boardIcon(board) }] : []), ...(target.kind === 'post' ? [{ label: post?.title || t('word.post'), icon: 'pencil' as const }] : []), ...(site ? [{ label: site.name, icon: 'globe' as const }] : [])];
   // Places in the plan beside the one it opens; the one it opens doesn't count twice.
   const also = share.also.filter((id) => id !== space?.id).map((id) => spaces.find((s) => s.id === id)).filter((s): s is SpaceInfo => !!s && mayShare(s));
 
@@ -149,6 +152,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
           also={also.map((s) => s.id)}
           title={title}
           opens={crumbs}
+          path={path}
           places={[...(space ? [space] : []), ...also]}
           onClose={(made) => (setFinishing(false), made && stopShare())}
         />
