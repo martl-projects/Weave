@@ -49,19 +49,13 @@ function Words({ words }: { words: string }) {
 }
 
 /**
- * Weave Web's first screen, the first of Weave anyone may see: a stage of its own, the same in every look. Weave's threads
- * drift slowly behind (its own art, in the logo's colors: coral, yellow, mint), the logo and its name in front, then
- * what Weave is for, and the ways in.
+ * Weave Web's first screen, the first of Weave anyone may see: a stage of its own, the same in every look. On a quiet dark
+ * ground the logo and its name, then what Weave is for (in the logo's colors: coral, yellow, mint), and the ways in.
  */
 function FirstStage({ children }: { children: React.ReactNode }) {
   const { t } = useTexts();
   return (
     <div className="first-stage">
-      <svg className="first-threads" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-        <path className="thread thread-coral" d="M-200 760 C 200 520, 520 980, 900 700 S 1500 380, 1900 560" />
-        <path className="thread thread-yellow" d="M-200 420 C 260 220, 600 640, 980 420 S 1520 160, 1900 300" />
-        <path className="thread thread-mint" d="M-200 140 C 300 360, 640 -40, 1040 180 S 1540 520, 1900 260" />
-      </svg>
       <main className="first-card">
         <img className="first-logo" src={weaveLogo} alt="" />
         <h1 className="first-title">Weave</h1>

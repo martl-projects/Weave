@@ -668,17 +668,9 @@ menu[role='tablist'] { margin-bottom: 0; }
 .first-ways button { width: 100%; padding: 10px; }
 .first-ways p { margin: -4px 0 4px; }
 /*
- * Weave Web's first screen (FirstStage): dark, Weave's threads drifting behind, the logo, its name and what it's for in
- * front. Its own look, the same in every skin: the first of Weave anyone sees.
+ * Weave Web's first screen (FirstStage): a quiet dark ground, the logo, its name and what it's for. Its own look, the same in every skin: the first of Weave anyone sees.
  */
 .first-stage { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; overflow: auto; padding: 24px 16px; background: radial-gradient(ellipse at 50% 40%, #1b1b26 0%, #0b0b10 70%); color: #f2f2f6; font-family: var(--content-font, system-ui, sans-serif); }
-.first-threads { position: fixed; inset: -10%; width: 120%; height: 120%; pointer-events: none; }
-.thread { fill: none; stroke-width: 110; stroke-linecap: round; opacity: 0.16; filter: blur(2px); }
-.thread-coral { stroke: #ff5353; animation: thread-drift 38s ease-in-out infinite alternate; }
-.thread-yellow { stroke: #f5e471; animation: thread-drift 46s ease-in-out -12s infinite alternate-reverse; }
-.thread-mint { stroke: #5ae0a4; animation: thread-drift 52s ease-in-out -20s infinite alternate; }
-@keyframes thread-drift { from { transform: translate(-60px, 20px) rotate(-1.5deg); } to { transform: translate(60px, -30px) rotate(1.5deg); } }
-@media (prefers-reduced-motion: reduce) { .thread { animation: none; } }
 .first-card { position: relative; width: min(380px, 100%); display: flex; flex-direction: column; align-items: stretch; text-align: center; }
 .first-stage .first-logo, :root[data-skin] .first-stage .first-logo { align-self: center; width: 112px; height: 112px; border-radius: 26px; box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08), 0 18px 60px rgb(255 83 83 / 0.18), 0 6px 30px rgb(90 224 164 / 0.14); }
 .first-stage .first-title, :root[data-skin] .first-stage .first-title { margin: 18px 0 2px; font-size: 44px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; }
