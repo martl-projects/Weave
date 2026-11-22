@@ -164,7 +164,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
 export function ShareMark({ kind, title }: { kind: 'target' | 'check' | 'box'; title?: string }) {
   return (
     <span className={`share-mark share-mark-${kind}`} title={title} aria-label={title}>
-      <Icon name={kind} sharp />
+      <Icon name={kind} />
     </span>
   );
 }
