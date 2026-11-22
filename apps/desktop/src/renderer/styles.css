@@ -169,6 +169,10 @@ button.door-switch:hover { text-decoration: none; }
   border-bottom: 1px solid #d4d4d4; font-family: var(--content-font);
 }
 .post-row.is-pinned { background: #f3fbf1; }
+/* What Weave itself says (a backup due): a pinned post with a lock for its picture. */
+.weave-post .votes { padding-top: 4px; }
+.weave-post-thumb { display: flex; align-items: center; justify-content: center; }
+.weave-post-thumb .icon { width: 32px !important; height: 32px !important; }
 .post-row, .panel-line { cursor: pointer; }
 .votes { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .votes.row { flex-direction: row; }
@@ -1228,9 +1232,9 @@ button.session-title:hover { text-decoration: underline; }
   .project-home:not(.page-view) .hero, .project-home .hero-bar, .project-home .board-strip, .project-home .hero-fold { display: none !important; }
   /* Posting to a board: low on the right, only in boards. */
   :root[data-skin] .fab { position: absolute; z-index: 20; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; min-height: 48px; padding: 0 18px; border-radius: 24px; font-size: 15px; font-weight: bold; box-shadow: 0 3px 12px #0005; }
-  /* Elsewhere (Home, Places, Inbox, People, My hub): folded, Home's icon floats at the top (back beside it but on Home)
-     and, on Home only, the tabs float at the bottom as Places alone; unfolded, the title comes back and they widen
-     to the right. Places, Inbox, People and My hub keep the tabs as a bar along the bottom. */
+  /* Home: folded, its icon floats at the top
+     and the tabs float at the bottom as Places alone; unfolded, the title comes back and they widen
+     to the right. Places, Inbox, People and My hub keep their title and tabs, unfolded. */
   .title-back { display: flex; }
   :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
   .home-float { position: fixed; }

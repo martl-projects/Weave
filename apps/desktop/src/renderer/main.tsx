@@ -14,7 +14,7 @@ import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
-import { HomeFeed } from './home.tsx';
+import { BackupPost, HomeFeed } from './home.tsx';
 import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './websites.tsx';
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
@@ -959,10 +959,11 @@ function Shell() {
   // On a phone: in a place there's only its own bar (SpaceBar), elsewhere the tabs; both fold while reading on.
   const phone = useIsPhone();
   const inPlace = ['p', 'g', 'r', 'd'].includes(route[0]);
-  // Outside a place they start folded: Home's icon floats at the top (with back beside it elsewhere), and the tabs at the
-  // bottom are only Places on Home (a bar along the bottom elsewhere); a tap on the icon, or pulling the page down,
-  // brings the title back and widens the tabs.
-  const [barsFolded, setBarsFolded] = useBarsFolded(phone, routeKey, !inPlace);
+  // Home starts folded: its icon floats at the top and the tabs at the bottom are only Places; a tap on the icon, or
+  // pulling the page down, brings the title back and widens the tabs.
+  // Places, Inbox, People and My hub keep their title and tabs as they are: nothing folds there.
+  const atHome = route.length === 0;
+  const [barsFolded, setBarsFolded] = useBarsFolded(phone && (inPlace || atHome), routeKey, atHome);
   const bars: Bars = { folded: barsFolded, unfold: () => setBarsFolded(false) };
   const titlePlay = useFoldPlay(barsFolded);
   useEffect(() => {
@@ -998,7 +999,9 @@ function Shell() {
     else if (route[0] === 'play' && route[1]) center = <QuickRoute code={route[1]} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
-    else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
+    // Nobody else can bring a person's data back: a post pinned on Home until a backup was saved, and again when the
+    // last one is a month old.
+    else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} above={status?.backupDue && !bridge.web && <BackupPost due={status.backupDue} />} />;
     // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
     const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
       <a className="notice alarm" href="#/keys">
@@ -1011,18 +1014,11 @@ function Shell() {
         <Icon name="plug" /> {t('status.shipped.missing')}
       </div>
     );
-    // Nobody else can bring a person's data back: said until a backup was saved, and again when the last one is a month old.
-    const backupDue = status?.backupDue && !bridge.web && routeKey !== 'keys' && (
-      <a className="notice" href="#/keys">
-        <Icon name="lock" /> {t(status.backupDue === 'again' ? 'backup.due.again' : 'backup.due.never')}
-      </a>
-    );
     body = (
       <div className="center">
         <DesktopHint />
         {unprotected}
         {shippedMissing}
-        {backupDue}
         {center}
       </div>
     );

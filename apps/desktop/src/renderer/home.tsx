@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { HomeSource, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bump } from './lib.ts';
@@ -61,7 +61,35 @@ function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): vo
   );
 }
 
-export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meDid: string; onSubmit(): void }) {
+/**
+ * What Weave itself has to say, as a post pinned on top of Home rather than a banner over everything: nobody else can
+ * bring a person's data back, said until a backup was saved and again when the last one is a month old.
+ */
+export function BackupPost({ due }: { due: 'never' | 'again' }) {
+  const { t } = useTexts();
+  return (
+    <article className="post-row is-pinned weave-post">
+      <span className="votes">
+        <Icon name="mapPin" />
+      </span>
+      <a className="thumb weave-post-thumb" href="#/keys">
+        <Icon name="lock" />
+      </a>
+      <div className="post-body">
+        <a className="post-title" href="#/keys">
+          {t(due === 'again' ? 'backup.post.title.again' : 'backup.post.title')}
+        </a>
+        <div className="post-meta">{t('backup.post.by')}</div>
+        <p className="excerpt">{t(due === 'again' ? 'backup.due.again' : 'backup.due.never')}</p>
+        <a className="post-link big" href="#/keys">
+          <Icon name="lock" /> {t('backup.post.open')}
+        </a>
+      </div>
+    </article>
+  );
+}
+
+export function HomeFeed({ spaces, meDid, onSubmit, above }: { spaces: SpaceInfo[]; meDid: string; onSubmit(): void; above?: ReactNode }) {
   const { t } = useTexts();
   const [from, setFrom] = useState<HomeSource>(readSource);
   const [choosing, setChoosing] = useState(false);
@@ -96,6 +124,7 @@ export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meD
             </button>
           </>
         }
+        above={above}
         empty={<>{t(`home.empty.${from}`)}</>}
       />
       {choosing && <SourcesDialog spaces={spaces} onClose={() => setChoosing(false)} />}
