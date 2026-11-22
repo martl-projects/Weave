@@ -108,6 +108,11 @@ button .icon { vertical-align: -3px; }
 .pane-main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 /* A board's client service's own view (lens.tsx): it fills the pane. */
 .lens-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; }
+/* What a lens's site loads from (its "net"): asked once, then said in a line above it. */
+.lens-net { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; flex: none; padding: 3px 8px; font-size: 11px; border-bottom: 1px solid var(--shadow, #808080); }
+.lens-net.ask { background: var(--face); padding: 6px 8px; }
+.lens-net span { display: inline-flex; align-items: center; gap: 4px; }
+.lens-net button { margin-left: auto; }
 .pane-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 2px; }
 .page { padding: 10px 12px; font-family: var(--content-font); font-size: 12px; }
 .page fieldset { margin-bottom: 10px; background: var(--face); }
@@ -236,6 +241,11 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .banner .tag { vertical-align: 3px; }
 .banner-side { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 .banner-side .votes { margin-bottom: 4px; background: #fff; color: #000; padding: 2px; }
+/* A community's banner picture behind its head, under the same dark wash as a project's. */
+.banner.has-banner { position: relative; overflow: hidden; }
+.banner.has-banner::before { content: ''; position: absolute; inset: 0; background: #00104099; z-index: 1; }
+.banner.has-banner > :not(.hero-bg) { position: relative; z-index: 2; }
+.banner-art.project-icon { background: #fff; }
 .board-strip { display: flex; gap: 4px; flex-wrap: wrap; flex: none; padding: 4px 2px; }
 .board-chip {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; color: #000; text-decoration: none;
@@ -1133,3 +1143,15 @@ button.session-title:hover { text-decoration: underline; }
   .board-strip::-webkit-scrollbar { display: none; }
   .board-chip { flex: none; white-space: nowrap; scroll-snap-align: start; }
 }
+
+/* A lens's view, and the same filling the screen: the browser's full screen, or laid over the app (an iPhone). */
+.lens-box { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--window, #fff); }
+.lens-box:fullscreen, .lens-box.lens-full { position: fixed; inset: 0; z-index: 10000; width: auto; height: auto; max-width: 100vw; max-height: 100dvh; box-sizing: border-box; overflow: hidden; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--window, #fff); }
+/* A view that lays out the screen's edges itself ({weave: 'edges'}) gets all of it, under the notch and the home bar too. */
+.lens-box.lens-bleed:fullscreen, .lens-box.lens-bleed.lens-full { padding: 0; }
+.lens-box.lens-bleed .lens-full-exit { opacity: 0.6; }
+/* The view alone on the screen: its lines about hosts and place stay in the pane (they come back on leaving). */
+.lens-box:fullscreen .lens-net, .lens-box.lens-full .lens-net { display: none; }
+html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
+.lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1; opacity: 0.45; transition: opacity 0.2s; }
+.lens-full-exit:hover, .lens-full-exit:focus-visible { opacity: 1; }

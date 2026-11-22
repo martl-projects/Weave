@@ -121,7 +121,7 @@ export class Widgets {
   }
 
   /** A widget's site, for the app's sandboxed frame: only of a release you approved, as some widget here sends it. */
-  async site(release: string): Promise<{ site: string; name: string } | undefined> {
+  async site(release: string): Promise<{ site: string; name: string; net?: string[] } | undefined> {
     const fingerprints = new Set(this.#approvals().filter((a) => a.release === release).map((a) => a.fingerprint));
     if (!fingerprints.size) return undefined;
     for (const space of this.h.spaces.values()) {
@@ -130,7 +130,8 @@ export class Widgets {
         if (!widget || widget.app.release !== release || !fingerprints.has(widgetFingerprint(widget))) continue;
         if (this.#checkRelease(widget).problem) continue;
         const ready = await this.#prepare(widget);
-        return ready.site ? { site: ready.site, name: widget.name } : undefined;
+        const net = widget.manifest.widget!.net;
+        return ready.site ? { site: ready.site, name: widget.name, ...(net?.length ? { net } : {}) } : undefined;
       }
     }
     return undefined;
@@ -172,6 +173,9 @@ export class Widgets {
       fingerprint,
       approved,
       height: widget.height,
+      ...(widget.manifest.widget?.net?.length ? { net: widget.manifest.widget.net } : {}),
+      ...(widget.manifest.widget?.location ? { location: widget.manifest.widget.location } : {}),
+      ...(widget.manifest.widget?.tilt ? { tilt: true } : {}),
       view: `widget-${widget.app.release}`,
       ...(check.problem ? { problem: check.problem } : {}),
     };

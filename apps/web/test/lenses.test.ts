@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { buildComponent } from '../../../packages/node/test/helpers/components.ts';
 import { framesFrom, lensFrameCsp, serviceCsp } from '../build.ts';
 import { transpileComponent } from '../src/transpile.ts';
+import { onRequestGet } from '../src/functions/lens-frame.ts';
+import { frameHosts, lensFrameCspFor } from '../src/lensframecsp.ts';
 
 /*
  * Lenses and widgets in Weave Web (docs/web-stage2.md, step 8): a release's pure component is transpiled where it runs
@@ -65,9 +67,23 @@ describe('the frame a view is built in', () => {
     expect(serviceCsp('https://storage.example')).toBe("default-src 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; connect-src 'self' https://storage.example wss://storage.example");
   });
 
+  it('reaches the hosts in its address and no others, as a Pages Function serves it', async () => {
+    expect(frameHosts(new URL('https://web.example/lens-frame?net=api.open-meteo.com,*.tile.openstreetmap.org'))).toEqual(['api.open-meteo.com', '*.tile.openstreetmap.org']);
+    expect(frameHosts(new URL("https://web.example/lens-frame?net=x.example;script-src%20*,'self',localhost"))).toEqual([]);
+    expect(lensFrameCspFor()).toBe(lensFrameCsp);
+    const assets = { fetch: async () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }) };
+    const answer = await onRequestGet({ request: new Request('https://web.example/lens-frame?net=api.open-meteo.com'), env: { ASSETS: assets } });
+    const csp = answer.headers.get('content-security-policy')!;
+    expect(csp).toContain('connect-src https://api.open-meteo.com;');
+    expect(csp).toMatch(/^sandbox allow-scripts;/);
+    expect(csp).toContain("frame-ancestors 'self'");
+    const bare = await onRequestGet({ request: new Request('https://web.example/lens-frame'), env: { ASSETS: assets } });
+    expect(bare.headers.get('content-security-policy')).toBe(lensFrameCsp);
+  });
+
   it('is built from the view’s files with their blob: addresses (its own page, as served)', () => {
     const page = readFileSync(join(import.meta.dirname, '..', 'src', 'lens-frame.html'), 'utf8');
-    expect(page).toContain("window.parent.postMessage({ weave: 'files' }, '*')");
+    expect(page).toContain("window.parent.postMessage({ weave: 'files', net: new URLSearchParams(location.search).get('net') || '' }, '*')");
     expect(page).toContain("parent.postMessage({ weave: 'loaded' }, '*')");
     expect(page).toContain('URL.createObjectURL');
   });

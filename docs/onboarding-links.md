@@ -27,7 +27,7 @@ The plan is sealed with a key derived from the 16-byte secret after the `#`. The
 
 `packages/node/src/storageplans.ts`, requests on the storage socket (`packages/net/src/storageclient.ts`):
 
-- **`plan.put`** by a planner, signed as their key over the connection (`planMessage`). Only keys the operator named may put plans: `weave-storage planner <did>` (`--off` to stop). A computer that isn't allowed is told the exact command, with its key.
+- **`plan.put`** by a planner, signed as their key over the connection (`planMessage`). Only keys the operator named may put plans: `weave-storage planner <did>` (`--off` to stop). A computer that isn't allowed is told the exact command, with its key. `weave-storage planner '*'` lets anyone, within limits: 20 live links at once, and 20 new accounts a day through their links (counted in accounts.json); keys the operator named have neither limit. storage.martl.io is open since 17.11.2026.
 - **`plan.get {code}`** gives the sealed plan while the link works: not taken back, not expired, not used up.
 - **`plan.take {code, check, account}`** counts a use. With `account`, it hands out a one-time account invitation, so the link is the invitation and nobody makes them by hand.
 - **`plan.revoke`** and **`plan.list`** for the creator.

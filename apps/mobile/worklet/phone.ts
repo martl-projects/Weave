@@ -1,5 +1,5 @@
 import { errorToWire } from '@weave/core';
-import { connectTo, decodePhoneLink, LENS_CSP, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+import { connectTo, decodePhoneLink, lensCsp, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
 
 /*
  * The phone app's worker: it keeps the phone's key pair and the computer it
@@ -197,15 +197,15 @@ export class Phone {
 
   /**
    * One request for a file of a client service's view: GET /lens/<release>/<file>, answered with the file from the
-   * node, sandboxed (LENS_CSP), and the connection closed.
+   * node, sandboxed (lensCsp: its hosts only if its member allowed them), and the connection closed.
    */
   #lensRequest(local: Pipe): void {
     this.#open.add(local);
     let head = '';
     let answered = false;
-    const answer = (status: string, type: string, body: Buffer) => {
+    const answer = (status: string, type: string, body: Buffer, net?: string[]) => {
       answered = true;
-      const lines = [`HTTP/1.1 ${status}`, `content-type: ${type}`, `content-length: ${body.length}`, `content-security-policy: ${LENS_CSP}`, 'x-content-type-options: nosniff', 'cache-control: no-cache', 'connection: close'];
+      const lines = [`HTTP/1.1 ${status}`, `content-type: ${type}`, `content-length: ${body.length}`, `content-security-policy: ${lensCsp(net)}`, 'x-content-type-options: nosniff', 'cache-control: no-cache', 'connection: close'];
       local.end(Buffer.concat([Buffer.from(`${lines.join('\r\n')}\r\n\r\n`), body]));
     };
     const end = () => {
@@ -229,9 +229,9 @@ export class Phone {
       }
       if (!at || path === undefined) return answer('404 Not Found', 'text/plain', Buffer.from('Not here'));
       this.#connect()
-        .then((session) => session.call('lensFile', { release: at[1], path }) as Promise<{ type: string; data: string }>)
+        .then((session) => session.call('lensFile', { release: at[1], path }) as Promise<{ type: string; data: string; net?: string[] }>)
         .then(
-          (file) => answer('200 OK', file.type, Buffer.from(file.data, 'base64')),
+          (file) => answer('200 OK', file.type, Buffer.from(file.data, 'base64'), file.net),
           (error: Error) => answer('404 Not Found', 'text/plain; charset=utf-8', Buffer.from(error.message)),
         );
     });

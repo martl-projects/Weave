@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
-import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type Did, type Json } from '@weave/core';
+import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
-import type { BoardViewInfo, FeedItem } from './backend.ts';
+import type { BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
+import { readJson, writeJson } from './home.ts';
 import type { ServicesHost } from './node.ts';
 import { pullImage } from './registry.ts';
 import { safePath, untar } from './untar.ts';
@@ -29,6 +30,27 @@ const LENS_FILE_MAX = 5_000_000;
 /** A whole view at once (lensSite): at most this many files, and this much in all (as base64). */
 const LENS_SITE_FILES = 200;
 const LENS_SITE_MAX = 12_000_000;
+
+/**
+ * A member's yes to a lens's site loading from its hosts, kept on their node (lens-net.json), never shared: by its
+ * project and app, so a new version asking for no more hosts keeps it.
+ */
+interface StoredNet {
+  project: string;
+  app: string;
+  name: string;
+  hosts: string[];
+  at: string;
+}
+
+/** A member's yes to a lens's site knowing where they are, kept on their node (lens-location.json), never shared. */
+interface StoredLocation {
+  project: string;
+  app: string;
+  name: string;
+  location: LensLocation;
+  at: string;
+}
 
 /** A lens (or a group widget) ready to use on this node: where it runs, and its renderer's folder. */
 export interface Ready {
@@ -157,7 +179,7 @@ export class Lenses {
   readonly h: ServicesHost;
   readonly #svc: () => Services;
   /** A group widget's site, by its release: set by the node (widgets.ts), only for what its person approved. */
-  widgetSite?: (release: string) => Promise<{ site: string; name: string } | undefined>;
+  widgetSite?: (release: string) => Promise<{ site: string; name: string; net?: string[] } | undefined>;
   /** Lenses being made ready (fetched, transpiled, started), by their runtime key. */
   #ready = new Map<string, Promise<Ready>>();
   /** The last state folded per board, by what it was folded from. */
@@ -227,6 +249,85 @@ export class Lenses {
       });
   }
 
+  // ---------------------------------------------------------------- the network of a lens's site, as its member allowed
+
+  get #netFile(): string {
+    return joinPath(this.h.home.dir, 'lens-net.json');
+  }
+
+  #netAllowed(): StoredNet[] {
+    return readJson<{ allowed?: StoredNet[] }>(this.#netFile)?.allowed ?? [];
+  }
+
+  /**
+   * What a lens's site asks to load from, and whether its member said yes: for this app of this project, to every
+   * host it names now. A new version asking for the same hosts (or fewer) needs no new yes; one more host does.
+   */
+  #net(lens: BoardLens): LensNetInfo {
+    const hosts = lens.manifest.client?.net ?? [];
+    const said = this.#netAllowed().find((a) => a.project === lens.origin.project && a.app === lens.manifest.app);
+    return { hosts, allowed: hosts.length > 0 && !!said && hosts.every((h) => said.hosts.includes(h)) };
+  }
+
+  /** The hosts a view's site asks for, and whether they're allowed here (a widget's: by approving its release). */
+  async lensNet(input: { release: string }): Promise<LensNetInfo> {
+    if (input.release.startsWith('widget-')) {
+      const widget = this.widgetSite ? await this.widgetSite(input.release.slice(7)) : undefined;
+      if (!widget) throw new Error('no widget you approved here is that one');
+      return { hosts: widget.net ?? [], allowed: !!widget.net?.length };
+    }
+    if (input.release.startsWith('shipped-')) return { hosts: [], allowed: false };
+    const lens = this.#pinned(input.release);
+    if (!lens) throw new Error('no board here is shown by that client service');
+    return this.#net(lens);
+  }
+
+  /** Allow a lens's site its hosts (or, `off`, no longer): on this node only, never shared. */
+  async allowLensNet(input: { release: string; off?: boolean }): Promise<LensNetInfo> {
+    const lens = this.#pinned(input.release);
+    if (!lens) throw new Error('no board here is shown by that client service');
+    const hosts = lens.manifest.client?.net ?? [];
+    if (!input.off && !hosts.length) throw new Error(`${lens.name} loads from nowhere: there's nothing to allow`);
+    const others = this.#netAllowed().filter((a) => !(a.project === lens.origin.project && a.app === lens.manifest.app));
+    const mine: StoredNet[] = input.off ? [] : [{ project: lens.origin.project, app: lens.manifest.app, name: lens.name, hosts: [...hosts], at: new Date(this.h.clock()).toISOString() }];
+    writeJson(this.#netFile, { allowed: [...others, ...mine] });
+    return this.#net(lens);
+  }
+
+  // ---------------------------------------------------------------- where its member is, as they allowed
+
+  get #locationFile(): string {
+    return joinPath(this.h.home.dir, 'lens-location.json');
+  }
+
+  #locationAllowed(): StoredLocation[] {
+    return readJson<{ allowed?: StoredLocation[] }>(this.#locationFile)?.allowed ?? [];
+  }
+
+  /**
+   * How closely a lens's site asks to know where its member is, and whether they said yes: for this app of this
+   * project, at least that closely. A new version asking the same (or rougher) keeps it; asking for exact after a yes
+   * to rough asks again.
+   */
+  #location(lens: BoardLens): LensLocationInfo | undefined {
+    const asks = lens.manifest.client?.location;
+    if (!asks) return undefined;
+    const said = this.#locationAllowed().find((a) => a.project === lens.origin.project && a.app === lens.manifest.app);
+    return { asks, allowed: locationCovers(said?.location, asks) };
+  }
+
+  /** Let a lens's site know where its member is, as closely as it asks (or, `off`, no longer): on this node only. */
+  async allowLensLocation(input: { release: string; off?: boolean }): Promise<LensLocationInfo> {
+    const lens = this.#pinned(input.release);
+    if (!lens) throw new Error('no board here is shown by that client service');
+    const asks = lens.manifest.client?.location;
+    if (!input.off && !asks) throw new Error(`${lens.name} doesn't ask where you are: there's nothing to allow`);
+    const others = this.#locationAllowed().filter((a) => !(a.project === lens.origin.project && a.app === lens.manifest.app));
+    const mine: StoredLocation[] = input.off || !asks ? [] : [{ project: lens.origin.project, app: lens.manifest.app, name: lens.name, location: asks, at: new Date(this.h.clock()).toISOString() }];
+    writeJson(this.#locationFile, { allowed: [...others, ...mine] });
+    return this.#location(lens) ?? { asks: 'rough', allowed: false };
+  }
+
   /** Fetch a lens's package (once per release), transpile its component, and run it: ready to fold and act. */
   #prepare(lens: BoardLens): Promise<Ready> {
     const client = lens.manifest.client!;
@@ -237,9 +338,9 @@ export class Lenses {
    * A file of a lens's view (its site): of a lens pinned to a board here, made ready if it isn't yet. A group widget's
    * view comes the same way ("widget-<release>"), only once you approved it (widgets.ts).
    */
-  async lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string }> {
-    const { site, name } = await this.#site(input.release);
-    return siteFile(site, name, input.path);
+  async lensFile(input: { release: string; path: string }): Promise<{ type: string; data: string; net?: string[] }> {
+    const { site, name, net } = await this.#site(input.release);
+    return { ...siteFile(site, name, input.path), ...(net?.length ? { net } : {}) };
   }
 
   /**
@@ -269,7 +370,7 @@ export class Lenses {
   }
 
   /** Where a view's files are: a widget's you approved, a shipped service's panels, or a lens pinned to a board here. */
-  async #site(release: string): Promise<{ site: string; name: string }> {
+  async #site(release: string): Promise<{ site: string; name: string; net?: string[] }> {
     if (release.startsWith('widget-')) {
       const widget = this.widgetSite ? await this.widgetSite(release.slice(7)) : undefined;
       if (!widget) throw new Error('no widget you approved here is that one');
@@ -282,7 +383,9 @@ export class Lenses {
     const site = shipped ?? (await this.#prepare(lens!)).site;
     const name = shipped ? release.slice(8) : lens!.name;
     if (!site) throw new Error(`${name} has no view of its own`);
-    return { site, name };
+    // Its hosts only once its member allowed exactly these (a shipped service's panels reach nothing).
+    const net = lens ? this.#net(lens) : undefined;
+    return { site, name, ...(net?.allowed ? { net: net.hosts } : {}) };
   }
 
   /** The lens a board here is pinned to, by its release. */
@@ -296,6 +399,26 @@ export class Lenses {
   }
 
   /**
+   * The kinds the lenses of this person's boards bring themselves (what their contracts write that isn't Weave's own),
+   * each with the lenses that write it. A person may allow an agent these, beside Weave's kinds: nothing else.
+   */
+  lensKinds(): LensKindInfo[] {
+    const by = new Map<string, Set<string>>();
+    for (const space of this.h.spaces.values()) {
+      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      for (const board of boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers)) {
+        for (const kind of board.lens?.manifest.client?.writes ?? []) {
+          if (kind.startsWith('weave.') || kind.includes('*')) continue;
+          const lenses = by.get(kind) ?? new Set<string>();
+          lenses.add(board.lens!.name);
+          by.set(kind, lenses);
+        }
+      }
+    }
+    return [...by].map(([kind, lenses]) => ({ kind, lenses: [...lenses].sort() })).sort((a, b) => a.lenses[0].localeCompare(b.lenses[0]) || a.kind.localeCompare(b.kind));
+  }
+
+  /**
    * A board as its lens shows it: its state (folded from its items) and actions, and whether it has a renderer.
    * Without a lens, or with a suggested one this member didn't choose (`use`), just the board.
    */
@@ -304,7 +427,9 @@ export class Lenses {
     const lens = board.lens;
     const base: BoardViewInfo = { space: { id: space.id, kind: space.kind, name: this.h.spaceName(space) }, board: { name: board.name, title: board.title } };
     if (!lens) return base;
-    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by) };
+    const net = this.#net(lens);
+    const location = this.#location(lens);
+    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}) };
     if (lens.mode === 'suggest' && !input.use) return { ...base, lens: about };
     let ready: Ready;
     try {

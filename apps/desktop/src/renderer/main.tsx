@@ -18,7 +18,7 @@ import { HomeFeed } from './home.tsx';
 import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './websites.tsx';
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
-import { LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
@@ -290,6 +290,9 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const mine = waiting.filter((a) => a.project.id === space.id);
   const lensBoard = view === 'b' && arg ? boards?.find((b) => b.name === arg) : undefined;
   const [lensOn, chooseLens] = useLensChoice(space, lensBoard);
+  // The lens's view filling the screen (lens.tsx): left again when the board changes.
+  const [lensFull, setLensFull] = useState(false);
+  useEffect(() => setLensFull(false), [lensBoard?.name, space.id]);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
   const invite = () => open({ kind: 'invite', space });
   const { t } = useTexts();
@@ -353,10 +356,11 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
               p/{space.name} · {board.title}
             </b>
             <span className="pane-tools">
+              <LensFullscreenButton full={lensFull} setFull={setLensFull} />
               <LensSwitch board={board} on={lensOn} choose={chooseLens} />
             </span>
           </header>
-          <LensView space={space} board={board} meDid={me.did} onOpen={(post) => navigate(`${spaceHref(space)}/b/${arg}/${post}`)} />
+          <LensView space={space} board={board} meDid={me.did} onOpen={(post) => navigate(`${spaceHref(space)}/b/${arg}/${post}`)} full={lensFull} setFull={setLensFull} />
         </section>
       );
     else

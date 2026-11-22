@@ -96,7 +96,7 @@ import {
   LANGUAGES,
   type LanguageSetting,
 } from '@weave/core';
-import { WeaveError } from '@weave/core';
+import { WeaveError, type AppAsset } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type SpaceAccess } from '@weave/net';
 import { Onboarding } from './onboard.ts';
@@ -106,6 +106,7 @@ import {
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
+  type LensKindInfo,
   type ChatInfo,
   type FeedItem,
   type IdentityInfo,
@@ -834,6 +835,11 @@ export class WeaveNode implements Backend {
   #runtime = new Runtime(() => this.containerSetup.docker, () => this.wasmSetup.testHosts);
   /** Releases fetched for services and their websites, checked against their fingerprints (see artifacts.ts). */
   #releases = new Releases(() => joinPath(this.home.dir, 'services'), this.#runtime, () => this.#emitLive(), (a, platform) => this.#services.locateArtifact(a, platform), () => this.githubSetup.fetch, () => this.containerSetup.fetch);
+  /** Release files fetched from a provider are kept as blobs for others (a mirror), and found that way where a provider's way fails. */
+  #mirrorsMade = Object.assign(this.#releases, {
+    fetched: (a: StoredArtifact, platform: string, asset: AppAsset, bytes: Uint8Array) => void this.#services.mirrorRelease(a, platform, asset, bytes).catch(() => {}),
+    fromMirror: (a: StoredArtifact, platform: string) => this.#services.fromMirror(a, platform),
+  });
   /** Weave's own updates (update.ts): new versions of the app, fetched like any release file, for the app to install. */
   #updates = new Updates(() => joinPath(this.home.dir, 'updates'), () => this.#releases, () => this.#emitLive());
   /** My fetchers (fetchers.ts): client apps that fetch what providers grant me. */
@@ -3813,6 +3819,18 @@ export class WeaveNode implements Backend {
     return this.#lenses.lensFile(...args);
   }
 
+  lensNet(...args: Parameters<Lenses['lensNet']>): ReturnType<Lenses['lensNet']> {
+    return this.#lenses.lensNet(...args);
+  }
+
+  allowLensNet(...args: Parameters<Lenses['allowLensNet']>): ReturnType<Lenses['allowLensNet']> {
+    return this.#lenses.allowLensNet(...args);
+  }
+
+  allowLensLocation(...args: Parameters<Lenses['allowLensLocation']>): ReturnType<Lenses['allowLensLocation']> {
+    return this.#lenses.allowLensLocation(...args);
+  }
+
   lensSite(...args: Parameters<Lenses['lensSite']>): ReturnType<Lenses['lensSite']> {
     return this.#lenses.lensSite(...args);
   }
@@ -3841,6 +3859,10 @@ export class WeaveNode implements Backend {
 
   approveWidget(...args: Parameters<Widgets['approveWidget']>): ReturnType<Widgets['approveWidget']> {
     return this.#widgets.approveWidget(...args);
+  }
+
+  async lensKinds(): Promise<LensKindInfo[]> {
+    return this.#lenses.lensKinds();
   }
 
   marks(...args: Parameters<Marks['marks']>): ReturnType<Marks['marks']> {

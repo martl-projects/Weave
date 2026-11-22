@@ -431,7 +431,7 @@ export {
   type EventV2,
   type WireItemV2,
 } from './eventsV2.ts';
-export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, unrunnableRelease, releaseProgram, programPlatforms, type ReleaseProgram, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppWidget, WIDGET_HEIGHT, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
+export { KIND_APP, KIND_APP_TEXTS, KIND_ARTIFACT, KIND_ARTIFACT_WITHDRAWN, KIND_ROOM, artifactsOf, releaseById, releaseTextsOf, artifactKindOf, artifactSourceOf, unrunnableRelease, releaseProgram, programPlatforms, type ReleaseProgram, type Artifact, type ArtifactKind, type ArtifactSource, type AppFile, type AppWasm, type AppPanel, type AppList, type AppClient, type AppWidget, WIDGET_HEIGHT, type LensLocation, locationCovers, roughLocation, screenTilt, LENS_FILES, lensFileName, type AppFetcher, type AppVerifier, type AppKeyvault, parsePages, type RoomPages, checkManifest, checkServiceLabel, appSettingsOf, isSettingName, parseOAuth, type AppOAuth, parseRegister, type AppRegister, SERVICE_LABEL, MANIFEST_EXAMPLE, MANIFEST_RULES, parseInstall, parseManifest, roomsOf, type ManifestCheck, type AppAsset, type AppImage, type AppInstall, IMAGE_REF, type AppManifest, type AppService, type AppSetting, type Room } from './rooms.ts';
 export { attachmentOf, BLOB_TYPES, blobHash, blobRefsIn, decryptBlob, encryptBlob, FILE_NAME_LIMIT, fileName, formatBlobRef, isImageType, isMediaType, MAX_BLOB, parseBlobRef, type Attachment, type BlobRef, type BlobType } from './blobs.ts';
 export {
   accessOf,
@@ -535,3 +535,4 @@ export {
   type TextValues,
 } from './texts.ts';
 export { newPlanSecret, onboardLink, ONBOARD_PATH, openPlan, parseOnboardLink, parsePlan, planCheck, playManifest, playTags, previewTags, sealPlan, type PlayApp, type OnboardPlan, type OnboardStep } from './onboard.ts';
+export { KIND_ARTIFACT_MIRROR, mirrorsOf, parseArtifactMirror, type ArtifactMirror } from './mirrors.ts';

@@ -133,8 +133,10 @@ export function AgentAppsBox() {
 
 /** What each kind lets an agent do, in plain words (agent.kind.<kind>). */
 const KINDS = ['weave.post', 'weave.reply', 'weave.msg', 'weave.react', 'weave.issue.*', 'weave.vote', 'weave.post.coauthor', 'weave.post.edit', 'weave.app', 'weave.project.page', 'weave.project.public', 'weave.space.create'];
-const kindWord = (k: string) => (KINDS.includes(k) ? t(`agent.kind.${k.replace(/\.\*$/, '').replace(/\./g, '-')}`) : k);
-const kindWords = (kinds: string[]) => kinds.map(kindWord).join(', ');
+/** A kind of a board's lens has no words of its own: it's named by its lens (agent.kind.lens), with the kind beside it. */
+const kindWord = (k: string, lenses?: Record<string, string[]>) =>
+  KINDS.includes(k) ? t(`agent.kind.${k.replace(/\.\*$/, '').replace(/\./g, '-')}`) : lenses?.[k]?.length ? t('agent.kind.lens', { lens: lenses[k].join(', '), kind: k }) : k;
+const kindWords = (kinds: string[], lenses?: Record<string, string[]>) => kinds.map((k) => kindWord(k, lenses)).join(', ');
 
 /** What a request asks, in words: kinds to sign, or repositories for a project. */
 function asked(r: PermissionRequest): { title: string; what: ReactNode; detail: string; done: string } {
@@ -149,9 +151,9 @@ function asked(r: PermissionRequest): { title: string; what: ReactNode; detail: 
   }
   return {
     title: t('ask.permission.title', { agent: r.agent }),
-    what: <T name="ask.permission.what" values={{ what: <b>{kindWords(r.kinds)}</b> }} />,
+    what: <T name="ask.permission.what" values={{ what: <b>{kindWords(r.kinds, r.lenses)}</b> }} />,
     detail: t('ask.permission.detail', { kinds: r.kinds.join(', ') }),
-    done: t('ask.permission.done', { agent: r.agent, what: kindWords(r.kinds) }),
+    done: t('ask.permission.done', { agent: r.agent, what: kindWords(r.kinds, r.lenses) }),
   };
 }
 

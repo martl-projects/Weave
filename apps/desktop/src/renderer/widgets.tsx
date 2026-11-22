@@ -15,14 +15,15 @@ import { useTexts } from './texts.tsx';
  */
 
 /** The message its frame gets: the instance's state and actions, and which widget it is. */
-const viewMessage = (v: WidgetViewInfo, meDid: string) => ({ weave: 'view', state: v.state ?? null, actions: v.actions ?? [], widget: { id: v.id, title: v.title }, me: { did: meDid } });
+const viewMessage = (v: WidgetViewInfo, meDid: string) => ({ weave: 'view', state: v.state ?? null, actions: v.actions ?? [], widget: { id: v.id, title: v.title }, me: { did: meDid }, can: ['picture', 'attach', ...(v.tilt ? ['tilt'] : [])] });
 
 function WidgetFrame({ view, meDid, height }: { view: WidgetViewInfo; meDid: string; height: number | string }) {
   const { data: base } = useApi(async () => (view.site ? bridge.lensBase(view.view) : undefined), [view.view, view.site]);
   const message = useMemo(() => viewMessage(view, meDid), [view, meDid]);
   if (!view.site) return <pre className="sunken widget-state">{JSON.stringify(view.state, null, 2)}</pre>;
   if (!base) return <div className="widget-wait" style={{ height }} />;
-  return <LensFrame title={view.title} release={view.view} base={base} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
+  // Approving its release allowed its hosts too, and knowing where you are: the approval card named them.
+  return <LensFrame title={view.title} release={view.view} base={base} net={view.net} location={view.location} tilt={view.tilt} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
 }
 
 /** A widget message's bubble: the approval card, or the widget itself (compact; large on click). */
@@ -75,6 +76,8 @@ export function WidgetMessage({ m, meDid }: { m: MessageInfo; meDid: string }) {
         <p className="muted">{t('widget.sent.by', { name: view.by.name ?? t('word.someone') })}</p>
         {!view.checked && <p className="muted">{t('widget.unchecked')}</p>}
         <p className="muted">{t('widget.approve.why')}</p>
+        {view.net?.length ? <p>{t('widget.approve.net', { hosts: view.net.join(', ') })}</p> : null}
+        {view.location ? <p>{t(view.location === 'exact' ? 'widget.approve.location.exact' : 'widget.approve.location')}</p> : null}
         <button onClick={() => void approve()}>{t('widget.approve.open')}</button>
       </div>
     );

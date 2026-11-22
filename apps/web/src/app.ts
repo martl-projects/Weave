@@ -76,6 +76,58 @@ sessionStorage.removeItem(TAKEN);
 sessionStorage.removeItem(TAKE);
 
 const worker = new Worker('/worker.js', { type: 'module' });
+
+/*
+ * A start that fails or hangs must say so: until the account's Worker answered there is nothing on the page but its
+ * ground, and a person can't tell a slow start from a broken one. After a while with nothing shown, or when the start
+ * threw, the page says how far it came and what went wrong, and offers to load again. Nothing here touches the account.
+ */
+let startStage = 'the account\'s worker starts';
+let startError = '';
+const startStuck = () => {
+  const root = document.getElementById('root');
+  if (!root || root.childElementCount) return;
+  const de = navigator.language.startsWith('de');
+  const box = document.createElement('div');
+  box.style.cssText = 'max-width:420px;margin:18vh auto 0;padding:18px;background:#fff;color:#111;font:15px/1.45 system-ui,sans-serif;border-radius:10px';
+  const say = (tag: string, text: string) => {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    el.style.margin = '0 0 10px';
+    box.appendChild(el);
+    return el;
+  };
+  say('b', de ? 'Weave startet nicht' : 'Weave doesn\'t start').style.display = 'block';
+  say('p', de ? 'Dein Konto ist davon nicht berührt. Schließe Weave in anderen Tabs oder Fenstern und lade neu.' : 'Your account isn\'t touched by this. Close Weave in other tabs or windows and load again.');
+  say('p', `${de ? 'Stand' : 'It came to'}: ${startStage}${startError ? `. ${de ? 'Fehler' : 'Error'}: ${startError}` : ''}`).style.cssText += ';font-size:13px;color:#555;word-break:break-word';
+  const again = say('button', de ? 'Neu laden' : 'Load again');
+  again.style.cssText = 'font:inherit;padding:8px 14px';
+  again.onclick = () => location.reload();
+  // This browser's copy of the account can't be read any more. The account itself is with the person's other devices
+  // and the storage node: dropping the copy here and coming in again brings it back. Only on their word.
+  if (/SQLITE_(CORRUPT|NOTADB)/.test(startError)) {
+    say('p', de ? 'Die Kopie deines Kontos in diesem Browser ist beschädigt. Dein Konto selbst liegt weiter bei deinen anderen Geräten und am Speicherknoten. Du kannst die Kopie hier löschen und dich neu anmelden: mit deinem Passkey, deinen 24 Wörtern oder einem Link von deinem Computer. Was du nur hier geschrieben hast und was noch nicht bei den anderen angekommen war, geht dabei verloren.' : 'The copy of your account in this browser is damaged. Your account itself is still with your other devices and the storage node. You can delete the copy here and come in again: with your passkey, your 24 words or a link from your computer. What you wrote only here and what had not reached the others yet is lost with it.').style.marginTop = '14px';
+    const drop = say('button', de ? 'Kopie hier löschen' : 'Delete the copy here');
+    drop.style.cssText = 'font:inherit;padding:8px 14px';
+    drop.onclick = async () => {
+      if (!confirm(de ? 'Die Kopie deines Kontos in diesem Browser wirklich löschen? Das lässt sich nicht zurücknehmen.' : 'Really delete the copy of your account in this browser? This can’t be undone.')) return;
+      (drop as HTMLButtonElement).disabled = true;
+      const answer = await ask('forget');
+      if ('error' in answer) return void say('p', `${de ? 'Das ging nicht' : 'That didn’t work'}: ${JSON.stringify(answer.error)}`);
+      location.reload();
+    };
+  }
+  root.replaceChildren(box);
+};
+const startFailed = (error: unknown) => {
+  if (startError) return;
+  startError = error instanceof Error ? error.message : String((error as { message?: unknown } | null)?.message ?? error);
+  startStuck();
+};
+window.addEventListener('error', (event) => startFailed(event.error ?? event.message));
+window.addEventListener('unhandledrejection', (event) => startFailed(event.reason));
+worker.onerror = (event) => startFailed(`worker: ${event.message || 'it did not load'}`);
+setTimeout(startStuck, 12_000);
 /** Whether this tab has the account. */
 let holding = false;
 let shown = false;
@@ -112,6 +164,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
     return void services.delete(data.key!);
   }
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
+  if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
   if (data.event === 'status') return console.info('storage node:', data.state, data.detail ?? '');
   if (typeof data.event === 'object') return listeners.forEach((listen) => listen(data.event as FeedItem));
   waiting.get(data.id)?.(data.answer);
@@ -263,6 +316,7 @@ const opening = taken ? new Promise<never>(() => {}) : own<{ exists: boolean; wa
   return lock;
 });
 const lock = await Promise.race([opening, elsewhere]);
+startStage = 'the account is found, the page loads';
 let open = false;
 let passkey = !!lock?.ways.some((way) => way !== 'words');
 let given: string | undefined;

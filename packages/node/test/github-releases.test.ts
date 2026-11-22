@@ -313,4 +313,60 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       server.close();
     }
   });
+
+  it("keeps a lens's release from GitHub as blobs for others: a member who can't reach GitHub (a page) gets it from them", async () => {
+    // The release is a board's lens (the Kanban starter): its component and its site, as one archive.
+    const starter = join(import.meta.dirname, '..', '..', 'sdk', 'starters', 'js-board');
+    const dir = tempDir('weave-github-lens-');
+    mkdirSync(join(dir, 'Kanban'));
+    cpSync(await buildComponent(join(starter, 'src', 'board.js'), 'board'), join(dir, 'Kanban', 'board.wasm'));
+    cpSync(join(starter, 'site'), join(dir, 'Kanban', 'site'), { recursive: true });
+    const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'tar.exe') : 'tar';
+    if (spawnSync(tar, ['-czf', 'Kanban.tar.gz', 'Kanban'], { cwd: dir }).status !== 0) throw new Error('tar failed');
+    const github = new PrivateGitHub();
+    github.public = true;
+    github.manifest = JSON.parse(readFileSync(join(starter, 'weave.app.json'), 'utf8'));
+    github.bytes = readFileSync(join(dir, 'Kanban.tar.gz'));
+    const server = await github.serve();
+    const martl = person('martl', github, shipped);
+    const ben = person('Ben', github, shipped);
+    // Ben reaches no GitHub at all, as a page doesn't (its download host lets no page read it).
+    ben.githubSetup = { fetch: (async () => new Response('', { status: 403 })) as unknown as Fetch };
+    await martl.createProject({ name: 'Woods' });
+    await martl.setBoard({ project: 'Woods', name: 'finds', title: 'Finds' });
+    await ben.joinSpace(await martl.invite('Woods'));
+    martl.wasmSetup.testHosts = { 'api.github.com': server.port, 'objects.githubusercontent.com': server.port };
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    ben.locateWait = 3_000;
+    // The blobs Ben asks for, from martl (the network's part, in a test).
+    const syncing = setInterval(() => {
+      sync([martl, ben]);
+      for (const hash of ben.blobs.wanted()) if (martl.blobs.has(hash)) ben.blobs.receive(hash, martl.blobs.get(hash)!);
+    }, 100);
+    try {
+      await martl.addService({ shipped: 'github-releases', spaces: ['Woods'] });
+      await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
+      const published = await martl.releaseApp({ project: 'Woods', tag: 'v1.0', repo: 'martl/bot' });
+      expect(published.install?.source?.provider).toBe('github');
+      await martl.addFetcher({ shipped: 'github-checkout', projects: ['Woods'] });
+      await martl.setBoardLens({ space: 'Woods', board: 'finds', from: { project: 'Woods' }, mode: 'require' });
+
+      // martl opens it: his fetcher gets it from GitHub, and his node keeps it as blobs for the project.
+      const mine = await martl.boardView({ space: 'Woods', board: 'finds' });
+      expect(mine.lens?.problem).toBeUndefined();
+      expect(mine.state).toBeDefined();
+
+      // Ben opens it: not from GitHub (he can't), from martl's blobs, checked against the release.
+      await vi.waitFor(() => expect(ben.replica.events().length).toBeGreaterThanOrEqual(martl.replica.events().length), { timeout: 10_000, interval: 100 });
+      const his = await ben.boardView({ space: 'Woods', board: 'finds' });
+      expect(his.lens?.problem).toBeUndefined();
+      expect(his.state).toEqual(mine.state);
+    } finally {
+      clearInterval(syncing);
+      await martl.removeService('github-releases').catch(() => {});
+      await api.close();
+      server.close();
+    }
+  });
 });

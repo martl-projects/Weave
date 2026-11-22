@@ -19,7 +19,7 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { errorToWire } from '@weave/core';
-import { connectDaemon, LENS_CSP, machinePolicy, resolveHome } from '@weave/node/client';
+import { connectDaemon, lensCsp, machinePolicy, resolveHome } from '@weave/node/client';
 import { PHONE_METHODS, serveRemoteOverWebSocket } from '@weave/node';
 import type { RpcMethod } from '@weave/node/client';
 import { RENDERER_METHODS, type RendererMethod } from './src/methods.ts';
@@ -97,7 +97,7 @@ createServer(async (req, res) => {
       if (!client) return json(res, 503, { error: 'no daemon running for this home' });
       const file = await client.lensFile({ release, path: path.join('/') }).catch(() => undefined);
       if (!file) return json(res, 404, { error: 'not found' });
-      res.writeHead(200, { 'content-type': file.type, 'content-security-policy': LENS_CSP, 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' });
+      res.writeHead(200, { 'content-type': file.type, 'content-security-policy': lensCsp(file.net), 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' });
       return void res.end(Buffer.from(file.data, 'base64'));
     }
     if (url.pathname === '/prf.html') {

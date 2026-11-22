@@ -84,6 +84,8 @@ await build({
     'j/[code]': join(import.meta.dirname, 'src', 'functions', 'j.ts'),
     'play/[code]': join(import.meta.dirname, 'src', 'functions', 'play.ts'),
     'play/[code]/manifest': join(import.meta.dirname, 'src', 'functions', 'play-manifest.ts'),
+    // Lenses' and widgets' views with the hosts their member allowed (a lens's "net"): the CSP from the address.
+    'lens-frame': join(import.meta.dirname, 'src', 'functions', 'lens-frame.ts'),
   },
   outdir: functions,
   bundle: true,

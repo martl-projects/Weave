@@ -203,6 +203,8 @@ communities — boards of posts that people join, each post with its own chat:
   community list                         communities you're in
   community show <community>             description and moderators
   community about <community> <text...>  change the description (moderators)
+  community page <community>             its icon and banner (moderators)   [--icon <image>] [--banner <image>] ("" removes one)
+                                                           [--text <description>]
   community invite <community>           print an invite link (any member)
   community join <link>                  join with an invite link
   community members <community>          members and who invited them
@@ -1079,7 +1081,7 @@ const inviteText = (link: string, kind: string) =>
 const joinedText = (s: SpaceInfo) =>
   s.waiting ? `asked to join ${s.kind} ${s.name}: you're in once the person who sent the link lets you in` : `joined ${s.kind} ${s.name} (founded by ${s.founderName ?? s.founder})`;
 const communityText = (c: CommunityInfo) =>
-  [`r/${c.name}`, c.description ? `  ${c.description}` : '', `  moderators: ${c.moderators.map(actor).join(', ')}`, `  ${c.members} member${c.members === 1 ? '' : 's'}`].filter(Boolean).join('\n');
+  [`r/${c.name}`, c.description ? `  ${c.description}` : '', `  moderators: ${c.moderators.map(actor).join(', ')}`, `  ${c.members} member${c.members === 1 ? '' : 's'}`, c.icon || c.banner ? `  images: ${[c.icon && 'icon', c.banner && 'banner'].filter(Boolean).join(', ')}` : ''].filter(Boolean).join('\n');
 
 const threadLine = (t: ThreadInfo) => `${t.short}  ${t.title}  — ${actor(t.by)}, ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'}`;
 const issueLine = (i: IssueInfo) =>
@@ -1593,6 +1595,13 @@ async function main(): Promise<void> {
           const c = await b.setCommunity({ community: ref, description: args.slice(2).join(' ') });
           return out(c, () => communityText(c));
         }
+        case 'page': {
+          if (!ref) break;
+          if (values.icon === undefined && values.banner === undefined && values.text === undefined) throw new Error('what changes? add --icon <image>, --banner <image> ("" removes one) or --text <description>');
+          const image = async (path?: string) => (path === undefined ? undefined : path === '' ? '' : uploadImage(b, path));
+          const c = await b.setCommunity({ community: ref, description: values.text, icon: await image(values.icon), banner: await image(values.banner) });
+          return out(c, () => communityText(c));
+        }
         case 'invite': {
           if (!ref) break;
           const invite = await inviteLink(b, ref);
@@ -1617,7 +1626,7 @@ async function main(): Promise<void> {
           await b.setModerator({ community: ref, who: extra, on: !values.off });
           return out({ moderator: extra, on: !values.off }, () => `${extra} is ${values.off ? 'no longer' : 'now'} a moderator`);
       }
-      throw new Error('usage: weave community create|list|show|about|invite|join|members|remove|moderator — see "weave --help"');
+      throw new Error('usage: weave community create|list|show|about|page|invite|join|members|remove|moderator — see "weave --help"');
     }
 
     case 'posts': {

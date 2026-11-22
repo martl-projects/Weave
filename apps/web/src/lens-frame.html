@@ -9,7 +9,7 @@
     <!--
       A lens's or a widget's view in Weave Web (docs/web-stage2.md, step 8). Weave Web has nowhere to serve a view's files
       from, so this page, served sandboxed (its own CSP: an origin of its own, scripts, no network, no forms), asks the
-      page for them ({weave: 'files'}), gets them ({weave: 'files', files: [{path, type, data}]}), and builds the view's
+      page for them ({weave: 'files', net}), gets them ({weave: 'files', files: [{path, type, data}]}), and builds the view's
       page from them: each file a blob: address here, its index.html written in place of this one. From then on the view
       talks to Weave as anywhere (apps/desktop/src/renderer/lens.tsx), and says {weave: 'loaded'} once it has.
     -->
@@ -81,7 +81,9 @@
             document.body.textContent = String((error && error.message) || error);
           }
         });
-        window.parent.postMessage({ weave: 'files' }, '*');
+        // The hosts in this frame's own address, which its CSP took (functions/lens-frame.ts): the page sends the files
+        // only if they're the ones it allowed, so a view that sent its frame elsewhere gets nothing.
+        window.parent.postMessage({ weave: 'files', net: new URLSearchParams(location.search).get('net') || '' }, '*');
       })();
     </script>
   </body>

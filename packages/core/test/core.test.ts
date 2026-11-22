@@ -130,7 +130,14 @@ describe('delegation', () => {
     expect(replica.authority.grant(forge.did)?.name).toBe('Forge');
 
     const vote = signEvent(forge, replica.store.head(forge.did), { kind: 'weave.vote', body: { yes: true } });
-    expect(replica.ingest(vote)).toEqual({ status: 'rejected', reason: 'signer may not sign weave.vote' });
+    // Not taken, and not thrown away either: its person may have allowed the kind in a delegation still on its way.
+    expect(replica.ingest(vote)).toEqual({ status: 'pending', reason: 'signer may not sign weave.vote' });
+    expect(replica.events((e) => e.kind === 'weave.vote')).toEqual([]);
+    replica.append(alice, delegation(forge.did, 'agent', ['weave.post', 'weave.reply', 'weave.vote'], 'Forge'));
+    expect(replica.events((e) => e.kind === 'weave.vote').map((e) => e.signer)).toEqual([forge.did]);
+    // What a key may not write itself doesn't wait: it's refused, and stays refused.
+    expect(() => replica.append(forge, { kind: 'weave.app', body: {} })).toThrow(/may not sign weave.app/);
+    expect(replica.pendingCount).toBe(0);
   });
 
   it('lets a full device add agents, but not devices; limited keys delegate nothing', () => {

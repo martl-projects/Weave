@@ -1,5 +1,5 @@
 import { mayDo, releaseTextsOf, WeaveError, type TextPackage } from '@weave/core';
-import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf } from '@weave/core';
+import { b64u, canonicalJson, LINK_HOST, type AppSetting, catalogOf, KIND_CATALOG_ENTRY, checkServiceLabel, SERVICE_LABEL, parseManifest, takesRequests, type Builtin, type ServiceOrigin, isBuiltin, PROTOCOL_ARTIFACT_FETCH, boxTo, openBox, type Box, createSubKey, delegation, artifactsOf, releaseById, type Artifact, randomBytes, revocation, sealFor, type AppManifest, type Did, type Json, KIND_SERVICE_PROFILE, KIND_SERVICE_REQUEST, KIND_SERVICE_RESULT, KIND_SERVICE_IN, servicesIn as servicesInSpace, SERVICE_PREFIX, parseContract, profilesOf, requestsOf, serviceName, servicePermissions, contractWords, serviceReads, type ServiceContract, KIND_SERVICE_SETTING, resolveNet, KIND_SERVICE_POLICY, mayAct, parseWho, policiesOf, tightens, whoWords, type ActionWho, KIND_ARTIFACT_ACCESS, KIND_ARTIFACT_WITHDRAWN, artifactAccessOf, artifactKindOf, artifactSourceOf, KIND_ARTIFACT_MIRROR, mirrorsOf, type AppAsset } from '@weave/core';
 import { type ServiceGate, type FeedItem, type ShippedServiceInfo, type ServiceActionInfo, type ServicePanelInfo, type ServiceListInfo, type ServiceInfo, type ArtifactInfo, type ServiceArtifactInfo, type ServiceProfileInfo, type ServiceOriginInfo, type CatalogEntryInfo, type ServiceRequestInfo, type LaunchingWebsiteInfo, type ProgramConsentInfo, type ProgramInfo } from './backend.ts';
 import { readSecretJson, writeSecretJson } from './vault.ts';
 import { ServiceSettings } from './servicesettings.ts';
@@ -14,7 +14,7 @@ import { prepareWasm, programConsent, publicHost, releaseApproval } from './runt
 import { readJson, writeJson } from './home.ts';
 import { imageDigest, imageLabels } from './registry.ts';
 import { fileAssetOf, type ArtifactRef as StoredArtifact, type Located } from './artifacts.ts';
-import { assembleFile, packFolder, storeFiles, textsIn, WEAVE_SOURCE, type PackedRelease } from './weavereleases.ts';
+import { assembleFile, MAX_WEAVE_RELEASE, packFolder, storeFiles, textsIn, WEAVE_SOURCE, type PackedRelease } from './weavereleases.ts';
 import { type StoredSpace } from './spacestore.ts';
 import type { ServicesHost, StoredService, StoredRoom, Handover, Decoded } from './node.ts';
 import type { Website } from './website.ts';
@@ -1503,6 +1503,38 @@ export class Services {
   /** A folder's files kept here as encrypted blobs (at most 32 MB): each one's size, SHA-256 and blobs, to publish. */
   keepReleaseFiles(folder: PackedRelease): Json {
     return storeFiles(folder.files, (data) => void this.h.blobs.put(data)) as unknown as Json;
+  }
+
+  /**
+   * A release file this node fetched from its provider and checked, kept as blobs and said so in its project (a
+   * weave.artifact.mirror), unless a member did already: so a page (Weave Web), which can't fetch from GitHub, puts it
+   * together from whoever holds the blobs. Only files a page would fetch (at most MAX_WEAVE_RELEASE).
+   */
+  async mirrorRelease(a: StoredArtifact, platform: string, asset: AppAsset, bytes: Uint8Array): Promise<void> {
+    const project = this.h.spaces.get(a.project);
+    if (!project || bytes.length > MAX_WEAVE_RELEASE || artifactSourceOf(a.manifest)?.provider === WEAVE_SOURCE) return;
+    const members = this.h.state(project).members;
+    if (mirrorsOf(this.h.entries(project), (did) => members.has(did), a.id, platform).some((m) => m.sha256 === asset.sha256)) return;
+    const kept = storeFiles({ [platform]: { file: asset.file, bytes } }, (data) => void this.h.blobs.put(data))[platform]!;
+    await this.h.publish({ kind: KIND_ARTIFACT_MIRROR, body: { release: a.id, platform, file: kept.file, size: kept.size, sha256: kept.sha256, parts: kept.parts } as unknown as Json, space: project.id });
+  }
+
+  /** A release file from a member's mirror in its project: its blobs, checked against what the release names. */
+  async fromMirror(a: StoredArtifact, platform: string): Promise<Located | undefined> {
+    const project = this.h.spaces.get(a.project);
+    const asset = a.manifest.install?.assets?.[platform];
+    if (!project || !asset) return undefined;
+    const members = this.h.state(project).members;
+    for (const m of mirrorsOf(this.h.entries(project), (did) => members.has(did), a.id, platform)) {
+      if (m.sha256 !== asset.sha256 || (asset.size && m.size !== asset.size)) continue;
+      try {
+        const body = await assembleFile(a.manifest, { ...asset, size: m.size, parts: m.parts }, (hash) => this.h.blobs.fetch(hash, (hashes) => this.h.wantBlobs(hashes), this.blobWait));
+        return { body, by: 'Weave, from a member who fetched it', mirrored: true };
+      } catch {
+        // Nobody holding it is online, or it doesn't match: the next one, or its provider.
+      }
+    }
+    return undefined;
   }
 
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */

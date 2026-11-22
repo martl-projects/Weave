@@ -26,6 +26,8 @@ export interface Located {
   body?: Uint8Array;
   /** The provider, for messages. */
   by: string;
+  /** The body came from a mirror's blobs (a member's copy), not from its provider: nothing to keep again. */
+  mirrored?: boolean;
 }
 
 /** A release as a service keeps it: pinned, with its manifest as released. */
@@ -61,6 +63,13 @@ export class Releases {
   readonly #registryFetch: () => typeof fetch;
   /** The fetchers its person added: they fetch what a provider grants. */
   fetchers?: Fetchers;
+  /**
+   * Heard after a pure component's release file came from its provider (not from blobs) and matched: the node keeps
+   * it as blobs and says so in its project (a mirror), so a page can put it together too (services.ts).
+   */
+  fetched?: (a: ArtifactRef, platform: string, asset: AppAsset, bytes: Uint8Array) => void;
+  /** A release file from a member's mirror (services.ts): where its provider's way fails. */
+  fromMirror?: (a: ArtifactRef, platform: string) => Promise<Located | undefined>;
 
   /**
    * `services`: the folder services keep their files in; `locate`: asks a provider in the release's project;
@@ -76,12 +85,27 @@ export class Releases {
   }
 
   /** The release file: fetched by the fetcher its provider names, with what it granted, or at the address it gave. */
-  async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string }> {
+  /**
+   * The release file: from its provider, or (that failing: a page reaches no GitHub download, a provider is offline)
+   * from a member's mirror in its project. Either way checked against the release by whoever reads it.
+   */
+  async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string; mirrored?: boolean }> {
+    try {
+      return await this.#fromProvider(a, asset);
+    } catch (error) {
+      const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
+      const mirrored = await this.fromMirror?.(a, platform).catch(() => undefined);
+      if (!mirrored?.body) throw error;
+      return { body: new Blob([mirrored.body as Uint8Array<ArrayBuffer>]).stream(), size: mirrored.body.length, from: mirrored.by, mirrored: true };
+    }
+  }
+
+  async #fromProvider(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string; mirrored?: boolean }> {
     // Asked for the file it is: this computer's build, the wasm one, or the file itself.
     const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? platformKey();
     const located = await this.#locate(a, platform);
     if (!located) throw new Error(`nothing in its project hands out ${a.manifest.name} ${a.tag}: its maintainers add a provider (GitHub releases)`);
-    if (located.body) return { body: new Blob([located.body as Uint8Array<ArrayBuffer>]).stream(), size: located.body.length, from: located.by };
+    if (located.body) return { body: new Blob([located.body as Uint8Array<ArrayBuffer>]).stream(), size: located.body.length, from: located.by, ...(located.mirrored ? { mirrored: true } : {}) };
     if (located.fetcher) {
       // Its provider's fetcher, with what the provider granted: theirs to fetch, mine to check (the digest).
       if (!this.fetchers) throw new Error(`${located.by} hands it out through a fetcher, and this node runs none`);
@@ -125,6 +149,14 @@ export class Releases {
     for (const chunk of chunks) {
       out.set(chunk, at);
       at += chunk.byteLength;
+    }
+    if (!download.mirrored) {
+      const platform = Object.entries(a.manifest.install?.assets ?? {}).find(([, x]) => x.file === asset.file)?.[0] ?? 'wasm';
+      try {
+        this.fetched?.(a, platform, asset, out);
+      } catch {
+        // Keeping a copy for others is a kindness: the file is here either way.
+      }
     }
     return out;
   }

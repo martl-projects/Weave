@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, openSync, readSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import type { Did } from '@weave/core';
@@ -14,7 +15,8 @@ import type { Did } from '@weave/core';
  *   blocks: 4 bytes length, 1 byte last (0|1), 12 bytes nonce, the sealed block (gzip of JSON lines) with its tag
  *
  * Each block is sealed with ChaCha20-Poly1305 under the backup key, bound to the head, its number and whether it is
- * the last: a file cut short, reordered or put together from two backups doesn't open.
+ * the last: a file cut short, reordered or put together from two backups doesn't open. Sealed with @noble/ciphers, not
+ * node:crypto: the app runs its node on Electron's Node, whose BoringSSL has no chacha20-poly1305 ("Unknown cipher").
  */
 
 const MAGIC = 'WEAVE-BACKUP-1\n';
@@ -64,9 +66,7 @@ export function writeBackup(file: string, key: Uint8Array, head: BackupHead, lin
     let index = 0;
     const block = (text: string, last: boolean) => {
       const nonce = randomBytes(12);
-      const cipher = createCipheriv('chacha20-poly1305', key, nonce, { authTagLength: 16 });
-      cipher.setAAD(aad(headLine, index++, last));
-      const sealed = Buffer.concat([cipher.update(gzipSync(Buffer.from(text, 'utf8'))), cipher.final(), cipher.getAuthTag()]);
+      const sealed = Buffer.from(chacha20poly1305(key, nonce, aad(headLine, index++, last)).encrypt(gzipSync(Buffer.from(text, 'utf8'))));
       const frame = Buffer.alloc(5);
       frame.writeUInt32BE(sealed.length, 0);
       frame.writeUInt8(last ? 1 : 0, 4);
@@ -141,12 +141,9 @@ export function* readBackup(file: string, key: Uint8Array): Generator<string, Ba
       const sealed = Buffer.alloc(length);
       if (readSync(fd, sealed, 0, length, at + 17) !== length) throw new Error('this backup is cut short: it ends before its last block');
       at += 17 + length;
-      const decipher = createDecipheriv('chacha20-poly1305', key, frame.subarray(5, 17), { authTagLength: 16 });
-      decipher.setAAD(aad(line, index, last));
-      decipher.setAuthTag(sealed.subarray(length - 16));
-      let plain: Buffer;
+      let plain: Uint8Array;
       try {
-        plain = Buffer.concat([decipher.update(sealed.subarray(0, length - 16)), decipher.final()]);
+        plain = chacha20poly1305(key, frame.subarray(5, 17), aad(line, index, last)).decrypt(sealed);
       } catch {
         throw new Error(index === 0 ? "these recovery words don't open this backup (it was made by another identity, or the file was changed)" : 'this backup was changed or damaged: a block of it does not open');
       }

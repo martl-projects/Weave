@@ -116,11 +116,27 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     const turn = new Promise<void>((resolve) => void navigator.locks.request('weave-node', () => (resolve(), new Promise(() => {}))));
     const locks = await navigator.locks.query();
     if (locks.pending?.some((lock) => lock.name === 'weave-node')) self.postMessage({ event: 'waiting' });
+    // Said to the page as it goes: a start that hangs says where (app.ts).
+    const stage = (detail: string) => self.postMessage({ event: 'status', state: 'start', detail });
+    stage('waiting for its turn (another tab or window of Weave may have the account)');
     await turn;
+    stage('the database in this browser opens');
     const db = await openWasmDatabase('weave.db');
-    useFiles(db);
-    useStore(db);
+    try {
+      useFiles(db);
+      useStore(db);
+    } catch (error) {
+      // A database that can't be read (damaged): let go of it, so the page can offer to drop this copy (forget).
+      try {
+        db.close();
+      } catch {
+        // it was never quite open
+      }
+      throw error;
+    }
+    stage("Weave's own services load");
     await shipped();
+    stage("the account's files are read");
     account = await import('./account.ts');
     allowed = webMethods((await import('@weave/node')).PHONE_METHODS);
     return account.lockState(HOME);

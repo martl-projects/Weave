@@ -3,7 +3,7 @@ import { join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen, shell, Tray } from 'electron';
 import { errorToWire } from '@weave/core';
-import { LENS_CSP, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
+import { lensCsp, machinePolicy, resolveHome, type Backend } from '@weave/node/client';
 import { newSession, openSession, pasteBack, rememberFront, showSession, startPasteHelper, watchFront, type Delivered, type Front } from './claudeapp.ts';
 import { hasCommand, macMenu } from './command.ts';
 import { createIdentity, enrollIdentity, ensureDaemon, hasIdentity, restartDaemon, restoreIdentity, stopOwnDaemon, type RunningDaemon } from './daemon.ts';
@@ -630,7 +630,7 @@ async function createWindow(): Promise<void> {
 
 /**
  * Boards' client services' views: weave-lens://lens/<release>/<file>, each file from the node (lensFile), shown
- * sandboxed in the board view's frame (LENS_CSP). Standard, so a view's relative addresses resolve.
+ * sandboxed in the board view's frame (lensCsp: no network, or the hosts its member allowed). Standard, so a view's relative addresses resolve.
  */
 protocol.registerSchemesAsPrivileged([{ scheme: 'weave-lens', privileges: { standard: true, secure: true } }]);
 
@@ -639,7 +639,7 @@ async function lensResponse(request: Request): Promise<Response> {
   if (request.method !== 'GET' || !daemon || !release) return new Response('Not here', { status: 404 });
   try {
     const file = await daemon.client.lensFile({ release, path: path.join('/') });
-    return new Response(Buffer.from(file.data, 'base64'), { headers: { 'content-type': file.type, 'content-security-policy': LENS_CSP, 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' } });
+    return new Response(Buffer.from(file.data, 'base64'), { headers: { 'content-type': file.type, 'content-security-policy': lensCsp(file.net), 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache' } });
   } catch (error) {
     return new Response((error as Error).message, { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
   }

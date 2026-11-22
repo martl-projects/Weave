@@ -10,7 +10,9 @@ import type { Did } from '@weave/core';
  *
  *   plans/<code>.json   {code, by, sealed, check, preview?, uses?, used, expires?, revoked?, created}
  *   plans/<code>.png    the preview's picture
- *   planners.json       the identities the operator lets put plans (weave-storage planner <did>)
+ *   planners.json       the identities the operator lets put plans (weave-storage planner <did>); "*" lets anyone,
+ *                       within limits: a few links at once, and a few new accounts a day through their links
+ *   accounts.json       when each open planner's links last made accounts (for that limit)
  *
  * Taking a plan counts a use and, for someone without an account, hands out a one-time account invitation: the link is
  * the invitation, so the operator no longer makes them by hand. To take one, a client shows the key's check (a hash
@@ -24,6 +26,12 @@ const MAX_SEALED = 64 * 1024;
 export const MAX_PREVIEW_IMAGE = 300 * 1024;
 const MAX_USES = 100_000;
 const MAX_PLANS_PER_PLANNER = 500;
+/** In planners.json: anyone may put plans, within the limits below (an open storage node). */
+export const ANYONE = '*';
+/** An open planner (not named by the operator): links at once, and accounts made through them a day. */
+const OPEN_PLANS = 20;
+const OPEN_ACCOUNTS_PER_DAY = 20;
+const DAY_MS = 86_400_000;
 const MAX_HELLO = 4000;
 const MAX_HELLOS = 1000;
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -110,8 +118,8 @@ export class PlanStore {
     mkdirSync(this.#dir, { recursive: true });
   }
 
-  /** Let an identity put plans here (the operator's word, from another process while the node runs). */
-  static allowIn(dir: string, did: Did, on = true): Did[] {
+  /** Let an identity put plans here, or anyone (ANYONE): the operator's word, from another process while the node runs. */
+  static allowIn(dir: string, did: Did | typeof ANYONE, on = true): Array<Did | typeof ANYONE> {
     mkdirSync(dir, { recursive: true });
     const now = new Set(PlanStore.plannersIn(dir));
     if (on) now.add(did);
@@ -120,13 +128,32 @@ export class PlanStore {
     return [...now];
   }
 
-  static plannersIn(dir: string): Did[] {
+  static plannersIn(dir: string): Array<Did | typeof ANYONE> {
     const path = join(dir, 'planners.json');
-    return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Did[]) : [];
+    return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Array<Did | typeof ANYONE>) : [];
+  }
+
+  /** Named by the operator: no limits beyond the node's own. */
+  #named(did: Did): boolean {
+    return PlanStore.plannersIn(this.#root).includes(did);
   }
 
   mayPlan(did: Did): boolean {
-    return PlanStore.plannersIn(this.#root).includes(did);
+    const planners = PlanStore.plannersIn(this.#root);
+    return planners.includes(did) || planners.includes(ANYONE);
+  }
+
+  /** Accounts made through an open planner's links in the last day; `add` counts one more. */
+  #accountsToday(by: Did, add = false): number {
+    const path = join(this.#root, 'accounts.json');
+    const all = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, string[]>) : {};
+    const since = Date.now() - DAY_MS;
+    const recent = (all[by] ?? []).filter((t) => Date.parse(t) > since);
+    if (add) {
+      all[by] = [...recent, new Date().toISOString()];
+      writeJson(path, all);
+    }
+    return recent.length;
   }
 
   #path(code: string): string {
@@ -158,7 +185,8 @@ export class PlanStore {
     if (uses !== undefined && (!Number.isInteger(uses) || uses < 1 || uses > MAX_USES)) throw new Error(`uses are a whole number from 1 to ${MAX_USES}`);
     const expires = typeof input.expires === 'string' && !Number.isNaN(Date.parse(input.expires)) ? new Date(input.expires).toISOString() : undefined;
     if (input.expires !== undefined && input.expires !== null && !expires) throw new Error('expires is a date');
-    if (this.#mine(by).filter((p) => !p.revoked).length >= MAX_PLANS_PER_PLANNER) throw new Error(`at most ${MAX_PLANS_PER_PLANNER} links at once: revoke some first`);
+    const most = this.#named(by) ? MAX_PLANS_PER_PLANNER : OPEN_PLANS;
+    if (this.#mine(by).filter((p) => this.#live(p)).length >= most) throw new Error(`at most ${most} links at once here: take some back first`);
     let image: Buffer | undefined;
     if (input.image !== undefined && input.image !== null) {
       if (typeof input.image !== 'string') throw new Error('a preview picture is a PNG, base64');
@@ -194,6 +222,11 @@ export class PlanStore {
     if (!plan || !this.#live(plan)) throw new Error('this invite link no longer works');
     const given = Buffer.from(typeof check === 'string' ? hashOf(check) : '');
     if (given.length !== plan.check.length || !timingSafeEqual(given, Buffer.from(plan.check))) throw new Error('that is not this link');
+    // An open planner's links make a few accounts a day: enough for friends, not for filling the node.
+    if (account && !this.#named(plan.by)) {
+      if (this.#accountsToday(plan.by) >= OPEN_ACCOUNTS_PER_DAY) throw new Error('this link has made all the new accounts it may today: try again tomorrow, or open it with the Weave you have');
+      this.#accountsToday(plan.by, true);
+    }
     plan.used++;
     writeJson(this.#path(plan.code), plan);
     return account ? { invite: invite() } : {};

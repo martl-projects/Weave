@@ -5,7 +5,8 @@
 //   weave-storage invite    a new invitation, for one account, once: --dir, --origin for the link; --accounts 20 for one
 //                           link that 20 people can use
 //   weave-storage invites   the invitations not used up yet
-//   weave-storage planner <did> [--off]   let a Weave identity make onboarding links here (or no longer); no did: the list
+//   weave-storage planner <did> [--off]   let a Weave identity make onboarding links here (or no longer); * lets anyone,
+//                           within limits; no did: the list
 //
 // Its folder is WEAVE_STORAGE_DIR, or --dir. TLS is a proxy's in front of it (see deploy/Caddyfile): --behind-proxy
 // then counts connections by the address the proxy names. Setting one up: docs/web-deploy.md.
@@ -46,11 +47,12 @@ if (command === 'invite') {
   for (const { id, left } of shared) console.log(`shared ${id}: ${left} left`);
 } else if (command === 'planner') {
   const did = positionals[1];
-  if (did && !/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(did)) {
-    console.error('a planner is a Weave identity: did:key:z…');
+  // "*": anyone may make links here, within the limits open planners have (storageplans.ts).
+  if (did && did !== '*' && !/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(did)) {
+    console.error('a planner is a Weave identity (did:key:z…), or * for anyone');
     process.exit(1);
   }
-  const list = did ? PlanStore.allowIn(resolve(dir), did as `did:key:z${string}`, !values.off) : PlanStore.plannersIn(resolve(dir));
+  const list = did ? PlanStore.allowIn(resolve(dir), did as `did:key:z${string}` | '*', !values.off) : PlanStore.plannersIn(resolve(dir));
   console.log(list.length ? list.join('\n') : '(nobody makes onboarding links here yet)');
 } else if (command === 'run') {
   if (!values.origin.length) {

@@ -26,7 +26,8 @@ import { playManifest, playTags } from '@weave/core';
 import { keepReconciling, linkHandovers, originMatches, postPush, relayUpgrade, StorageNode, swarmNetwork, textSocket, WeaveNode, type StorageOptions, PlanStore, previewTags, parseBootstrap } from '@weave/node';
 import HyperDHT from 'hyperdht';
 import { WebSocketServer } from 'ws';
-import { buildRooms, buildServices, buildWeb, lensFrameCsp } from './build.ts';
+import { buildRooms, buildServices, buildWeb } from './build.ts';
+import { frameHosts, lensFrameCspFor } from './src/lensframecsp.ts';
 import { roomsCsp } from './src/rooms/csp.ts';
 
 const port = Number(process.env.PORT ?? 8790);
@@ -192,8 +193,8 @@ const server = createServer(async (req, res) => {
     return res.end(readFileSync(join(dist, 'index.html'), 'utf8').replace('</head>', `<meta name="weave-invite" content="${storage.invite()}"></head>`));
   }
   const file = url.pathname.slice(1);
-  // Lenses' and widgets' views, with their own CSP as on Pages (pages.ts).
-  if (file === 'lens-frame' || file === 'lens-frame.html') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': lensFrameCsp }).end(readFileSync(join(dist, 'lens-frame.html')));
+  // Lenses' and widgets' views, with their own CSP as on Pages (pages.ts, functions/lens-frame.ts): the hosts in the address.
+  if (file === 'lens-frame' || file === 'lens-frame.html') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': lensFrameCspFor(frameHosts(url)) }).end(readFileSync(join(dist, 'lens-frame.html')));
   if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png', 'lens-transpile.js', 'js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
   if (file.includes('..') || !existsSync(join(dist, file))) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });

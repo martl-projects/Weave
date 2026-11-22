@@ -162,7 +162,9 @@ describe('v2 events in the replica', () => {
     replica.append2(laptop, { kind: 'weave.delegate', body: { subject: agent.did, role: 'agent', permissions: ['weave.post'], name: 'helper' } });
     expect(replica.pendingCount).toBe(0);
     expect(replica.events((r) => r.signer === agent.did)).toHaveLength(1);
-    expect(replica.ingest({ e: signContentEventV2(agent, { n: 2, kind: 'weave.msg', space: 'public', body: {} }).event })).toMatchObject({ status: 'rejected' });
+    // A kind it wasn't allowed: not taken, but kept waiting, since a newer delegation allowing it may still be on its way.
+    expect(replica.ingest({ e: signContentEventV2(agent, { n: 2, kind: 'weave.msg', space: 'public', body: {} }).event })).toEqual({ status: 'pending', reason: 'signer may not sign weave.msg' });
+    expect(replica.events((r) => r.signer === agent.did)).toHaveLength(1);
 
     const restarted = new Replica(replica.store);
     expect(restarted.authority.grant(agent.did)?.name).toBe('helper');

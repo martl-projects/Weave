@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { build, type Plugin } from 'esbuild';
 import { pinnedRelease, pins } from '../../packages/shipped/pinned.ts';
+import { lensFrameCspFor } from './src/lensframecsp.ts';
 
 /*
  * The real node, in a Worker. WeaveNode runs as it is: what it asks of its host is answered by src/host/, here, at the
@@ -138,12 +139,8 @@ export async function buildRooms(dist: string, options: { web: string; storage: 
  */
 export const framesFrom = (rooms = 'https://{label}.weave-rooms.net'): string => `'self' ${rooms.replace('{label}', '*')}`;
 
-/**
- * lens-frame.html's own CSP, in place of the page's: sandboxed (an origin of its own, scripts only, so nothing of the
- * page's storage or passkeys), framed by the page only, no network; the view's files are blob: addresses it makes.
- * As LENS_CSP on a computer, with blob: for what it builds.
- */
-export const lensFrameCsp = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline' blob:; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
+/** lens-frame.html's own CSP without a network (src/lensframecsp.ts; with a lens's allowed hosts, functions/lens-frame.ts). */
+export const lensFrameCsp = lensFrameCspFor();
 
 /**
  * service.js's own CSP, in place of the page's: the same, and blob: scripts, the glue it transpiles for a release's

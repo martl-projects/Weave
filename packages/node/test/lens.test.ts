@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVICE_LABEL } from '@weave/core';
-import { closeOpenStores, WeaveNode, type Fetch } from '../src/index.ts';
+import { closeOpenStores, WeaveNode, type FeedItem, type Fetch } from '../src/index.ts';
 import { buildComponent } from './helpers/components.ts';
 import { registry } from './helpers/registry.ts';
 
@@ -32,6 +32,8 @@ const manifest = JSON.parse(readFileSync(join(STARTER, 'weave.app.json'), 'utf8'
 
 /** The starter's image: its component and its site in one layer. */
 let fetchImpl: Fetch;
+/** The starter again, asking for a network for its site, in several versions (its own registry: a test swaps fetchImpl). */
+let netImages: Fetch;
 beforeAll(async () => {
   const component = await buildComponent(join(STARTER, 'src', 'board.js'), 'board');
   const dir = tempDir('weave-lens-image-');
@@ -40,7 +42,21 @@ beforeAll(async () => {
   const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
   const out = join(tempDir('weave-lens-layer-'), 'layer.tar.gz');
   if (spawnSync(tar, ['-czf', out, '-C', dir, '.']).status !== 0) throw new Error('tar failed');
+  // The same, asking for a network for its site ("net"): one host, then one more.
+  const withNet = (net: string[]) => JSON.stringify({ ...manifest, client: { ...(manifest.client as object), net } });
+  const withLocation = (location: string) => JSON.stringify({ ...manifest, client: { ...(manifest.client as object), location } });
   fetchImpl = registry({ 'kanban:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(manifest) }, wasm: readFileSync(out) } });
+  netImages = registry({
+    'kanban:1.0': { labels: { [SERVICE_LABEL]: JSON.stringify(manifest) }, wasm: readFileSync(out) },
+    'kanban:2.0': { labels: { [SERVICE_LABEL]: withNet(['api.open-meteo.com']) }, wasm: readFileSync(out) },
+    'kanban:2.1': { labels: { [SERVICE_LABEL]: withNet(['api.open-meteo.com']) }, wasm: readFileSync(out) },
+    'kanban:3.0': { labels: { [SERVICE_LABEL]: withNet(['api.open-meteo.com', '*.tile.openstreetmap.org']) }, wasm: readFileSync(out) },
+    // Asking where its member is: roughly, roughly again, then exactly.
+    'kanban:4.0': { labels: { [SERVICE_LABEL]: withLocation('rough') }, wasm: readFileSync(out) },
+    'kanban:4.1': { labels: { [SERVICE_LABEL]: withLocation('rough') }, wasm: readFileSync(out) },
+    'kanban:5.0': { labels: { [SERVICE_LABEL]: withLocation('exact') }, wasm: readFileSync(out) },
+    'kanban:6.0': { labels: { [SERVICE_LABEL]: JSON.stringify({ ...manifest, client: { ...(manifest.client as object), tilt: true } }) }, wasm: readFileSync(out) },
+  });
 }, 180_000);
 
 function person(name: string): WeaveNode {
@@ -121,6 +137,61 @@ describe('client services', { timeout: 120_000 }, () => {
     expect(await ola.boardView({ space: 'Team', board: 'tasks', use: true })).not.toHaveProperty('lens');
   });
 
+  it('lets a person allow their agent a lens’s own kinds: asked for, named by its lens, and taken away again', async () => {
+    const martl = person('martl');
+    await martl.createProject({ name: 'Crew' });
+    await martl.setBoard({ project: 'Crew', name: 'tasks', title: 'Tasks' });
+    await martl.addAgent('claude', ['weave.post']);
+    // No board is shown by a lens yet: its kinds are nobody's to ask for.
+    expect(await martl.lensKinds()).toEqual([]);
+    await expect(martl.requestPermission({ as: 'claude', kinds: ['kanban.move'] })).rejects.toThrow(/can't ask for kanban\.move: .*\(none here yet\)/);
+
+    await martl.releaseService({ project: 'Crew', image: 'ghcr.io/martl/kanban:1.0' });
+    const view = await martl.setBoardLens({ space: 'Crew', board: 'tasks', from: { project: 'Crew' }, mode: 'require' });
+    // The board says what its lens writes, and the node what a person may allow beside Weave's kinds (never weave.*).
+    expect(view.lens?.writes).toEqual(['weave.post', 'kanban.move']);
+    expect(await martl.lensKinds()).toEqual([{ kind: 'kanban.move', lenses: ['Kanban'] }]);
+
+    // The agent adds a card (it may post), but may not move it.
+    const added = await martl.boardAction({ space: 'Crew', board: 'tasks', action: 'add', input: { title: 'Cut the video' }, as: 'claude' });
+    const card = (added.view.state as Kanban).columns[0].cards[0];
+    const move = () => martl.boardAction({ space: 'Crew', board: 'tasks', action: 'move', input: { post: card.id, column: 'Doing' }, as: 'claude' });
+    await expect(move()).rejects.toThrow(/agent "claude" may not sign kanban\.move; its person can allow it in Keys & devices/);
+
+    // Still refused: everything, a family of a lens's kinds, and kinds no lens here writes.
+    for (const kinds of [['*'], ['kanban.*'], ['kanban.move', 'evil.thing'], ['Kanban.Move']]) {
+      await expect(martl.requestPermission({ as: 'claude', kinds })).rejects.toThrow(/can't ask for .*\(here: kanban\.move\)/);
+    }
+    expect(await martl.permissionRequests()).toEqual([]);
+
+    // It asks for the lens's kind: the request and its notice name the lens.
+    const seen: FeedItem[] = [];
+    const watching = new AbortController();
+    void martl.watch((item) => seen.push(item), watching.signal);
+    await new Promise((r) => setTimeout(r, 50));
+    const asked = await martl.requestPermission({ as: 'claude', kinds: ['kanban.move', 'weave.post', 'weave.vote'], reason: 'to move the cards I work on' });
+    await new Promise((r) => setTimeout(r, 50));
+    watching.abort();
+    expect(asked).toMatchObject({ agent: 'claude', kinds: ['kanban.move', 'weave.vote'], lenses: { 'kanban.move': ['Kanban'] }, state: 'pending' });
+    expect(seen.find((i) => i.notice?.type === 'permission')?.notice).toMatchObject({
+      text: 'To sign kanban.move (Kanban), weave.vote: “to move the cards I work on”',
+      values: { agent: 'claude', kinds: 'kanban.move (Kanban), weave.vote' },
+    });
+
+    // Allowed: the agent moves the card, signed with its own key.
+    await martl.answerPermission({ id: asked.id, allow: true });
+    expect((await martl.whoami()).agents.find((a) => a.name === 'claude')!.permissions).toEqual(['weave.post', 'kanban.move', 'weave.vote']);
+    expect((await martl.requestPermission({ as: 'claude', kinds: ['kanban.move'] })).state).toBe('allowed');
+    const moved = await move();
+    expect(moved.published).toMatchObject([{ kind: 'kanban.move', author: martl.identity.author, body: { target: card.id, column: 'Doing' } }]);
+    expect(moved.published[0].signer).not.toBe(martl.identity.did);
+    expect((moved.view.state as Kanban).columns.map((c) => c.cards.map((x) => x.title))).toEqual([[], ['Cut the video'], []]);
+
+    // Taken away again (the dialog in Keys & devices saves what stays ticked): refused as before.
+    await martl.updateAgent({ name: 'claude', permissions: ['weave.post', 'weave.vote'] });
+    await expect(move()).rejects.toThrow(/may not sign kanban\.move/);
+  });
+
   it('publishes only what its contract and the board allow, and nothing of a refused action', async () => {
     const component = await buildComponent(join(import.meta.dirname, 'helpers', 'wasm-lens-evil.js'), 'board');
     const dir = tempDir('weave-lens-evil-');
@@ -146,6 +217,85 @@ describe('client services', { timeout: 120_000 }, () => {
     await expect(act('half')).rejects.toThrow(/may not propose evil.other/);
     await expect(act('junk')).rejects.toThrow(/isn't JSON/);
     expect(count()).toBe(before);
+  });
+
+  it('lets a site reach the hosts it names only once its member allowed exactly those', async () => {
+    const martl = person('martl');
+    const ola = person('Ola');
+    for (const node of [martl, ola]) node.containerSetup = { ...node.containerSetup, fetch: netImages };
+    await martl.createProject({ name: 'Woods' });
+    await martl.setBoard({ project: 'Woods', name: 'finds', title: 'Finds' });
+    await ola.joinSpace(await martl.invite('Woods'));
+    const pin = async (tag: string) => {
+      await martl.releaseService({ project: 'Woods', image: `ghcr.io/martl/kanban:${tag}` });
+      await martl.setBoardLens({ space: 'Woods', board: 'finds', from: { project: 'Woods', tag }, mode: 'require' });
+      sync([martl, ola]);
+      return (await ola.boardView({ space: 'Woods', board: 'finds' })).lens!;
+    };
+
+    // Asked for, not allowed: its files come without hosts, so its frame reaches nothing.
+    let lens = await pin('2.0');
+    expect(lens.net).toEqual({ hosts: ['api.open-meteo.com'], allowed: false });
+    expect(await ola.lensFile({ release: lens.release, path: '' })).not.toHaveProperty('net');
+    expect(await ola.lensNet({ release: lens.release })).toEqual({ hosts: ['api.open-meteo.com'], allowed: false });
+
+    // Allowed by Ola, on Ola's node only.
+    expect(await ola.allowLensNet({ release: lens.release })).toEqual({ hosts: ['api.open-meteo.com'], allowed: true });
+    expect((await ola.lensFile({ release: lens.release, path: '' })).net).toEqual(['api.open-meteo.com']);
+    expect((await martl.boardView({ space: 'Woods', board: 'finds' })).lens!.net!.allowed).toBe(false);
+
+    // A new version asking for the same hosts keeps the yes; one asking for one more asks again.
+    lens = await pin('2.1');
+    expect(lens.net!.allowed).toBe(true);
+    lens = await pin('3.0');
+    expect(lens.net).toEqual({ hosts: ['api.open-meteo.com', '*.tile.openstreetmap.org'], allowed: false });
+    expect(await ola.lensFile({ release: lens.release, path: '' })).not.toHaveProperty('net');
+
+    // Taken back.
+    await ola.allowLensNet({ release: lens.release });
+    expect((await ola.lensFile({ release: lens.release, path: '' })).net).toEqual(['api.open-meteo.com', '*.tile.openstreetmap.org']);
+    expect((await ola.allowLensNet({ release: lens.release, off: true })).allowed).toBe(false);
+    expect(await ola.lensFile({ release: lens.release, path: '' })).not.toHaveProperty('net');
+
+    // A lens without a network has nothing to allow.
+    lens = await pin('1.0');
+    expect(lens).not.toHaveProperty('net');
+    await expect(ola.allowLensNet({ release: lens.release })).rejects.toThrow(/nothing to allow/);
+  });
+
+  it('lets a site know where its member is only once they allowed it, as closely as it asks', async () => {
+    const martl = person('martl');
+    const ola = person('Ola');
+    for (const node of [martl, ola]) node.containerSetup = { ...node.containerSetup, fetch: netImages };
+    await martl.createProject({ name: 'Walks' });
+    await martl.setBoard({ project: 'Walks', name: 'finds', title: 'Finds' });
+    await ola.joinSpace(await martl.invite('Walks'));
+    const pin = async (tag: string) => {
+      await martl.releaseService({ project: 'Walks', image: `ghcr.io/martl/kanban:${tag}` });
+      await martl.setBoardLens({ space: 'Walks', board: 'finds', from: { project: 'Walks', tag }, mode: 'require' });
+      sync([martl, ola]);
+      return (await ola.boardView({ space: 'Walks', board: 'finds' })).lens!;
+    };
+
+    let lens = await pin('4.0');
+    expect(lens.location).toEqual({ asks: 'rough', allowed: false });
+    expect(await ola.allowLensLocation({ release: lens.release })).toEqual({ asks: 'rough', allowed: true });
+    expect((await martl.boardView({ space: 'Walks', board: 'finds' })).lens!.location!.allowed).toBe(false);
+    // The same wish in a new version keeps the yes; asking for exact asks again.
+    lens = await pin('4.1');
+    expect(lens.location!.allowed).toBe(true);
+    lens = await pin('5.0');
+    expect(lens.location).toEqual({ asks: 'exact', allowed: false });
+    await ola.allowLensLocation({ release: lens.release });
+    expect((await ola.allowLensLocation({ release: lens.release, off: true })).allowed).toBe(false);
+    // A lens that doesn't ask has nothing to allow.
+    lens = await pin('1.0');
+    expect(lens).not.toHaveProperty('location');
+    await expect(ola.allowLensLocation({ release: lens.release })).rejects.toThrow(/nothing to allow/);
+    // A lens whose manifest says "tilt" may follow how the device is held: its view says so, with nothing to allow.
+    expect(lens).not.toHaveProperty('tilt');
+    lens = await pin('6.0');
+    expect(lens.tilt).toBe(true);
   });
 
   it('refuses a release that isn’t a client service', async () => {
