@@ -162,7 +162,7 @@ export function ShareBar({ route, spaces }: { route: string[]; spaces: SpaceInfo
  * Share mode's marks: the target where the link leads, the check wherever it adds them. The icons' bitmaps; the Clean look
  * draws them as round marks in its accent color instead (clean.css).
  */
-export function ShareMark({ kind, title }: { kind: 'target' | 'check'; title?: string }) {
+export function ShareMark({ kind, title }: { kind: 'target' | 'check' | 'box'; title?: string }) {
   return (
     <span className={`share-mark share-mark-${kind}`} title={title} aria-label={title}>
       <Icon name={kind} />
@@ -170,7 +170,7 @@ export function ShareMark({ kind, title }: { kind: 'target' | 'check'; title?: s
   );
 }
 
-/** The + beside a place in the tree while sharing. */
+/** The checkbox beside a place in the tree while sharing: checked, the link lets them in there too. */
 export function ShareAdd({ space, route }: { space: SpaceInfo; route: string[] }) {
   const { t } = useTexts();
   const share = useShare();
@@ -183,16 +183,8 @@ export function ShareAdd({ space, route }: { space: SpaceInfo; route: string[] }
       aria-pressed={added}
       onClick={(e) => (e.preventDefault(), toggleAlso(space.id))}
     >
-      {added ? (
-        <>
-          <span className="share-yes">
-            <ShareMark kind="check" />
-          </span>
-          <span className="share-no">×</span>
-        </>
-      ) : (
-        '+'
-      )}
+      {/* A Windows 95 checkbox: empty, or checked once the link lets them in here too. */}
+      <ShareMark kind={added ? 'check' : 'box'} />
     </button>
   );
 }

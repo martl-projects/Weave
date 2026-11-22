@@ -42,12 +42,14 @@ import certificate16 from './serenity/16x16/certificate.png';
 import copy16 from './serenity/16x16/edit-copy.png';
 import emoji16 from './serenity/16x16/emoji.png';
 import export16 from './serenity/16x16/file-export.png';
-// Drawn for Weave, not from SerenityOS: share mode's target, in the same style, and its check, the checked checkbox of
+// Drawn for Weave, not from SerenityOS: share mode's target, in the same style, and its check and box, the checked and empty checkbox of
 // Windows 95 (98.css's box and checkmark.svg, pixel for pixel).
 import shareTarget16 from './serenity/16x16/share-target.png';
 import shareTarget32 from './serenity/32x32/share-target.png';
 import shareCheck16 from './serenity/16x16/share-check.png';
 import shareCheck32 from './serenity/32x32/share-check.png';
+import shareBox16 from './serenity/16x16/share-box.png';
+import shareBox32 from './serenity/32x32/share-box.png';
 import text16 from './serenity/16x16/filetype-text.png';
 import find16 from './serenity/16x16/find.png';
 import home16 from './serenity/16x16/go-home.png';
@@ -95,6 +97,7 @@ const BITMAPS = {
   share: [export16],
   target: [shareTarget16, shareTarget32],
   check: [shareCheck16, shareCheck32],
+  box: [shareBox16, shareBox32],
   star: [priority16],
   externalLink: [internet16],
   emoji: [emoji16],

@@ -2298,7 +2298,7 @@
     "sharemode.also": "Adds them to:",
     "sharemode.also.add": "Add {place} to the link",
     "sharemode.also.remove": "Take {place} out of the link",
-    "sharemode.hint": "Go where the link should lead. The + in the sidebar adds more places.",
+    "sharemode.hint": "Go where the link should lead. The boxes in the sidebar add more places.",
     "sharemode.target": "The link leads here",
     "sharemode.joins": "The link adds them here",
     "linkb.tab.plain": "Plain invite link",
