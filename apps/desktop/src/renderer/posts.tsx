@@ -104,6 +104,25 @@ export function useSort(key: string, fallback?: string): [string | undefined, (s
   ];
 }
 
+/**
+ * A choice shown as its icon: a tap opens the list of choices (on a phone, its own picker); the title says what's chosen,
+ * and a dot marks a choice other than the usual one.
+ */
+export function IconSelect({ icon, label, value, options, onChange, marked = false }: { icon: IconName; label: string; value: string; options: { value: string; label: string }[]; onChange(value: string): void; marked?: boolean }) {
+  return (
+    <label className={`icon-select${marked ? ' marked' : ''}`} title={`${label}: ${options.find((o) => o.value === value)?.label ?? ''}`}>
+      <Icon name={icon} />
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /** The sorts as rows of a list (a phone's menu), the chosen one marked. */
 export function SortButtons({ query, board }: { query: PostsQuery; board?: BoardInfo }) {
   const { t } = useTexts();
@@ -349,13 +368,7 @@ export function PostList({
           {query.space && <NoticeSwitch space={query.space} />}
           {board && query.space && <FollowButton space={query.space} board={board} />}
           {toolbar}
-          <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label={t('posts.sort')}>
-            {SORTS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {t(`sort.${s.value}`)}
-              </option>
-            ))}
-          </select>
+          <IconSelect icon="sortVertical" label={t('posts.sort')} value={sort ?? 'hot'} options={SORTS.map((s) => ({ value: s.value, label: t(`sort.${s.value}`) }))} onChange={setSort} />
         </span>
       </header>
       <div className="pane-scroll sunken">

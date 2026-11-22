@@ -2815,7 +2815,6 @@
     "backup.due.never": "Nobody else can bring your data back. Save a backup file: Keys & devices.",
     "backup.post.title": "Back up your data",
     "backup.post.title.again": "Time for a new backup",
-    "backup.post.by": "Weave · pinned",
     "backup.post.open": "Save a backup",
     "backup.due.again":"Your last backup is over a month old. Save a new one: Keys & devices.",
     "daemon.backup.company": "A company account has no recovery words of its own: its company keeps its data, and backs it up.",

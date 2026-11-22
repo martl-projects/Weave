@@ -2815,7 +2815,6 @@
     "backup.due.never": "Niemand sonst kann deine Daten zurückbringen. Sichere eine Backup-Datei: Schlüssel & Geräte.",
     "backup.post.title": "Sichere deine Daten",
     "backup.post.title.again": "Zeit für ein neues Backup",
-    "backup.post.by": "Weave · angeheftet",
     "backup.post.open": "Backup sichern",
     "backup.due.again":"Dein letztes Backup ist über einen Monat alt. Sichere ein neues: Schlüssel & Geräte.",
     "daemon.backup.company": "Ein Firmenkonto hat keine eigenen Wiederherstellungswörter: seine Firma bewahrt seine Daten auf und sichert sie.",

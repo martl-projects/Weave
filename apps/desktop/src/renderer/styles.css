@@ -169,10 +169,27 @@ button.door-switch:hover { text-decoration: none; }
   border-bottom: 1px solid #d4d4d4; font-family: var(--content-font);
 }
 .post-row.is-pinned { background: #f3fbf1; }
-/* What Weave itself says (a backup due): a pinned post with a lock for its picture. */
-.weave-post .votes { padding-top: 4px; }
-.weave-post-thumb { display: flex; align-items: center; justify-content: center; }
-.weave-post-thumb .icon { width: 32px !important; height: 32px !important; }
+/* What Weave itself says (a backup due): a quiet note on top of the list, in a hint's colour, the whole of it a link. */
+.weave-note { display: flex; align-items: center; gap: 10px; margin: 6px; padding: 8px 10px; border: 1px solid #c8b45a; background: #ffffe1; color: #000; font: 12px var(--content-font); text-decoration: none; }
+.weave-note > .icon { flex: none; color: #8a6d00; }
+.weave-note-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.weave-note-text > span { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weave-note-go { flex: none; color: var(--link); white-space: nowrap; }
+.weave-note:hover .weave-note-go { text-decoration: underline; }
+:root[data-skin='clean'] .weave-note { border-color: color-mix(in srgb, #e0a800 35%, transparent); border-radius: var(--cl-radius, 8px); background: color-mix(in srgb, #e0a800 9%, transparent); color: var(--cl-text); }
+:root[data-skin='clean'] .weave-note > .icon { color: #d9a514; }
+:root[data-skin='clean'] .weave-note-text > span { color: var(--cl-text-2); }
+:root[data-skin='clean'] .weave-note-go { color: var(--cl-accent); }
+:root[data-skin='cozy'] .weave-note { border-radius: 10px; }
+/* A choice shown as its icon (a list's sort, Home's filter) and a button that's only an icon: flat until pointed at. */
+.icon-select { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 26px; border-radius: 4px; cursor: pointer; }
+.icon-select select { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+:root[data-skin] button.icon-btn { color: inherit; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; min-width: 30px; height: 26px; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; }
+.icon-select:hover, :root[data-skin] button.icon-btn:hover { background: #0000000f; }
+:root[data-skin='win95'] .icon-select:hover, :root[data-skin='win95'] button.icon-btn:hover { background: none; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; border-radius: 0; }
+:root[data-skin='clean'] .icon-select:hover, :root[data-skin='clean'] button.icon-btn:hover { background: var(--cl-hover); }
+.icon-select.marked::after, .icon-btn.marked::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--up); }
+.icon-btn { position: relative; }
 .post-row, .panel-line { cursor: pointer; }
 .votes { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .votes.row { flex-direction: row; }
@@ -850,6 +867,9 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .pane-head b { font-size: 13px; }
   .pane-tools button { min-height: 28px; }
   .pane-tools select { height: 28px; }
+  /* Tools that are only icons stay beside the title. */
+  .pane-tools:has(> :is(.icon-select, .icon-btn):first-child) { flex: none; margin-left: auto; }
+  .pane-head > b:has(+ .pane-tools > :is(.icon-select, .icon-btn):first-child) { flex: 1 1 auto; min-width: 0; }
   /* 16px text in fields keeps iOS from zooming in on every tap. */
   input, textarea, select { font-size: 16px !important; }
   .page { font-size: 14px; }

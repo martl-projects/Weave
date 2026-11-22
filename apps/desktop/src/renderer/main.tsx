@@ -1001,7 +1001,7 @@ function Shell() {
       center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
     // Nobody else can bring a person's data back: a post pinned on Home until a backup was saved, and again when the
     // last one is a month old.
-    else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} above={status?.backupDue && !bridge.web && <BackupPost due={status.backupDue} />} />;
+    else center = <HomeFeed spaces={spaces} meDid={me.did} above={status?.backupDue && !bridge.web && <BackupPost due={status.backupDue} />} />;
     // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
     const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
       <a className="notice alarm" href="#/keys">
