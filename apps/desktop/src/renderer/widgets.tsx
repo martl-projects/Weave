@@ -4,7 +4,7 @@ import type { MessageInfo, WidgetReleaseInfo, WidgetViewInfo } from '@weave/node
 import { Icon } from './icons.tsx';
 import { LensFrame } from './lens.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
-import { attempt, Modal } from './ui.tsx';
+import { attempt } from './ui.tsx';
 import { useTexts } from './texts.tsx';
 
 /*
@@ -17,13 +17,56 @@ import { useTexts } from './texts.tsx';
 /** The message its frame gets: the instance's state and actions, and which widget it is. */
 const viewMessage = (v: WidgetViewInfo, meDid: string) => ({ weave: 'view', state: v.state ?? null, actions: v.actions ?? [], widget: { id: v.id, title: v.title }, me: { did: meDid }, can: ['picture', 'attach', ...(v.tilt ? ['tilt'] : [])] });
 
-function WidgetFrame({ view, meDid, height }: { view: WidgetViewInfo; meDid: string; height: number | string }) {
+function WidgetFrame({ view, meDid, height, full, onFullscreen, onEdges }: { view: WidgetViewInfo; meDid: string; height: number | string; full?: boolean; onFullscreen?(on: boolean): void; onEdges?(own: boolean): void }) {
   const { data: base } = useApi(async () => (view.site ? bridge.lensBase(view.view) : undefined), [view.view, view.site]);
   const message = useMemo(() => viewMessage(view, meDid), [view, meDid]);
   if (!view.site) return <pre className="sunken widget-state">{JSON.stringify(view.state, null, 2)}</pre>;
   if (!base) return <div className="widget-wait" style={{ height }} />;
   // Approving its release allowed its hosts too, and knowing where you are: the approval card named them.
-  return <LensFrame title={view.title} release={view.view} base={base} net={view.net} location={view.location} tilt={view.tilt} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
+  return <LensFrame title={view.title} release={view.view} base={base} net={view.net} location={view.location} tilt={view.tilt} full={full} onFullscreen={onFullscreen} onEdges={onEdges} view={message} act={(name, input) => api('widgetAction', { message: view.id, action: name, input })} className="widget-frame" style={{ height }} />;
+}
+
+/**
+ * A mini-app filling the screen, edge to edge, as a lens does: the browser's full screen where it has one for an
+ * element (a computer, an Android phone), and always laid over the whole app (an iPhone). Esc or its ✕ leaves it.
+ */
+function WidgetFull({ view, meDid, onClose }: { view: WidgetViewInfo; meDid: string; onClose(): void }) {
+  const { t } = useTexts();
+  const box = useRef<HTMLDivElement>(null);
+  const [bleed, setBleed] = useState(false);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    let native = false;
+    if (typeof el.requestFullscreen === 'function' && document.fullscreenEnabled)
+      el.requestFullscreen().then(
+        () => void (native = true),
+        () => {},
+      );
+    document.documentElement.classList.add('lens-full-on');
+    const changed = () => {
+      if (native && !document.fullscreenElement) close.current();
+    };
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && close.current();
+    document.addEventListener('fullscreenchange', changed);
+    window.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('fullscreenchange', changed);
+      window.removeEventListener('keydown', key);
+      document.documentElement.classList.remove('lens-full-on');
+      if (document.fullscreenElement === el) void document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+  return (
+    <div className={`lens-box lens-full widget-full${bleed ? ' lens-bleed' : ''}`} ref={box}>
+      <button className="lens-full-exit" onClick={onClose} title={t('lens.fullscreen.exit')} aria-label={t('lens.fullscreen.exit')}>
+        ✕
+      </button>
+      <WidgetFrame view={view} meDid={meDid} height="100%" full onFullscreen={(on) => !on && onClose()} onEdges={setBleed} />
+    </div>
+  );
 }
 
 /** A widget message's bubble: the approval card, or the widget itself (compact; large on click). */
@@ -52,9 +95,14 @@ export function WidgetMessage({ m, meDid }: { m: MessageInfo; meDid: string }) {
       <b className="widget-title">{widget.title}</b>
       <span className="muted widget-app">{t('widget.app', { name: widget.name, tag: widget.app.tag })}</span>
       {view?.approved && !view.problem && (
-        <button className="widget-open" title={t('widget.open.large')} onClick={() => setLarge(true)}>
-          ⤢
-        </button>
+        <>
+          <button className="widget-open" title={t('widget.open.large')} aria-label={t('widget.open.large')} onClick={() => setLarge(true)}>
+            ⤢
+          </button>
+          <button className="widget-open widget-withdraw" title={`${from} · ${t('widget.approve.off')}`} aria-label={t('widget.approve.off')} onClick={() => void withdraw()}>
+            <Icon name="lock" />
+          </button>
+        </>
       )}
     </div>
   );
@@ -86,17 +134,7 @@ export function WidgetMessage({ m, meDid }: { m: MessageInfo; meDid: string }) {
       {head}
       <WidgetFrame view={view} meDid={meDid} height={view.height} />
       {/* Over the whole window: a chat's rows are moved by transforms, which would hold a fixed window inside them. */}
-      {large &&
-        createPortal(
-        <Modal title={view.title} onClose={() => setLarge(false)} wide>
-          <WidgetFrame view={view} meDid={meDid} height="min(70vh, 720px)" />
-          <div className="widget-foot">
-            <span className="muted">{from}</span>
-            <button onClick={() => void withdraw()}>{t('widget.approve.off')}</button>
-          </div>
-        </Modal>,
-          document.body,
-        )}
+      {large && createPortal(<WidgetFull view={view} meDid={meDid} onClose={() => setLarge(false)} />, document.body)}
     </div>
   );
 }
