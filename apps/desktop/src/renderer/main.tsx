@@ -54,11 +54,12 @@ type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind:
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra, mark }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode; mark?: 'target' | 'included' }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra, mark }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode; mark?: 'target' | 'path' | 'included' }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
   const { t } = useTexts();
-  // Share mode (share.tsx): where the link leads has a check, the places it also lets them into are highlighted.
+  // Share mode (share.tsx): where the link leads has a check and the places above it are highlighted (its path); the places it
+  // also lets them into are highlighted too.
   const classes = [extra ? 'tree-with-extra' : '', mark ? `share-${mark}` : ''].filter(Boolean).join(' ');
   return (
     <li style={{ paddingLeft: depth * 14 }} className={classes || undefined}>
@@ -102,7 +103,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const targetHere = shareable && open;
   const boardTarget = targetHere && view === 'b' ? arg : undefined;
   const liveTarget = targetHere && view === 'live' && !!share.website;
-  const spaceMark = targetHere && !boardTarget && !liveTarget ? 'target' : shareable && share.also.includes(space.id) ? 'included' : undefined;
+  const spaceMark = targetHere ? (boardTarget || liveTarget ? 'path' : 'target') : shareable && share.also.includes(space.id) ? 'included' : undefined;
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
   const shownBoards = open && space.kind === 'project' ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
