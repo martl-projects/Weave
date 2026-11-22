@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { duplexPair, PeerSession2 } from '@weave/net';
 import { closeOpenStores, readSecretJson, StorageNode, textSocket, WeaveNode, writeSecretJson, type StorageOptions } from '@weave/node';
-import { addWay, arriveAccount, createAccount, findBox, keysOf, lockState, recoverAccount, removeWay, storageLink, unlockAccount, WORDS, type KeptKeys, type WayIn } from '../src/account.ts';
+import { addWay, arriveAccount, createAccount, findBox, keysOf, laterWords, lockState, recoverAccount, removeWay, storageLink, unlockAccount, wordsWritten, WORDS, type KeptKeys, type WayIn } from '../src/account.ts';
 import { handOnAgain, useStorage } from '../src/host/net.ts';
 import { openBox, openingFrom, openingFromWords } from '../src/lock.ts';
 
@@ -290,6 +290,37 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
       expect(() => unlockAccount(dir, passkey(1))).toThrow("that isn't a way into this account");
       const again = unlockAccount(dir, passkey(2));
       await again.close();
+    } finally {
+      await stop();
+    }
+  });
+
+  it('with a passkey, keeps the words sealed here until they are written down, and never puts them in a box', async () => {
+    const { storage, url, stop } = await world();
+    try {
+      const dir = temp('later');
+      const { node, words } = createAccount(dir, 'Web', passkey(1));
+      expect(laterWords(dir, node)).toBe(words);
+      useStorage(storageLink(dir, node, url, { invite: storage.invite() }));
+      await node.goOnline();
+      await until(async () => !!(await findBox(url, passkey(1).opening)));
+      expect(JSON.stringify(openBox(passkey(1).opening, (await findBox(url, passkey(1).opening))!))).not.toContain(words.split(' ').slice(0, 3).join(' '));
+      // Until they're written down, the only passkey stays: without it nothing but the words opens the account.
+      expect(() => removeWay(dir, node, 'passkey-1')).toThrow('write your 24 words down first');
+      await node.close();
+      expect(allText(dir)).not.toContain(words.split(' ').slice(0, 3).join(' '));
+
+      const again = unlockAccount(dir, passkey(1));
+      expect(laterWords(dir, again)).toBe(words);
+      wordsWritten(dir);
+      expect(laterWords(dir, again)).toBeUndefined();
+      await again.close();
+
+      // Without a passkey the words are shown at once, so nothing is kept for later.
+      const plain = temp('plain');
+      const { node: alone } = createAccount(plain, 'Web');
+      expect(laterWords(plain, alone)).toBeUndefined();
+      await alone.close();
     } finally {
       await stop();
     }

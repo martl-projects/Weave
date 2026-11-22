@@ -504,6 +504,8 @@ const web: Bridge['web'] = {
         : undefined,
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
   ways: () => own<string[]>('ways'),
+  laterWords: () => own<string | undefined>('laterWords'),
+  wordsWritten: () => own<void>('wordsWritten'),
   addPasskey: async () => {
     await own('addWay', await makePasskey(passkeyLabel(((await ask('profile')) as { result?: { name?: string } }).result?.name ?? 'Weave')));
     passkey = true;
@@ -551,7 +553,8 @@ window.weave = {
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
     const made = await makePasskey(passkeyLabel(name)).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
     passkey = !!made;
-    const { words } = await own<{ words: string }>('create', name, made);
+    // With a passkey, the words wait (laterWords): the newcomer comes straight in.
+    const { words } = await own<{ words?: string }>('create', name, made);
     await goOnline(invite);
     if (viaLink) await followOnboard(true).catch((error: Error) => console.warn('the link\'s steps:', error.message));
     return words;

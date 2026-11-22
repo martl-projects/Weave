@@ -148,6 +148,10 @@ export interface Bridge {
     onboarding?(): { by: string; title: string; welcome?: string; app?: string } | { problem: string } | undefined;
     /** The invitation, as a link or as its code. */
     invite(given: string): void;
+    /** A new account's words while they aren't written down yet (made with a passkey, they come later). */
+    laterWords(): Promise<string | undefined>;
+    /** They're written down: this browser forgets them. */
+    wordsWritten(): Promise<void>;
     /** The ways into this account: the passkeys' ids, and `words`. */
     ways(): Promise<string[]>;
     addPasskey(): Promise<void>;
