@@ -398,22 +398,26 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
         { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
       ];
   const boardsList: Item[] = boardItems.map((c) => ({ icon: c.icon, label: c.label, go: c.href, on: c.on, count: c.count }));
-  const item = (it: Item) =>
-    typeof it.go === 'string' ? (
-      <a key={it.label} className={`space-menu-item${it.on ? ' on' : ''}`} href={it.go} onClick={() => setMenu(false)}>
-        <Icon name={it.icon} /> <span>{it.label}</span>
-        {!!it.count && <span className="badge">{it.count}</span>}
-      </a>
-    ) : (
-      <button key={it.label} className="space-menu-item" onClick={() => (setMenu(false), (it.go as () => void)())}>
-        <Icon name={it.icon} /> <span>{it.label}</span>
-      </button>
-    );
-  const section = (title: string, body: ReactNode, className = 'space-menu-items') => (
-    <section className="space-menu-section">
-      <h4>{title}</h4>
-      <div className={className}>{body}</div>
-    </section>
+  // One list as Places has it: a head per section, a row per thing, the one you're at marked.
+  const item = (it: Item) => (
+    <li key={it.label}>
+      {typeof it.go === 'string' ? (
+        <a className={`tree-link space-menu-item${it.on ? ' on' : ''}`} href={it.go} onClick={() => setMenu(false)}>
+          <Icon name={it.icon} /> <span className="tree-label">{it.label}</span>
+          {!!it.count && <span className="badge">{it.count}</span>}
+        </a>
+      ) : (
+        <button className="tree-link space-menu-item" onClick={() => (setMenu(false), (it.go as () => void)())}>
+          <Icon name={it.icon} /> <span className="tree-label">{it.label}</span>
+        </button>
+      )}
+    </li>
+  );
+  const section = (title: string, body: ReactNode) => (
+    <>
+      <li className="tree-head">{title}</li>
+      {body}
+    </>
   );
 
   return (
@@ -443,17 +447,19 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
       {menu && (
         <>
           <div className="space-menu-scrim" onClick={() => setMenu(false)} />
-          <div className="space-menu" role="menu">
-            {boardsList.length > 1 && section(t(project ? 'space.menu.boards' : 'space.menu.channels'), boardsList.map(item))}
-            {services.length > 0 && section(t('space.menu.services'), services.map(item))}
-            {section(
-              t('space.menu.share'),
-              <>
-                {share.map(item)}
-                <span className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</span>
-              </>,
-            )}
-            {sorting && section(t('space.menu.sort'), sorting, 'space-menu-tools')}
+          <div className="space-menu window" role="menu">
+            <ul className="tree-view">
+              {boardsList.length > 1 && section(t(project ? 'space.menu.boards' : 'space.menu.channels'), boardsList.map(item))}
+              {services.length > 0 && section(t('space.menu.services'), services.map(item))}
+              {section(
+                t('space.menu.share'),
+                <>
+                  {share.map(item)}
+                  <li className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</li>
+                </>,
+              )}
+              {sorting && section(t('space.menu.sort'), <li className="space-menu-tools">{sorting}</li>)}
+            </ul>
           </div>
         </>
       )}
@@ -587,8 +593,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
   const sorting = board ? (
     <>
       <SortButtons query={{ space: space.id, board: board.name }} board={board} />
-      <FollowButton space={space.id} board={board} />
-      <LensSwitch board={board} on={lensOn} choose={chooseLens} />
+      <FollowButton space={space.id} board={board} row />
+      <LensSwitch board={board} on={lensOn} choose={chooseLens} className="tree-link" />
     </>
   ) : space.kind === 'community' && !view ? (
     <SortButtons query={{ space: space.id }} />

@@ -1178,8 +1178,8 @@ button.session-title:hover { text-decoration: underline; }
   .phone-place .pane-head .pane-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .space-bar { flex: none; flex-direction: column; padding-top: env(safe-area-inset-top); background: var(--navy); color: #fff; font-family: var(--content-font); }
   .space-bar-row { display: flex; align-items: center; gap: 2px; min-height: 46px; padding: 2px 4px; }
-  :root[data-skin] .space-bar button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: none; color: inherit; font: inherit; }
-  :root[data-skin] .space-bar button:active { background: #fff3; }
+  :root[data-skin] .space-bar-row button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: none; color: inherit; font: inherit; }
+  :root[data-skin] .space-bar-row button:active { background: #fff3; }
   :root[data-skin] .space-bar .space-back { min-width: 32px; padding: 0; font-size: 28px; line-height: 1; }
   :root[data-skin] .space-bar .space-id { flex: 0 1 auto; min-width: 0; justify-content: flex-start; font-size: 15px; }
   .space-id b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1192,20 +1192,23 @@ button.session-title:hover { text-decoration: underline; }
   .space-chip.on { background: #fff; color: var(--navy); opacity: 1; }
   .space-chip .badge { margin-left: 2px; border-radius: 999px; }
   :root[data-skin] .space-bar .space-menu-btn { margin-left: auto; flex: none; font-size: 18px; }
-  /* The menu: a popover under the bar, in sections; a tap beside it closes it. */
+  /* The menu: a popover under the bar, one list as Places has it (a head per section); a tap beside it closes it. */
+  .space-menu-scrim { position: fixed; inset: 0; z-index: -1; }
+  :root[data-skin] .space-menu { position: absolute; top: 100%; right: 2px; display: flex; flex-direction: column; width: min(290px, calc(100vw - 4px)); max-height: calc(100dvh - 100px - env(safe-area-inset-top)); margin: 0; padding: 3px; filter: drop-shadow(0 4px 10px #0005); font-family: var(--content-font); }
+  .space-menu > .tree-view { flex: 1; min-height: 0; margin: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
+  .space-menu .tree-view li { margin: 0; list-style: none; }
+  .space-menu .tree-view li::before { display: none; }
+  .space-menu .tree-head:first-child { margin-top: 0 !important; }
+  .space-menu .tree-link { width: 100%; box-sizing: border-box; min-height: 30px; padding-top: 2px; padding-bottom: 2px; }
+  .space-menu .tree-head { margin-top: 6px !important; }
+  .space-menu .tree-link .badge { margin-left: auto; }
+  :root[data-skin] .space-menu button.tree-link { justify-content: flex-start; min-width: 0; border: 0; text-align: left; font-family: inherit; }
+  :root[data-skin] .space-menu button.tree-link:not(.on) { background: none; box-shadow: none; }
+  :root[data-skin='win95'] .space-menu, :root[data-skin='win95'] .space-menu button.tree-link:not(.on) { color: #000; }
+  :root[data-skin='win95'] .space-menu button.tree-link.on, :root[data-skin='clean'] .space-menu button.tree-link.on { box-shadow: none; }
+  .space-menu-notify { display: flex; align-items: center; min-height: 36px; padding: 2px 6px; }
+  .space-menu-tools { display: flex; flex-direction: column; }
   .space-bar { position: relative; z-index: 30; }
-  .space-menu-scrim { position: fixed; inset: 0; z-index: -1; background: #0004; }
-  .space-menu { position: absolute; top: calc(100% + 4px); left: 6px; right: 6px; max-height: calc(100dvh - 120px - env(safe-area-inset-top)); overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 10px; border-radius: 12px; background: var(--navy); box-shadow: 0 8px 28px #0007; }
-  .space-menu-section h4 { margin: 10px 2px 6px; font-size: 11px; font-weight: bold; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.7; }
-  .space-menu-items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  :root[data-skin] .space-bar .space-menu-item { justify-content: flex-start; min-height: 44px; padding: 0 12px; background: #ffffff1a; color: inherit; font-size: 14px; text-decoration: none; }
-  .space-menu-item { display: flex; align-items: center; gap: 8px; min-width: 0; border-radius: 6px; }
-  .space-menu-item > span:not(.badge) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .space-menu-item .badge { margin-left: auto; border-radius: 999px; }
-  :root[data-skin] .space-bar .space-menu-item.on, :root[data-skin] .space-bar .space-menu-tools .chosen { background: #fff; color: var(--navy); }
-  .space-menu-notify { display: flex; align-items: center; grid-column: 1 / -1; min-height: 40px; padding: 0 4px; }
-  .space-menu-tools { display: flex; flex-wrap: wrap; gap: 6px; }
-  :root[data-skin] .space-bar .space-menu-tools button { min-height: 40px; padding: 0 12px; background: #ffffff1a; font-size: 14px; }
   /* Folded: only the place's icon, over the top left of what's read. */
   :root[data-skin] .space-dot { position: absolute; z-index: 20; top: calc(6px + env(safe-area-inset-top)); left: 6px; min-width: 0; min-height: 0; padding: 3px; border: 0; border-radius: 10px; background: var(--navy); box-shadow: 0 2px 8px #0006; }
   .space-dot :is(.sprite, .project-icon, .avatar, img) { display: block; border-radius: 7px; }
@@ -1224,19 +1227,12 @@ button.session-title:hover { text-decoration: underline; }
   .app-window.bars-folded > .toolbar::before { content: ''; position: absolute; top: 6px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: currentColor; opacity: 0.45; }
 }
 @media (max-width: 700px) {
-  /* Windows 95: the bar is a title bar, the menu a grey window of raised buttons, the chosen one pressed in. */
+  /* Windows 95: the bar is a title bar, its chips and buttons square, the one you're at pressed in. */
   :root[data-skin='win95'] .space-bar { background: linear-gradient(90deg, var(--navy), #1084d0); }
-  :root[data-skin='win95'] .space-bar button:active { background: none; }
+  :root[data-skin='win95'] .space-bar-row button:active { background: none; }
   :root[data-skin='win95'] .space-chip { border-radius: 0; padding: 4px 8px; }
   :root[data-skin='win95'] .space-chip.on { background: var(--face); color: #000; box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
   :root[data-skin='win95'] .space-chip .badge { border-radius: 0; }
-  :root[data-skin='win95'] .space-menu-scrim { background: none; }
-  :root[data-skin='win95'] .space-menu { top: 100%; left: 2px; right: 2px; padding: 3px 8px 8px; border-radius: 0; background: var(--face); color: #000; font-family: var(--content-font); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 2px 2px 0 #0006; }
-  :root[data-skin='win95'] .space-menu-section h4 { margin: 8px 0 5px; padding-bottom: 2px; border-bottom: 1px solid #808080; box-shadow: 0 1px #fff; font-size: 12px; letter-spacing: 0; text-transform: none; opacity: 1; }
-  :root[data-skin='win95'] .space-bar .space-menu-item, :root[data-skin='win95'] .space-bar .space-menu-tools button { border-radius: 0; background: var(--face); color: #000; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
-  :root[data-skin='win95'] .space-bar .space-menu-item:active, :root[data-skin='win95'] .space-bar .space-menu-tools button:active,
-  :root[data-skin='win95'] .space-bar .space-menu-item.on, :root[data-skin='win95'] .space-bar .space-menu-tools .chosen { background: #d6d6d6; color: #000; font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
-  :root[data-skin='win95'] .space-menu-item .badge { border-radius: 0; }
   :root[data-skin='win95'] .space-dot { border-radius: 0; background: var(--face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
   :root[data-skin='win95'] .space-dot :is(.sprite, .project-icon, .avatar, img) { border-radius: 0; }
   :root[data-skin='win95'] .fab { border-radius: 0; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
@@ -1244,10 +1240,6 @@ button.session-title:hover { text-decoration: underline; }
   :root[data-skin='clean'] .space-bar, :root[data-skin='clean'] .space-dot { background: var(--cl-panel); color: var(--cl-text); }
   :root[data-skin='clean'] .space-bar { border-bottom: 1px solid var(--cl-line); }
   :root[data-skin='clean'] .space-chip.on { background: var(--cl-accent-soft); color: var(--cl-accent); }
-  :root[data-skin='clean'] .space-bar .space-menu-item { background: var(--cl-hover); }
-  :root[data-skin='clean'] .space-menu { background: var(--cl-panel); border: 1px solid var(--cl-line); }
-  :root[data-skin='clean'] .space-bar .space-menu-tools button { background: var(--cl-hover); }
-  :root[data-skin='clean'] .space-bar .space-menu-item.on, :root[data-skin='clean'] .space-bar .space-menu-tools .chosen { background: var(--cl-accent-soft); color: var(--cl-accent); }
 }
 
 /* A lens's view, and the same filling the screen: the browser's full screen, or laid over the app (an iPhone). */

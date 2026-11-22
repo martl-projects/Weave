@@ -551,11 +551,11 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
 }
 
 /** The switch between a board's posts and its suggested client service. */
-export function LensSwitch({ board, on, choose }: { board: BoardInfo; on: boolean; choose(on: boolean): void }) {
+export function LensSwitch({ board, on, choose, className }: { board: BoardInfo; on: boolean; choose(on: boolean): void; className?: string }) {
   const { t } = useTexts();
   if (!board.lens || board.lens.mode === 'require') return null;
   return (
-    <button onClick={() => choose(!on)} title={on ? t('lens.show.list') : t('lens.suggested', { name: board.lens.name })}>
+    <button className={className} onClick={() => choose(!on)} title={on ? t('lens.show.list') : t('lens.suggested', { name: board.lens.name })}>
       <Icon name={on ? 'hash' : 'zap'} /> {on ? t('lens.posts') : board.lens.name}
     </button>
   );

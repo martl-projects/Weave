@@ -104,14 +104,14 @@ export function useSort(key: string, fallback?: string): [string | undefined, (s
   ];
 }
 
-/** The sorts as buttons side by side (a phone's menu), the chosen one pressed. */
+/** The sorts as rows of a list (a phone's menu), the chosen one marked. */
 export function SortButtons({ query, board }: { query: PostsQuery; board?: BoardInfo }) {
   const { t } = useTexts();
   const [sort, setSort] = useSort(sortKey(query), board?.sort);
   return (
     <>
       {SORTS.map((s) => (
-        <button key={s.value} className={(sort ?? 'hot') === s.value ? 'chosen' : ''} aria-pressed={(sort ?? 'hot') === s.value} onClick={() => setSort(s.value)}>
+        <button key={s.value} className={`tree-link${(sort ?? 'hot') === s.value ? ' on' : ''}`} aria-pressed={(sort ?? 'hot') === s.value} onClick={() => setSort(s.value)}>
           <Icon name={s.icon} /> {t(`sort.${s.value}`)}
         </button>
       ))}
@@ -120,12 +120,12 @@ export function SortButtons({ query, board }: { query: PostsQuery; board?: Board
 }
 
 /** Following a board: its posts on your Home, and notices of new ones. */
-export function FollowButton({ space, board }: { space: string; board: BoardInfo }) {
+export function FollowButton({ space, board, row = false }: { space: string; board: BoardInfo; row?: boolean }) {
   const { t } = useTexts();
   if (board.following === undefined) return null;
   return (
     <button
-      className={board.following ? 'chosen' : ''}
+      className={row ? `tree-link${board.following ? ' on' : ''}` : board.following ? 'chosen' : ''}
       title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
       onClick={() => attempt(() => api('followBoard', { project: space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
     >
