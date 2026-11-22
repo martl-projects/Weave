@@ -28,6 +28,7 @@ import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, is
 import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
+import { backFrom, rememberOutside, useBarsFolded, useIsPhone, useSwipeBack } from './phonechrome.ts';
 import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
@@ -309,32 +310,135 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 // ---------------------------------------------------------------- spaces
 
-/** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
-function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
-  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', space.id), [space.id]);
+/** A project's chat is its channel named general: a name, not a text. */
+const GENERAL = 'general';
+
+/** The bars on a phone: folded while reading on (phonechrome.ts), and how to bring them back. */
+type Bars = { folded: boolean; unfold(): void };
+
+/**
+ * On a phone, the head of a place (a project, group, community or direct chat), and the only bar there: back, the
+ * place's icon, its boards as chips (those with something new first, then Live when it has websites), and a menu
+ * with the rest (its page, services, invite, notifications…), which a tap on the icon opens too. Folded away while
+ * reading on, it leaves the place's icon alone; a tap on it, or pulling the page down, brings it back.
+ */
+function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo }: { space?: SpaceInfo; chat?: ChatInfo; route: string[]; boards: BoardInfo[]; bars: Bars; open(d: Dialog): void; onInviteTo?(): void }) {
   const { t } = useTexts();
-  const base = spaceHref(space);
-  const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
-    <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
-      <Icon name={icon} />
-      <span className="tree-label">{label}</span>
-    </a>
-  );
+  useSeenTick(); // unread channels live in localStorage
+  const [menu, setMenu] = useState(false);
+  const routeKey = route.join('/');
+  useEffect(() => setMenu(false), [routeKey]);
+  const id = space?.id ?? chat?.space.id ?? '';
+  const project = space?.kind === 'project';
+  const { data: rooms } = useApi(() => (project ? api<WebsiteInfo[]>('websites', id) : Promise.resolve([])), [id]);
+  const hints = useHints('place', project ? boards.map((b) => ({ board: { space: id, name: b.name } })) : []);
+  const [view, arg] = [route[2], route[3]];
+  const base = space ? spaceHref(space) : `#/d/${id}`;
+  const name = chat ? (chat.peer.name ?? shortDid(chat.peer.did)) : (space?.name ?? '');
+  const icon = (size: number) =>
+    chat ? <Avatar did={chat.peer.did} size={size} /> : space?.kind === 'group' ? <GroupIcon space={space} size={size} /> : space?.icon ? <ProjectIcon id={space.id} icon={space.icon} size={size} /> : <Sprite seed={id} size={size} />;
+
+  type Chip = { href: string; icon: IconName; label: string; on: boolean; count?: number; fresh?: boolean };
+  let chips: Chip[] = [];
+  if (project) {
+    const ordered = boards
+      .map((b, i) => ({ b, hint: hints[i] }))
+      .sort((x, y) => (y.hint?.count ?? 0) - (x.hint?.count ?? 0) || (y.b.active ?? '').localeCompare(x.b.active ?? ''));
+    chips = [
+      { href: base, icon: 'hash', label: GENERAL, on: !view },
+      ...ordered.map(({ b, hint }): Chip => ({ href: `${base}/b/${b.name}`, icon: boardIcon(b), label: b.title, on: view === 'b' && arg === b.name, count: hint?.count })),
+      ...(rooms?.length ? [{ href: `${base}/live`, icon: 'globe' as IconName, label: t('nav.live.n', { n: rooms.length }), on: view === 'live', fresh: true }] : []),
+    ];
+  } else if (space?.kind === 'group') {
+    const here = view === 'c' ? (arg ?? 'general') : view ? undefined : 'general';
+    chips = [...(space.channels ?? [])]
+      .map((c) => ({ c, fresh: isUnread(`${space.id}/${c.name}`, c.last) }))
+      .sort((x, y) => Number(y.fresh) - Number(x.fresh) || (y.c.name === 'general' ? 1 : 0) - (x.c.name === 'general' ? 1 : 0))
+      .map(({ c, fresh }) => ({ href: c.name === 'general' ? base : `${base}/c/${c.name}`, icon: 'hash', label: c.name, on: here === c.name, fresh: fresh && here !== c.name }));
+  }
+  if (chips.length < 2) chips = [];
+
+  if (bars.folded && !menu)
+    return (
+      <button className="space-dot mobile-only" onClick={bars.unfold} title={name} aria-label={name}>
+        {icon(30)}
+      </button>
+    );
+
+  type Item = { icon: IconName; label: string; go: string | (() => void) };
+  const items: Item[] = chat
+    ? [{ icon: 'user', label: t('chat.hub'), go: `#/space/${encodeURIComponent(chat.peer.did)}` }, ...(onInviteTo ? [{ icon: 'userPlus' as IconName, label: t('chat.invite.to'), go: onInviteTo }] : [])]
+    : project
+      ? [
+          { icon: 'notes', label: t('space.page'), go: `${base}/page` },
+          { icon: 'pencil', label: t('word.post'), go: () => open({ kind: 'submit', space: id }) },
+          { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
+          { icon: 'store', label: t('nav.available'), go: `${base}/available` },
+          { icon: 'zap', label: t('nav.services'), go: `${base}/services` },
+          { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
+          ...(!bridge.web ? [{ icon: 'clock' as IconName, label: t('nav.routines'), go: `${base}/routines` }] : []),
+          { icon: 'gear', label: t('nav.settings'), go: `${base}/settings` },
+        ]
+      : space?.kind === 'community'
+        ? [
+            { icon: 'pencil', label: t('word.post'), go: () => open({ kind: 'submit', space: id }) },
+            { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
+            { icon: 'info', label: t('nav.about'), go: `${base}/about` },
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
+          ]
+        : [
+            { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog` },
+            { icon: 'gear', label: t('nav.settings'), go: `${base}/settings` },
+          ];
+
   return (
-    <nav className="project-sections mobile-only">
-      {link(base, 'hash', 'general', !view)}
-      {link(`${base}/live`, 'globe', rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live'), view === 'live', !!rooms?.length)}
-      {link(`${base}/available`, 'store', t('nav.available'), view === 'available')}
-      {link(`${base}/services`, 'zap', t('nav.services'), view === 'services')}
-      {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
-      {link(`${base}/catalog`, 'bookmark', t('nav.catalog'), view === 'catalog')}
-      {!bridge.web && link(`${base}/routines`, 'clock', t('nav.routines'), view === 'routines')}
-      {link(`${base}/settings`, 'gear', t('nav.settings'), view === 'settings')}
-    </nav>
+    <header className={`space-bar mobile-only${menu ? ' open' : ''}`}>
+      <div className="space-bar-row">
+        <button className="space-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
+          ‹
+        </button>
+        <button className="space-id" onClick={() => setMenu(!menu)} aria-expanded={menu} title={name}>
+          {icon(28)}
+          {(chips.length === 0 || menu) && <b>{name}</b>}
+        </button>
+        {chips.length > 0 && !menu && (
+          <nav className="space-chips">
+            {chips.map((c) => (
+              <a key={c.href} className={`space-chip${c.on ? ' on' : ''}${c.fresh || c.count ? ' fresh' : ''}`} href={c.href}>
+                <Icon name={c.icon} /> {c.label}
+                {!!c.count && <span className="badge">{c.count}</span>}
+              </a>
+            ))}
+          </nav>
+        )}
+        <button className="space-menu-btn" onClick={() => setMenu(!menu)} aria-expanded={menu} title={t('space.menu')} aria-label={t('space.menu')}>
+          {menu ? '✕' : '☰'}
+        </button>
+      </div>
+      {menu && (
+        <div className="space-menu">
+          <div className="space-menu-items">
+            {items.map((item) =>
+              typeof item.go === 'string' ? (
+                <a key={item.label} className="space-menu-item" href={item.go}>
+                  <Icon name={item.icon} /> {item.label}
+                </a>
+              ) : (
+                <button key={item.label} className="space-menu-item" onClick={item.go}>
+                  <Icon name={item.icon} /> {item.label}
+                </button>
+              ),
+            )}
+          </div>
+          <div className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</div>
+        </div>
+      )}
+    </header>
   );
 }
 
-function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void }) {
+function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void; bars: Bars }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
   const { data: boards } = useApi(() => (space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
@@ -360,7 +464,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
     const channel = view === 'c' ? (arg ?? 'general') : 'general';
     body = (
       <section className="pane-main">
-        <header className="pane-head">
+        <header className="pane-head not-mobile">
           <b># {channel}</b>
           <span className="pane-tools">
             <NoticeSwitch space={space.id} />
@@ -432,7 +536,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           toolbar={
             <>
               {board && <LensSwitch board={board} on={lensOn} choose={chooseLens} />}
-              <button onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
+              <button className="not-mobile" onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
                 <Icon name="pencil" /> {t(board?.type === 'issues' ? 'board.open.issue' : board?.type === 'proposals' ? 'board.propose' : 'board.post')}
               </button>
             </>
@@ -452,19 +556,27 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   } else if (view === 'settings') {
     body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} tab={arg} />;
   } else {
-    body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} />;
+    body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} pageView={view === 'page'} />;
   }
+  // On a phone, posting to a board is a button of its own, low on the right, and only in boards.
+  const board = view === 'b' && arg && !postId && !(lensBoard?.lens && lensOn) ? boards?.find((b) => b.name === arg) : undefined;
+  const fab = board && (
+    <button className="fab mobile-only" onClick={() => open({ kind: 'submit', space: space.id, board: board.name })}>
+      <Icon name="pencil" /> {t(board.type === 'issues' ? 'board.open.issue' : board.type === 'proposals' ? 'board.propose' : 'board.post')}
+    </button>
+  );
 
   return (
     <>
       <div className="center">
-        {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
+        <SpaceBar space={space} route={route} boards={boards ?? []} bars={bars} open={open} />
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings/people`}>
             <Icon name="inbox" /> {t('space.waiting', { name: mine[0].name ?? t('word.someone'), group: mine[0].group.name, more: mine.length - 1 })}
           </a>
         )}
         {body}
+        {fab}
       </div>
       <MemberList space={space} members={list} meDid={me.did} />
     </>
@@ -472,13 +584,14 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
 }
 
 /** A direct chat with a friend: just the chat, Discord-DM style. */
-function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
+function DirectScreen({ chat, me, route, bars, open }: { chat: ChatInfo; me: Profile; route: string[]; bars: Bars; open(d: Dialog): void }) {
   const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
   const { t } = useTexts();
   const name = chat.peer.name ?? shortDid(chat.peer.did);
   const [inviting, setInviting] = useState(false);
   return (
     <div className="center">
+      <SpaceBar chat={chat} route={route} boards={[]} bars={bars} open={open} onInviteTo={chat.friend ? () => setInviting(true) : undefined} />
       {inviting && <InviteToDialog chat={chat.space} peerName={name} onClose={() => setInviting(false)} />}
       {!chat.friend && (
         <div className="notice">
@@ -486,7 +599,7 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
         </div>
       )}
       <section className="pane-main">
-        <header className="pane-head">
+        <header className="pane-head not-mobile">
           <b>
             <Icon name="message" /> @{name}
           </b>
@@ -791,24 +904,34 @@ function Shell() {
   const [skin, setSkin] = useState<Skin>(loadSkin);
   const [mode, setMode] = useState<Mode>(loadMode);
   const { t, setting: language, setLanguage } = useTexts();
-  // On a phone the places tree is a screen of its own; picking something closes it.
-  const [placesOpen, setPlacesOpen] = useState(false);
+  // On a phone the places tree is a screen of its own (#/places), left again by picking something or going back.
+  const placesOpen = route[0] === 'places';
   const [placesFolded, foldPlaces] = useFolded('places');
   const [membersFolded, foldMembers] = useFolded('members');
   const routeKey = route.join('/');
-  useEffect(() => setPlacesOpen(false), [routeKey]);
+  // On a phone: in a place there's only its own bar (SpaceBar), elsewhere the tabs; both fold while reading on.
+  const phone = useIsPhone();
+  const inPlace = ['p', 'g', 'r', 'd'].includes(route[0]);
+  const [barsFolded, setBarsFolded] = useBarsFolded(phone, routeKey);
+  const bars: Bars = { folded: barsFolded, unfold: () => setBarsFolded(false) };
+  useEffect(() => {
+    if (!inPlace) rememberOutside(location.hash);
+  }, [routeKey]);
+  // Back: out of a place to where it was opened from; from Places, Inbox, People or a hub to Home.
+  const back = () => (inPlace ? backFrom(route) : navigate('#/'));
+  useSwipeBack(phone && route.length > 0, back);
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const whereName = ({ saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', me: 'nav.me', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
+  const whereName = ({ places: 'tree.places', saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', me: 'nav.me', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
   const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : t(whereName);
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
   let body: ReactNode;
-  if (space) body = <SpaceScreen space={space} spaces={spaces} route={route} me={me} waiting={waiting ?? []} open={setDialog} />;
-  else if (chat) body = <DirectScreen chat={chat} me={me} />;
+  if (space) body = <SpaceScreen space={space} spaces={spaces} route={route} me={me} waiting={waiting ?? []} open={setDialog} bars={bars} />;
+  else if (chat) body = <DirectScreen chat={chat} me={me} route={route} bars={bars} open={setDialog} />;
   else {
     let center: ReactNode;
     if (route[0] === 'd') center = <Page title={t('page.chat')}>{chats ? t('chat.not.here') : null}</Page>;
@@ -855,9 +978,14 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
+          {route.length > 0 && (
+            <button className="title-back mobile-only" onClick={back} title={t('nav.back')} aria-label={t('nav.back')}>
+              ‹
+            </button>
+          )}
           <WeaveMark size={14} /> {t('window.title', { where })}
         </div>
         <WindowButtons />
@@ -933,17 +1061,17 @@ function Shell() {
           ]}
         />
       </nav>
-      <div className="toolbar">
+      <div className="toolbar" onClick={barsFolded ? () => setBarsFolded(false) : undefined} title={barsFolded ? t('tabs.show') : undefined}>
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
-        <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" on={placesOpen} onClick={() => setPlacesOpen((open) => !open)} />
-        <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0 && !placesOpen} />
+        <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" href="#/places" on={placesOpen} />
+        <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0} className="not-mobile" />
         <ToolButton icon="bookmark" label={t('nav.saved')} href="#/saved" on={route[0] === 'saved'} className="not-mobile" />
         <ToolButton icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
         <ToolButton icon="users" label={t('nav.people')} href="#/people" on={route[0] === 'people' && !placesOpen} />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
         <span className="tool-sep" />
-        <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
+        <ToolButton icon="pencil" label={t('tool.submit')} className="not-mobile" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
         {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
         {/* A link someone sent (an invite, a contact link, a post): one place for all of them, one click away. */}

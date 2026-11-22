@@ -836,8 +836,6 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
-  .project-sections { flex: none; gap: 2px; padding: 2px 4px; overflow-x: auto; }
-  .project-sections .tree-link { flex: none; }
   /* Fingers, not mouse pointers. */
   .tree-link { min-height: 36px; padding: 4px 6px; font-size: 14px; }
   .tree-head { font-size: 13px; padding: 6px; }
@@ -1165,6 +1163,63 @@ button.session-title:hover { text-decoration: underline; }
   .board-strip { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 4px 8px; }
   .board-strip::-webkit-scrollbar { display: none; }
   .board-chip { flex: none; white-space: nowrap; scroll-snap-align: start; }
+}
+
+/* ---------- phones: one bar per screen (main.tsx SpaceBar, phonechrome.ts) */
+.title-back { display: none; }
+@media (max-width: 700px) {
+  /* In a place: its own bar only, no title and no tabs; back (or a swipe from the left edge) leaves it. */
+  .phone-place > .title-bar, .phone-place > .toolbar { display: none !important; }
+  .phone-place .center { position: relative; }
+  .phone-place .panes { padding-top: 0; }
+  /* The bar says where you are: a view's own head keeps only its tools, in one row. */
+  .phone-place .pane-head > b { display: none; }
+  .phone-place .pane-head:not(:has(.pane-tools > *)) { display: none; }
+  .phone-place .pane-head .pane-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .space-bar { flex: none; flex-direction: column; padding-top: env(safe-area-inset-top); background: var(--navy); color: #fff; font-family: var(--content-font); }
+  .space-bar-row { display: flex; align-items: center; gap: 2px; min-height: 46px; padding: 2px 4px; }
+  :root[data-skin] .space-bar button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: none; color: inherit; font: inherit; }
+  :root[data-skin] .space-bar button:active { background: #fff3; }
+  :root[data-skin] .space-bar .space-back { min-width: 32px; padding: 0; font-size: 28px; line-height: 1; }
+  :root[data-skin] .space-bar .space-id { flex: 0 1 auto; min-width: 0; justify-content: flex-start; font-size: 15px; }
+  .space-id b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .space-id :is(.sprite, .project-icon, .avatar, img) { flex: none; border-radius: 6px; }
+  .space-chips { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .space-chips::-webkit-scrollbar { display: none; }
+  .space-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 999px; color: inherit; font-size: 14px; white-space: nowrap; text-decoration: none; opacity: 0.85; }
+  .space-chip .icon { color: inherit !important; }
+  .space-chip.fresh { font-weight: bold; opacity: 1; }
+  .space-chip.on { background: #fff; color: var(--navy); opacity: 1; }
+  .space-chip .badge { margin-left: 2px; border-radius: 999px; }
+  :root[data-skin] .space-bar .space-menu-btn { margin-left: auto; flex: none; font-size: 18px; }
+  .space-menu { padding: 4px 8px 12px; border-top: 1px solid #fff3; }
+  .space-menu-items { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  :root[data-skin] .space-bar .space-menu-item { justify-content: flex-start; min-height: 44px; padding: 0 12px; background: #ffffff1a; color: inherit; font-size: 14px; text-decoration: none; }
+  .space-menu-item { display: flex; align-items: center; gap: 8px; border-radius: 6px; }
+  .space-menu-notify { display: flex; justify-content: flex-start; margin-top: 8px; }
+  /* Folded: only the place's icon, over the top left of what's read. */
+  :root[data-skin] .space-dot { position: absolute; z-index: 20; top: calc(6px + env(safe-area-inset-top)); left: 6px; min-width: 0; min-height: 0; padding: 3px; border: 0; border-radius: 10px; background: var(--navy); box-shadow: 0 2px 8px #0006; }
+  .space-dot :is(.sprite, .project-icon, .avatar, img) { display: block; border-radius: 7px; }
+  .phone-place .center:has(> .space-dot) { padding-top: env(safe-area-inset-top); }
+  /* While reading on, the field to write in goes too, unless something is being written. */
+  .bars-folded.phone-place .composer-wrap:not(:focus-within) { display: none; }
+  /* A project's chat comes alone: the boards are in the bar, the card with its page is a view of its own. */
+  .project-home:not(.page-view) .hero, .project-home .hero-bar, .project-home .board-strip, .project-home .hero-fold { display: none !important; }
+  /* Posting to a board: low on the right, only in boards. */
+  :root[data-skin] .fab { position: absolute; z-index: 20; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; min-height: 48px; padding: 0 18px; border-radius: 24px; font-size: 15px; font-weight: bold; box-shadow: 0 3px 12px #0005; }
+  /* Elsewhere: the title with back (but on Home), and the tabs, which fold to a slim strip while reading on. */
+  .title-back { display: flex; }
+  :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
+  :root[data-skin] .app-window.bars-folded:not(.phone-place) > .toolbar { position: relative; min-height: 0; height: calc(16px + env(safe-area-inset-bottom)); padding: 0; overflow: hidden; cursor: pointer; }
+  .app-window.bars-folded > .toolbar > * { visibility: hidden; pointer-events: none; }
+  .app-window.bars-folded > .toolbar::before { content: ''; position: absolute; top: 6px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: currentColor; opacity: 0.45; }
+}
+@media (max-width: 700px) {
+  :root[data-skin='clean'] .space-bar, :root[data-skin='clean'] .space-dot { background: var(--cl-panel); color: var(--cl-text); }
+  :root[data-skin='clean'] .space-bar { border-bottom: 1px solid var(--cl-line); }
+  :root[data-skin='clean'] .space-chip.on { background: var(--cl-accent-soft); color: var(--cl-accent); }
+  :root[data-skin='clean'] .space-bar .space-menu-item { background: var(--cl-hover); }
+  :root[data-skin='clean'] .space-menu { border-top-color: var(--cl-line); }
 }
 
 /* A lens's view, and the same filling the screen: the browser's full screen, or laid over the app (an iPhone). */
