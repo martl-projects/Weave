@@ -1229,7 +1229,8 @@ button.session-title:hover { text-decoration: underline; }
   /* Posting to a board: low on the right, only in boards. */
   :root[data-skin] .fab { position: absolute; z-index: 20; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; min-height: 48px; padding: 0 18px; border-radius: 24px; font-size: 15px; font-weight: bold; box-shadow: 0 3px 12px #0005; }
   /* Elsewhere (Home, Places, Inbox, People, My hub): folded, Home's icon floats at the top (back beside it but on Home)
-     and the tabs float at the bottom as Places alone; unfolded, the title comes back and the tabs widen to the right. */
+     and, on Home only, the tabs float at the bottom as Places alone; unfolded, the title comes back and they widen
+     to the right. Places, Inbox, People and My hub keep the tabs as a bar along the bottom. */
   .title-back { display: flex; }
   :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
   .home-float { position: fixed; }
@@ -1238,9 +1239,9 @@ button.session-title:hover { text-decoration: underline; }
   .app-window > .title-bar.folding, .app-window > .title-bar.unfolding { overflow: hidden; }
   .app-window > .title-bar.folding { animation: space-bar-out 0.16s ease-in forwards; }
   .app-window > .title-bar.unfolding { animation: space-bar-in 0.2s ease-out; }
-  :root[data-skin] .app-window:not(.phone-place) > .toolbar { position: fixed; z-index: 25; left: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); justify-content: flex-start; max-width: calc(100vw - 20px); padding: 3px; overflow: hidden; border: 0; background: var(--face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 0 4px 12px #0006; transition: max-width 0.28s ease; }
-  :root[data-skin] .app-window:not(.phone-place) > .toolbar .tool { flex: none; width: 76px; min-height: 48px; }
-  :root[data-skin] .app-window.bars-folded:not(.phone-place) > .toolbar { max-width: 82px; }
+  :root[data-skin] .app-window.at-home > .toolbar { position: fixed; z-index: 25; left: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); justify-content: flex-start; max-width: calc(100vw - 20px); padding: 3px; overflow: hidden; border: 0; background: var(--face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 0 4px 12px #0006; transition: max-width 0.28s ease; }
+  :root[data-skin] .app-window.at-home > .toolbar .tool { flex: none; width: 76px; min-height: 48px; }
+  :root[data-skin] .app-window.at-home.bars-folded > .toolbar { max-width: 82px; }
 }
 @media (max-width: 700px) {
   /* Windows 95: the bar is a title bar, its chips and buttons square, the one you're at pressed in. */
@@ -1255,7 +1256,7 @@ button.session-title:hover { text-decoration: underline; }
   :root[data-skin='win95'] .fab { border-radius: 0; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
   :root[data-skin='win95'] .fab:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
   :root[data-skin='clean'] .space-bar, :root[data-skin='clean'] .space-float > button { background: var(--cl-panel); color: var(--cl-text); }
-  :root[data-skin='clean'] .app-window:not(.phone-place) > .toolbar { border: 1px solid var(--cl-line); border-radius: 16px; background: var(--cl-panel); box-shadow: 0 4px 16px #0004; }
+  :root[data-skin='clean'] .app-window.at-home > .toolbar { border: 1px solid var(--cl-line); border-radius: 16px; background: var(--cl-panel); box-shadow: 0 4px 16px #0004; }
   :root[data-skin='clean'] .space-bar { border-bottom: 1px solid var(--cl-line); }
   :root[data-skin='clean'] .space-chip.on { background: var(--cl-accent-soft); color: var(--cl-accent); }
 }

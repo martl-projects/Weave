@@ -960,7 +960,8 @@ function Shell() {
   const phone = useIsPhone();
   const inPlace = ['p', 'g', 'r', 'd'].includes(route[0]);
   // Outside a place they start folded: Home's icon floats at the top (with back beside it elsewhere), and the tabs at the
-  // bottom are only Places; a tap on the icon, or pulling the page down, brings the title back and widens the tabs.
+  // bottom are only Places on Home (a bar along the bottom elsewhere); a tap on the icon, or pulling the page down,
+  // brings the title back and widens the tabs.
   const [barsFolded, setBarsFolded] = useBarsFolded(phone, routeKey, !inPlace);
   const bars: Bars = { folded: barsFolded, unfold: () => setBarsFolded(false) };
   const titlePlay = useFoldPlay(barsFolded);
@@ -1028,7 +1029,7 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       {phone && !inPlace && titlePlay.away && (
         <div className="space-float home-float mobile-only">
           {route.length > 0 && (
