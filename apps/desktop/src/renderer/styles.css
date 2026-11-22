@@ -853,7 +853,11 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   :root[data-skin] .app-window > .toolbar .tool { flex: 1 1 0; flex-direction: column; gap: 2px; min-width: 0; min-height: 50px; padding: 4px 2px; font-size: 11px; }
   :root[data-skin] .app-window > .toolbar .tool .icon { width: 22px !important; height: 22px !important; }
   .tool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .panes { padding: 2px 0; gap: 0; }
+  .panes { padding: 0; gap: 0; }
+  /* Edge to edge: the window is the whole screen, under the status bar and the home indicator too (an iPhone's home
+     screen counts 100% short of the bottom edge; the dynamic viewport doesn't), with no frame of its own. */
+  html, body, #root { height: 100dvh; }
+  :root[data-skin] .app-window { padding: 0; border: 0; border-radius: 0; box-shadow: none; }
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
@@ -1238,7 +1242,6 @@ button.session-title:hover { text-decoration: underline; }
   :root[data-skin] .space-float > button { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 3px; border: 0; border-radius: 12px; background: var(--navy); color: #fff; box-shadow: 0 3px 10px #0007, 0 1px 2px #0005; }
   :root[data-skin] .space-float > .space-float-back { width: 38px; height: 38px; padding: 0 2px 3px 0; font-size: 28px; line-height: 1; }
   .space-dot :is(.sprite, .project-icon, .avatar, img) { display: block; border-radius: 9px; }
-  .phone-place .center:has(> .space-float) { padding-top: env(safe-area-inset-top); }
   /* The bar folds up into it and unfolds back down. */
   .space-bar.folding .space-bar-row, .space-bar.unfolding .space-bar-row { overflow: hidden; }
   .space-bar.folding .space-bar-row { animation: space-bar-out 0.16s ease-in forwards; }
@@ -1259,11 +1262,13 @@ button.session-title:hover { text-decoration: underline; }
   :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
   .home-float { position: fixed; }
   .app-window.bars-away:not(.phone-place) > .title-bar { display: none; }
+  /* The list starts below the status bar and ends above the tabs, and scrolls under both. */
+  .app-window.at-home.bars-away .pane-scroll { padding-top: env(safe-area-inset-top); }
+  .app-window.at-home .pane-scroll { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   /* Home's own bar (posting, its sources, the sort) goes and comes back with the title. */
   .app-window.at-home .pane-main > .pane-head { overflow: hidden; animation: space-bar-in 0.2s ease-out; }
   .app-window.at-home.bars-folded .pane-main > .pane-head { animation: space-bar-out 0.16s ease-in forwards; }
   .app-window.at-home.bars-away .pane-main > .pane-head { display: none; }
-  .app-window.bars-away:not(.phone-place) > .panes { padding-top: env(safe-area-inset-top); }
   .app-window > .title-bar.folding, .app-window > .title-bar.unfolding { overflow: hidden; }
   .app-window > .title-bar.folding { animation: space-bar-out 0.16s ease-in forwards; }
   .app-window > .title-bar.unfolding { animation: space-bar-in 0.2s ease-out; }
