@@ -186,7 +186,12 @@ export interface BrowserHandover {
   encryption: Array<{ did: Did; publicKey: string; secretKey: string }>;
   events: unknown[];
   spaces: StoredSpace[];
+  /** The newest of those spaces' events (control, then content newest first), within LINK_RECENT_BYTES. */
+  recent?: unknown[];
 }
+
+/** How much of its spaces' content a computer puts in a browser's handover: the storage node takes 8 MB sealed. */
+const LINK_RECENT_BYTES = 4 * 1024 * 1024;
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
 import { Widgets } from './widgets.ts';
@@ -209,6 +214,7 @@ import { Membership, type MembershipCore } from './membership.ts';
 import type { SpaceStorage } from './ports.ts';
 import { startDeviceSignIn } from './devicecode.ts';
 import { KIND_PROFILE, meetTopic, meetSecretOf } from './shared.ts';
+import { PushTargets } from './pushtargets.ts';
 
 
 /** A space you don't want on Home, sealed to yourself; the latest per space counts. */
@@ -912,6 +918,23 @@ export class WeaveNode implements Backend {
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
   #marks: Marks = new Marks(WeaveNode.servicesHost(this));
   #hints: Hints = new Hints(WeaveNode.servicesHost(this), (since) => this.#heldNotices(since));
+  /** Pushes to closed browsers (docs/web-push.md, stage 3): this browser's addresses, sealed to each place's managers; notices to others'. */
+  #push: PushTargets = new PushTargets({
+    me: () => this.identity.author,
+    places: () => [...[...this.#spaces.values()].map((space) => ({ space })), ...[...this.#kernel.directs.values()].map(({ space, peer }) => ({ space, peer }))],
+    state: (space) => this.#kernel.state(space),
+    entries: (space) => this.#kernel.entries(space),
+    publish: (input) => this.publish(input),
+    encryptionKeyOf: (person) => this.#encryptionKeyOf(person),
+    tryOpen: (open) => this.#tryOpen(open),
+    nameOf: (did) => this.nameOf(did),
+    spaceName: (space) => this.#kernel.spaceName(space),
+    rules: async () => {
+      const unread = (await this.#hints.hintServices()).find((s) => s.service === 'weave-unread');
+      const rules = (unread?.settings as { rules?: unknown } | undefined)?.rules;
+      return Array.isArray(rules) ? rules : [];
+    },
+  });
   // Kernel (kernel.ts): the node delegates.
 
   sessionAccess(...args: Parameters<Kernel['sessionAccess']>): ReturnType<Kernel['sessionAccess']> {
@@ -970,6 +993,8 @@ export class WeaveNode implements Backend {
       if (event.kind === KIND_ROTATE) this.#forgetDirects();
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#kernel.personEvents.clear();
+      // A place, its managers or a rule may have changed: this browser's push addresses follow (a moment later).
+      if (this.#push.on) this.#push.changed();
       if (event.kind === KIND_ORG_FREEZE) this.#kernel.invalidateDecoded();
       if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
       else this.#personEventsAdd(event);
@@ -1193,7 +1218,7 @@ export class WeaveNode implements Backend {
           .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
         ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
-      spaces: this.#nodeSpaces() as unknown as Json[],
+      spaces: this.#nodeSpaces(true) as unknown as Json[],
       bootstrap: this.config.bootstrap as unknown as Json,
     };
     return { answer: encodeNodeAnswer(me, boxTo(key, payload as unknown as Json) as unknown as Json), key, name };
@@ -1263,7 +1288,10 @@ export class WeaveNode implements Backend {
           .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
         ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
-      spaces: this.#nodeSpaces() as unknown as Json[],
+      spaces: this.#nodeSpaces(true) as unknown as Json[],
+      // What's in them, newest first, as much as the handover carries: the browser shows it at once, and hands it on to
+      // its storage node itself, instead of waiting for the storage node to find this computer on the DHT.
+      recent: this.#recentForBrowser(),
     };
     const res = await fetch(`${storage.origin}/link/${linkToken(secret)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: sealLink(secret, handover as unknown as Json) });
     if (!res.ok) {
@@ -1272,6 +1300,33 @@ export class WeaveNode implements Backend {
       throw new Error(res.status === 429 ? 'too many browser links from here this hour: try again later' : `the storage node didn't take it (${res.status})`);
     }
     return { link: browserLinkUrl(url.origin, secret), name, key };
+  }
+
+  /**
+   * The newest of our spaces for a browser we link, sealed as they are, within LINK_RECENT_BYTES: every space's control
+   * events (who's in, its keys, its boards), then content newest first across all of them. Older content the browser
+   * takes from its storage node afterwards, which reconciles only what's missing.
+   */
+  #recentForBrowser(): Json[] {
+    const spaces = (this.#nodeSpaces(true) as Array<{ id: string; kind: string }>).map((s) => spaceScope(s as Parameters<typeof spaceScope>[0]));
+    const control: Json[] = [];
+    const content: Array<{ time: string; wire: Json }> = [];
+    for (const space of spaces)
+      for (const stored of this.replica.store.inSpace2(space)) {
+        const record = this.replica.record2(stored.id);
+        if (!record) continue;
+        if (stored.event.class === 'control') control.push(record.wire as unknown as Json);
+        else if (!record.missing) content.push({ time: stored.event.time, wire: record.wire as unknown as Json });
+      }
+    let bytes = JSON.stringify(control).length;
+    const recent = [...control];
+    for (const item of content.sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))) {
+      const size = JSON.stringify(item.wire).length + 1;
+      if (bytes + size > LINK_RECENT_BYTES) break;
+      bytes += size;
+      recent.push(item.wire);
+    }
+    return recent;
   }
 
   /** Set up a browser's home from a link's handover (linkBrowser): the person, with the key it was given. */
@@ -1288,6 +1343,8 @@ export class WeaveNode implements Backend {
       throw new Error("the link doesn't vouch for this browser's key: link it again");
     }
     for (const space of handover.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#kernel.addSpace({ ...space, entry: { topics: [handover.person], bootstrap: [] } });
+    // The newest of those spaces, from the computer that linked it: there to read at once.
+    if (handover.recent?.length) node.replica.batch(() => handover.recent!.forEach((item) => node.replica.ingest(item)));
     return node;
   }
 
@@ -1309,11 +1366,35 @@ export class WeaveNode implements Backend {
     return !this.#isLinkedNode || this.#nodeAgents.directChatsHere();
   }
 
-  /** Our spaces for our always-on nodes: all but direct chats, with their keys. */
-  #nodeSpaces(): unknown[] {
+  /**
+   * Our spaces for our other devices: all but direct chats, with their keys and whether each is only for our computers.
+   * `handed`: for a browser or always-on node we hand them to, without those (their keys never leave our computers).
+   */
+  #nodeSpaces(handed = false): unknown[] {
     return [...this.#spaces.values()]
-      .filter((s) => s.kind !== 'direct' && !this.#kernel.directs.has(s.id))
-      .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
+      .filter((s) => s.kind !== 'direct' && !this.#kernel.directs.has(s.id) && !(handed && s.devicesOnly))
+      .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}), ...(s.devicesOnly && !handed ? { devicesOnly: true as const } : {}) }));
+  }
+
+  /**
+   * Keep a place only on our computers (or not again), on one of them: browsers we linked and always-on nodes don't get
+   * it, and let it go if they have it, so no storage node of ours learns of it. Our other computers take it with the
+   * node index. The other members aren't told: it's ours.
+   */
+  async setDevicesOnly(input: { space: string; on: boolean }): Promise<SpaceInfo> {
+    if (!this.#kernel.onComputer) throw new Error("set that on one of your computers: this one is what it's kept from");
+    const space = this.#kernel.space(input.space);
+    this.#setDevicesOnly(space, input.on);
+    this.#writeNodeIndex(true);
+    return this.#kernel.spaceInfo(space);
+  }
+
+  #setDevicesOnly(space: StoredSpace, on: boolean): void {
+    if (on) space.devicesOnly = true;
+    else delete space.devicesOnly;
+    saveSpace(this.home, space);
+    // A browser or always-on node lets its storage node know (it holds the space no more), or takes it up again.
+    this.#swarm?.announce();
   }
 
   /**
@@ -1500,7 +1581,14 @@ export class WeaveNode implements Backend {
     if (space?.kind === 'project') inner = this.#kernel.forBoard(space, inner);
     const fields: EventFields = space ? sealFor(await this.#managed.cipherReady(space), inner) : inner;
     const event = this.replica.write(signer, fields);
+    // A message: those here who asked for pushes, and gave me their address, hear of it (docs/web-push.md).
+    if (space && canonicalKind(input.kind) === KIND_MSG && input.body && typeof input.body === 'object') void this.#push.said(space, input.body as Parameters<PushTargets['said']>[1]).catch(() => undefined);
     return this.itemFor(event)!;
+  }
+
+  /** Pushes (docs/web-push.md): a browser's addresses per place (host), and how notices leave this node (send). */
+  get pushTargets(): PushTargets {
+    return this.#push;
   }
 
   /** An agent may sign this kind, or an error saying how its person allows it. */
@@ -3548,6 +3636,10 @@ export class WeaveNode implements Backend {
         return n.#isLinkedNode || n.#isLinkedBrowser;
       },
       keysOnly: n.#kernel.keysOnly.bind(n.#kernel),
+      get onComputer() {
+        return n.#kernel.onComputer;
+      },
+      setDevicesOnly: (space, on) => n.#setDevicesOnly(space, on),
       get managed() {
         return n.#managed;
       },

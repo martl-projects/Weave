@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { NoticeSwitch } from './notify.tsx';
 import type { Actor, BoardInfo, MemberInfo, PostInfo, PostsQuery, ProposalInfo, SpaceInfo, SpaceRef } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { Icon, type IconName } from './icons.tsx';
@@ -69,8 +70,14 @@ export const SORTS = [
   { value: 'top', icon: 'trophy' as const },
 ];
 
-/** Remembers a sort choice per list, in this browser only. */
-function useSort(key: string, fallback?: string): [string | undefined, (s: string) => void] {
+/** Which list a sort choice belongs to. */
+export const sortKey = (query: PostsQuery) => `${query.space ?? 'home'}/${query.board ?? ''}${query.saved ? '/saved' : ''}`;
+
+/**
+ * Remembers a sort choice per list, in this browser only. The list and a phone's menu (SpaceBar) both pick it, so a
+ * choice in one shows in the other.
+ */
+export function useSort(key: string, fallback?: string): [string | undefined, (s: string) => void] {
   const read = () => {
     try {
       return localStorage.getItem(`weave.sort.${key}`) ?? fallback;
@@ -79,6 +86,12 @@ function useSort(key: string, fallback?: string): [string | undefined, (s: strin
     }
   };
   const [sort, setSort] = useState(read);
+  useEffect(() => {
+    setSort(read());
+    const changed = (event: Event) => (event as CustomEvent<string>).detail === key && setSort(read());
+    addEventListener('weave-sort', changed);
+    return () => removeEventListener('weave-sort', changed);
+  }, [key, fallback]);
   return [
     sort,
     (s: string) => {
@@ -86,8 +99,58 @@ function useSort(key: string, fallback?: string): [string | undefined, (s: strin
       try {
         localStorage.setItem(`weave.sort.${key}`, s);
       } catch {}
+      dispatchEvent(new CustomEvent('weave-sort', { detail: key }));
     },
   ];
+}
+
+/**
+ * A choice shown as its icon: a tap opens the list of choices (on a phone, its own picker); the title says what's chosen,
+ * and a dot marks a choice other than the usual one.
+ */
+export function IconSelect({ icon, label, value, options, onChange, marked = false }: { icon: IconName; label: string; value: string; options: { value: string; label: string }[]; onChange(value: string): void; marked?: boolean }) {
+  return (
+    <label className={`icon-select${marked ? ' marked' : ''}`} title={`${label}: ${options.find((o) => o.value === value)?.label ?? ''}`}>
+      <Icon name={icon} />
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** The sorts as rows of a list (a phone's menu), the chosen one marked. */
+export function SortButtons({ query, board }: { query: PostsQuery; board?: BoardInfo }) {
+  const { t } = useTexts();
+  const [sort, setSort] = useSort(sortKey(query), board?.sort);
+  return (
+    <>
+      {SORTS.map((s) => (
+        <button key={s.value} className={`tree-link${(sort ?? 'hot') === s.value ? ' on' : ''}`} aria-pressed={(sort ?? 'hot') === s.value} onClick={() => setSort(s.value)}>
+          <Icon name={s.icon} /> {t(`sort.${s.value}`)}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** Following a board: its posts on your Home, and notices of new ones. */
+export function FollowButton({ space, board, row = false }: { space: string; board: BoardInfo; row?: boolean }) {
+  const { t } = useTexts();
+  if (board.following === undefined) return null;
+  return (
+    <button
+      className={row ? `tree-link${board.following ? ' on' : ''}` : board.following ? 'chosen' : ''}
+      title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
+      onClick={() => attempt(() => api('followBoard', { project: space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
+    >
+      {t(board.following ? 'board.following' : 'board.follow')}
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------- votes and actions
@@ -293,31 +356,19 @@ export function PostList({
   above?: ReactNode;
 }) {
   const { t } = useTexts();
-  const [sort, setSort] = useSort(`${query.space ?? 'home'}/${query.board ?? ''}${query.saved ? '/saved' : ''}`, board?.sort);
+  const [sort, setSort] = useSort(sortKey(query), board?.sort);
   const { data: posts } = useApi(() => api<PostInfo[]>('posts', { ...query, sort }), [query, sort]);
   const curate = useCurate(query.space, board, canCurate);
   return (
     <section className="pane-main">
-      <header className="pane-head">
+      {/* In a place on a phone, these are in its bar's menu (SpaceBar). */}
+      <header className={`pane-head${query.space ? ' not-mobile' : ''}`}>
         <b>{title}</b>
         <span className="pane-tools">
-          {board?.following !== undefined && query.space && (
-            <button
-              className={board.following ? 'chosen' : ''}
-              title={t(board.following ? 'board.follow.on.title' : 'board.follow.off.title')}
-              onClick={() => attempt(() => api('followBoard', { project: query.space, board: board.name, on: !board.following }).then(bump), t(board.following ? 'board.follow.stopped' : 'board.follow.now', { board: board.title }))}
-            >
-              {t(board.following ? 'board.following' : 'board.follow')}
-            </button>
-          )}
+          {query.space && <NoticeSwitch space={query.space} />}
+          {board && query.space && <FollowButton space={query.space} board={board} />}
           {toolbar}
-          <select value={sort ?? 'hot'} onChange={(e) => setSort(e.target.value)} aria-label={t('posts.sort')}>
-            {SORTS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {t(`sort.${s.value}`)}
-              </option>
-            ))}
-          </select>
+          <IconSelect icon="sortVertical" label={t('posts.sort')} value={sort ?? 'hot'} options={SORTS.map((s) => ({ value: s.value, label: t(`sort.${s.value}`) }))} onChange={setSort} />
         </span>
       </header>
       <div className="pane-scroll sunken">

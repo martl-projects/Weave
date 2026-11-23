@@ -118,12 +118,15 @@ export interface OnboardLinkInput {
   welcome?: string;
   /** How many people may use it; none: no limit. */
   uses?: number;
-  /** How many days it works; default a year. */
+  /** How many days it works (from half an hour, 1/48); default a year. */
   days?: number;
   /** Ask first: each newcomer asks you (a knock link) instead of coming in at once. */
   ask?: boolean;
-  /** The open preview link cards show: off with `false`. Its picture: the project's icon or banner (PNG only). */
-  preview?: false | { title?: string; text?: string; image?: 'icon' | 'banner' | 'none' };
+  /**
+   * The open preview link cards show: off with `false`. Its picture: the project's icon or banner (PNG only), or one the
+   * creator chose (`png`: a PNG of at most 300 KB, base64; the app makes it from a picture in the places it leads to).
+   */
+  preview?: false | { title?: string; text?: string; image?: 'icon' | 'banner' | 'none' | { png: string } };
   /** The link's page; the storage node behind it is storageFor(page) unless given. */
   page?: string;
   storage?: string;
@@ -223,7 +226,7 @@ export class Onboarding {
     const target: LinkTarget | undefined = input.target ?? (input.project ? { kind: 'space', space: input.project } : undefined);
     if (!target) throw new Error('a link leads somewhere: to you, or to a space');
     const days = input.days ?? DEFAULT_DAYS;
-    if (!(days > 0 && days <= 3650)) throw new Error('a link works from one day to ten years');
+    if (!(days >= 1 / 48 && days <= 3650)) throw new Error('a link works from half an hour to ten years');
     if (input.uses !== undefined && !(Number.isInteger(input.uses) && input.uses >= 1)) throw new Error('uses are a whole number, at least 1');
     // A link to you is for becoming friends.
     const friends = target.kind === 'me' || input.friends !== false;
@@ -290,7 +293,13 @@ export class Onboarding {
       preview = { title: (p.title?.trim() || title).slice(0, 100), text: (p.text?.trim() || line).slice(0, 300) };
       // Pictures come from a project's page; other places have none to show.
       const which = p.image ?? 'banner';
-      const ref = !project || which === 'none' ? undefined : which === 'icon' ? (project.page.icon ?? project.page.banner) : (project.page.banner ?? project.page.icon);
+      if (typeof which === 'object') {
+        // A picture the creator chose: taken as it is when it's a PNG small enough for the storage node.
+        const bytes = Buffer.from(which.png, 'base64');
+        if (!(PNG.every((b, i) => bytes[i] === b) && bytes.length <= 300 * 1024)) throw new Error("the card's picture must be a PNG of at most 300 KB");
+        image = which.png;
+      }
+      const ref = !project || typeof which === 'object' || which === 'none' ? undefined : which === 'icon' ? (project.page.icon ?? project.page.banner) : (project.page.banner ?? project.page.icon);
       if (ref && parseBlobRef(ref)) {
         const blob = await node.blob(ref).catch(() => undefined);
         const bytes = blob && Buffer.from(blob.data, 'base64');

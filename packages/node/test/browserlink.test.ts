@@ -70,6 +70,9 @@ describe('a linked browser', () => {
     expect(web.identity.author).toBe(martl.identity.author);
     expect(web.identity.did).toBe(linked.key);
     expect(martl.replica.authority.grant(linked.key)).toMatchObject({ role: 'agent', permissions: ['*'], name: 'browser:my-phone' });
+    // The newest of martl's spaces came with the link: readable before it has synced with anyone.
+    expect(handover.recent?.length).toBeGreaterThan(0);
+    expect((await web.messages('Party')).map((m) => m.text)).toContain('see you saturday');
 
     // It reads martl's spaces, and what it says is martl's, not an agent's.
     sync(martl, web);
@@ -110,6 +113,45 @@ describe('a linked browser', () => {
     await web.say({ space: 'Party', text: 'after the revoke' });
     sync(web, lena);
     expect((await lena.messages('Party')).map((m) => m.text)).not.toContain('after the revoke');
+  });
+
+  it('gets no place that is only for the computers, and lets one go that becomes so', async () => {
+    const martl = person('martl');
+    await martl.createProject({ name: 'Party' });
+    await martl.createProject({ name: 'Diary' });
+    await martl.say({ space: 'Diary', text: 'just for me' });
+    const diary = await martl.setDevicesOnly({ space: 'Diary', on: true });
+    expect(diary.devicesOnly).toBe(true);
+
+    const linked = await martl.linkBrowser({ url, name: 'laptop' });
+    const secret = b64u.decode(new URL(linked.link).hash.slice('#link='.length));
+    const handover = openLink<BrowserHandover>(secret, waiting.get(linkToken(secret))!);
+    // Neither its keys nor anything of it go with the link.
+    expect(handover.spaces.map((s) => s.name)).toEqual(['Party']);
+    expect(JSON.stringify(handover.recent)).not.toContain(diary.id);
+
+    const web = await WeaveNode.fromBrowserLink(handover, tempDir());
+    nodes.push(web);
+    // The index martl's devices share lists it (his other computers need it), marked: the browser doesn't take it.
+    sync(martl, web);
+    await web.reconcile();
+    expect((await web.spaces()).map((s) => s.name)).toEqual(['Party']);
+
+    // Party becomes only for the computers too: the browser, which has it, lets it go.
+    await martl.setDevicesOnly({ space: 'Party', on: true });
+    sync(martl, web);
+    await web.reconcile();
+    expect(await web.spaces()).toEqual([]);
+    // Nor does it ask its storage node to hold it.
+    const party = (await martl.spaces()).find((s) => s.name === 'Party')!;
+    expect(web.sessionAccess().spaces().map((h) => h.space)).not.toContain(`project:${party.id}`);
+    await expect(web.setDevicesOnly({ space: 'Party', on: false })).rejects.toThrow(/one of your computers/);
+
+    // And back: it's there again.
+    await martl.setDevicesOnly({ space: 'Party', on: false });
+    sync(martl, web);
+    await web.reconcile();
+    expect((await web.spaces()).map((s) => s.name)).toEqual(['Party']);
   });
 
   it('opens once, and only with its secret', async () => {

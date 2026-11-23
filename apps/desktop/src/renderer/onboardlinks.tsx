@@ -1,128 +1,124 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import type { BoardInfo, LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, PostInfo, SpaceInfo, WebsiteInfo } from '@weave/node/client';
+import type { LinkTarget, OnboardLinkInfo, OnboardLook, OpenTarget, PlayLinkInfo, PostInfo, SpaceInfo } from '@weave/node/client';
 import { bridge } from './bridge.ts';
 import { Icon, type IconName } from './icons.tsx';
-import { api, bump, navigate, useApi } from './lib.ts';
+import { api, blobUrl, bump, navigate, useApi } from './lib.ts';
 import { copy, startChat } from './posts.tsx';
-import { ask, attempt, AsyncButton, Modal, toast } from './ui.tsx';
+import { ask, attempt, AsyncButton, BlobImage, Info, Modal, ProjectIcon, toast } from './ui.tsx';
+import { GroupIcon } from './avatar-editor.tsx';
+import { ShareMark } from './share.tsx';
 import { useTexts } from './texts.tsx';
 import { playSoon } from './websites.tsx';
+import weaveMark from './mark.png';
 
 /*
  * Weave links (idea bZFDCQNT): one short web.martl.io link that makes a newcomer's account, makes you friends, lets them in
- * and opens what it leads to. Built in four steps: where it leads (you, a space, or in a space a board, a post or a website),
- * what happens on arrival, who may use it and how long, and how its card looks where it's shared. Its plan goes sealed to
- * the storage node; only the card is open. Below, your links with how often each was used, to take one back.
+ * and opens what it leads to. Where it leads is chosen in share mode (share.tsx), by going there; then three steps: who
+ * gets it (and a message for them), access (how often, how long, confirmed by you or not), and its preview where it's shared. Its plan goes sealed to the
+ * storage node; only the card is open. Below, your links with how often each was used, to take one back.
  *
  * Following one (Open link, a link handed over by the OS, Weave Web's /j/…) asks "Join?" once; a link to where you are
  * already, or your own, opens straight away and stays as a quick start (Quick start in the places tree, /play/<code>).
  */
 
-type Where = 'me' | 'space';
-type What = 'space' | 'board' | 'post' | 'website';
-const STEPS = 4;
+const STEPS = 3;
 /** Where the card says the link is from: Weave Web's page, where links live. */
 const CARD_SITE = bridge.web ? location.host : new URL('https://web.martl.io').host;
 const USES = [0, 1, 10, 50];
-const DAYS = [7, 30, 365];
+/** How long a link works, in days: half an hour, a day, a week, a month. */
+const EXPIRY = [1 / 48, 1, 7, 30];
+/** What a link card's picture may weigh at the storage node. */
+const MAX_PICTURE = 300 * 1024;
 
-/** The link builder: four steps, then the link. `space`: a place to start from (Invite in a space). */
-export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: SpaceInfo[]; space?: SpaceInfo; tabs?: ReactNode; onClose(): void }) {
+/** The picture a card has until another is chosen: Weave's own mark. */
+const WEAVE = 'weave';
+
+/** A picture (wblob:, or Weave's mark) as a PNG of at most 300 KB, base64: smaller each try until it fits. */
+async function cardPng(ref: string): Promise<string> {
+  const image = new Image();
+  image.src = ref === WEAVE ? weaveMark : await blobUrl(ref);
+  await image.decode();
+  for (let most = 1200; most >= 150; most = Math.round(most * 0.75)) {
+    const scale = Math.min(1, most / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (png && png.size <= MAX_PICTURE) {
+      const bytes = new Uint8Array(await png.arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(text);
+    }
+  }
+  throw new Error("that picture doesn't fit on a link card");
+}
+
+/**
+ * The rest of a Weave link, once share mode (share.tsx) said where it leads, in three steps with big titles: who gets it
+ * (where it opens, what they become part of, a message), access (how often, how long, whether you confirm each), and its
+ * preview, edited in place (click a line to change it, the picture to choose one from the places it leads to). Then the
+ * link. `opens`: where it leads, as the bar names it (the space first, unless it's you); `places`: the spaces it lets them
+ * into, the one it opens first; `path`: what follows the space (a board, a post, a website), with icons. `onClose(made)`.
+ */
+export function LinkFinish({ target, also, title, opens, path, places, onClose }: { target: LinkTarget; also: string[]; title: string; opens: string[]; path: Array<{ label: string; icon: IconName }>; places: SpaceInfo[]; onClose(made: boolean): void }) {
   const { t } = useTexts();
-  // Only places you may let people into: a project's maintainers make its links, any member a group's or community's.
-  const places = spaces.filter((s) => s.kind !== 'direct' && !s.closed && s.mayInvite);
+  const toMe = target.kind === 'me';
   const [step, setStep] = useState(1);
-  const [where, setWhere] = useState<Where>(from?.mayInvite ? 'space' : 'me');
-  const [spaceId, setSpaceId] = useState(from?.mayInvite ? from.id : (places[0]?.id ?? ''));
-  const [what, setWhat] = useState<What>('space');
-  const [board, setBoard] = useState('');
-  const [post, setPost] = useState('');
-  const [website, setWebsite] = useState('');
-  const [friends, setFriends] = useState(true);
   const [play, setPlay] = useState(true);
-  const [askFirst, setAskFirst] = useState(false);
-  const [also, setAlso] = useState<string[]>([]);
+  const [confirm, setConfirm] = useState(false);
   const [welcome, setWelcome] = useState('');
   const [uses, setUses] = useState(0);
   const [days, setDays] = useState(30);
-  const [preview, setPreview] = useState(true);
-  const [previewText, setPreviewText] = useState('');
-  const [image, setImage] = useState<'banner' | 'icon' | 'none'>('banner');
-  const [made, setMade] = useState<{ link: string; svg: string; target: LinkTarget['kind'] }>();
-  const space = places.find((s) => s.id === spaceId);
-  const { data: boards } = useApi(() => (where === 'space' && space?.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([] as BoardInfo[])), [where, space?.id]);
-  const { data: posts } = useApi(() => (where === 'space' && space && what === 'post' ? api<PostInfo[]>('posts', { space: space.id, sort: 'new' }) : Promise.resolve([] as PostInfo[])), [where, space?.id, what]);
-  const { data: websites } = useApi(() => (where === 'space' && space?.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id).catch(() => [] as WebsiteInfo[]) : Promise.resolve([] as WebsiteInfo[])), [where, space?.id]);
-  const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks'), []);
+  const [noPreview, setNoPreview] = useState(false);
+  // The card's title and line as written here; until then the ones the node would put (shown, and editable, as they are).
+  const [cardTitle, setCardTitle] = useState<string>();
+  const [cardText, setCardText] = useState<string>();
+  // The card's picture: Weave's mark until another (a wblob: reference) is chosen, or none.
+  const [picture, setPicture] = useState<string | null>(WEAVE);
+  const [picking, setPicking] = useState(false);
+  const [made, setMade] = useState<{ link: string; svg: string }>();
   const { data: me } = useApi(() => api<{ name?: string }>('profile'), []);
-  const groups = places.filter((s) => s.kind === 'group' && s.id !== spaceId);
-
-  // What's chosen, as the node takes it; undefined while something's missing.
-  const target: LinkTarget | undefined =
-    where === 'me'
-      ? { kind: 'me' }
-      : !space
-        ? undefined
-        : what === 'board'
-          ? board ? { kind: 'board', space: space.id, board } : undefined
-          : what === 'post'
-            ? post ? { kind: 'post', space: space.id, post } : undefined
-            : what === 'website'
-              ? website ? { kind: 'website', space: space.id, website } : undefined
-              : { kind: 'space', space: space.id };
-  const title =
-    where === 'me'
-      ? (me?.name ?? '')
-      : what === 'board'
-        ? `${boards?.find((b) => b.name === board)?.title ?? ''} · ${space?.name ?? ''}`
-        : what === 'post'
-          ? (posts?.find((p) => p.id === post)?.title ?? '')
-          : what === 'website'
-            ? (websites?.find((w) => w.id === website)?.name ?? '')
-            : (space?.name ?? '');
-  const line = previewText.trim() || (where === 'me' ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title }));
+  const line = toMe ? t('linkb.card.me', { name: me?.name ?? '' }) : t('linkb.card.space', { name: me?.name ?? '', title });
+  const shown = picture ?? undefined;
 
   const create = async () => {
-    if (!target) return;
+    const image = noPreview ? undefined : shown ? { png: await cardPng(shown) } : 'none';
     const link = await attempt(() =>
       api<OnboardLinkInfo>('createOnboardLink', {
         target,
         // Weave Web makes links for its own page (and the storage node behind it); the desktop for web.martl.io.
         ...(bridge.web ? { page: location.origin } : {}),
         also,
-        friends: where === 'me' || friends,
-        play: what === 'website' ? play : false,
-        ask: where === 'space' && askFirst,
+        friends: true,
+        play: target.kind === 'website' ? play : false,
+        ask: !toMe && confirm,
         ...(welcome.trim() ? { welcome: welcome.trim() } : {}),
         ...(uses ? { uses } : {}),
         days,
-        preview: preview ? { ...(previewText.trim() ? { text: previewText.trim() } : {}), image } : false,
+        // What the card shows is what it says: its title and line as they stand here, written or not.
+        preview: noPreview ? false : { title: (cardTitle ?? title).trim() || title, text: (cardText ?? line).trim() || line, image },
       }),
     );
     if (!link) return;
     const svg = await QRCode.toString(link.link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
-    setMade({ link: link.link, svg, target: target.kind });
+    setMade({ link: link.link, svg });
     bump();
   };
-  const revoke = async (l: OnboardLinkInfo) => {
-    if (!(await ask(t('linkb.revoke.ask', { link: l.code }), t('linkb.revoke')))) return;
-    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
-  };
-
-  const stepTitle = [t('linkb.step.where'), t('linkb.step.arrive'), t('linkb.step.who'), t('linkb.step.card')][step - 1];
+  // One title, the step's, on top of the window; which step it is right under it.
+  const stepTitle = made ? t('linkb.made.title') : t(['linkb.step1', 'linkb.step2', 'linkb.step3'][step - 1]);
   return (
-    <Modal title={made ? t('linkb.made.title') : t('linkb.title', { n: step, of: STEPS, step: stepTitle })} onClose={onClose}>
-      {!made && tabs}
+    <Modal title={stepTitle} subtitle={made ? t('linkb.made') : t('linkb.step.n', { n: step, of: STEPS })} onClose={() => onClose(!!made)}>
       {made ? (
         <div className="form">
-          <p className="small">{t('linkb.made')}</p>
           <div className="onboard-made">
             <span className="qr" dangerouslySetInnerHTML={{ __html: made.svg }} />
             <input className="wide" readOnly value={made.link} onFocus={(e) => e.target.select()} />
           </div>
           <div className="buttons">
-            <button onClick={() => (setMade(undefined), setStep(1))}>{t('linkb.another')}</button>
+            <button onClick={() => onClose(true)}>{t('button.close')}</button>
             <button className="default" onClick={() => copy(made.link, t('copy.what.copied', { what: t('linkb.link') }))}>
               <Icon name="copy" /> {t('button.copy')}
             </button>
@@ -130,129 +126,59 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
         </div>
       ) : (
         <div className="form link-builder">
-          <ol className="steps-dots" aria-hidden>
-            {Array.from({ length: STEPS }, (_, i) => (
-              <li key={i} className={i + 1 === step ? 'on' : i + 1 < step ? 'done' : ''} />
-            ))}
-          </ol>
-
           {step === 1 && (
             <>
-              <div className="field-row">
-                <input type="radio" id="lb-me" checked={where === 'me'} onChange={() => setWhere('me')} />
-                <label htmlFor="lb-me">{t('linkb.where.me')}</label>
+              {/* The message first; then who gets the link, as a little tree: where it opens, what they join, that you're friends. */}
+              <div className="field-row-stacked">
+                <span className="lf-label">
+                  <label htmlFor="lb-welcome">{t('linkb.message')}</label>
+                  <Info>{t('linkb.message.help')}</Info>
+                </span>
+                <input id="lb-welcome" maxLength={300} placeholder={t('linkb.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
               </div>
-              <div className="field-row">
-                <input type="radio" id="lb-space" checked={where === 'space'} disabled={!places.length} onChange={() => setWhere('space')} />
-                <label htmlFor="lb-space">{t('linkb.where.space')}</label>
-              </div>
-              {where === 'space' && (
-                <fieldset>
-                  <div className="field-row">
-                    <label htmlFor="lb-space-pick">{t('linkb.space')}</label>
-                    <select id="lb-space-pick" value={spaceId} onChange={(e) => (setSpaceId(e.target.value), setWhat('space'), setBoard(''), setPost(''), setWebsite(''))}>
-                      {places.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} · {t(`word.${s.kind}`)}
-                        </option>
+              <p className="lf-section">{t('linkb.who.gets')}</p>
+              <ul className="lf-tree">
+                <li>
+                  <ShareMark kind="target" /> {t('linkb.opens')}
+                  <div className="lf-tree-items">
+                    <span className="lf-path">
+                      {toMe ? <b>{opens[0]}</b> : <PlaceName space={places[0]} />}
+                      {path.map((c) => (
+                        <span key={c.label} className="lf-place">
+                          <span className="lf-sep">›</span>
+                          <Icon name={c.icon} />
+                          <b>{c.label}</b>
+                        </span>
                       ))}
-                    </select>
+                    </span>
                   </div>
-                  <div className="field-row">
-                    <label htmlFor="lb-what">{t('linkb.what')}</label>
-                    <select id="lb-what" value={what} onChange={(e) => setWhat(e.target.value as What)}>
-                      <option value="space">{t('linkb.what.space')}</option>
-                      {space?.kind === 'project' && <option value="board">{t('linkb.what.board')}</option>}
-                      <option value="post">{t('linkb.what.post')}</option>
-                      {space?.kind === 'project' && <option value="website">{t('linkb.what.website')}</option>}
-                    </select>
-                  </div>
-                  {what === 'board' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-board">{t('word.board')}</label>
-                      <select id="lb-board" value={board} onChange={(e) => setBoard(e.target.value)}>
-                        <option value="">{t('linkb.pick')}</option>
-                        {(boards ?? []).map((b) => (
-                          <option key={b.name} value={b.name}>
-                            {b.title}
-                          </option>
-                        ))}
-                      </select>
+                </li>
+                {places.length > 0 && (
+                  <li>
+                    <ShareMark kind="check" /> {t('linkb.joins')}
+                    <div className="lf-tree-items">
+                      {places.map((s) => (
+                        <PlaceName key={s.id} space={s} />
+                      ))}
                     </div>
-                  )}
-                  {what === 'post' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-post">{t('word.post')}</label>
-                      <select id="lb-post" value={post} onChange={(e) => setPost(e.target.value)}>
-                        <option value="">{t('linkb.pick')}</option>
-                        {(posts ?? []).slice(0, 50).map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.title || p.text?.slice(0, 60)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {what === 'website' &&
-                    (websites?.length ? (
-                      <div className="field-row">
-                        <label htmlFor="lb-website">{t('linkb.what.website')}</label>
-                        <select id="lb-website" value={website} onChange={(e) => setWebsite(e.target.value)}>
-                          <option value="">{t('linkb.pick')}</option>
-                          {websites.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ) : (
-                      <p className="small muted">{t('linkb.no.websites')}</p>
-                    ))}
-                </fieldset>
+                  </li>
+                )}
+                <li>
+                  <ShareMark kind="check" /> {t('linkb.friends.always', { name: me?.name ?? '' })}
+                </li>
+              </ul>
+              {target.kind === 'website' && (
+                <div className="field-row">
+                  <input type="checkbox" id="lb-play" checked={play} onChange={(e) => setPlay(e.target.checked)} />
+                  <label htmlFor="lb-play">{t('linkb.start')}</label>
+                </div>
               )}
             </>
           )}
 
           {step === 2 && (
             <>
-              <div className="field-row">
-                <input type="checkbox" id="lb-friends" checked={where === 'me' || friends} disabled={where === 'me'} onChange={(e) => setFriends(e.target.checked)} />
-                <label htmlFor="lb-friends">{t('linkb.friends')}</label>
-              </div>
-              {what === 'website' && where === 'space' && (
-                <div className="field-row">
-                  <input type="checkbox" id="lb-play" checked={play} onChange={(e) => setPlay(e.target.checked)} />
-                  <label htmlFor="lb-play">{t('linkb.start')}</label>
-                </div>
-              )}
-              {where === 'space' && (
-                <div className="field-row">
-                  <input type="checkbox" id="lb-ask" checked={askFirst} onChange={(e) => setAskFirst(e.target.checked)} />
-                  <label htmlFor="lb-ask">{t('linkb.ask')}</label>
-                </div>
-              )}
-              {groups.length > 0 && (
-                <fieldset>
-                  <legend>{t('linkb.also')}</legend>
-                  {groups.map((g) => (
-                    <div className="field-row" key={g.id}>
-                      <input type="checkbox" id={`lb-also-${g.id}`} checked={also.includes(g.id)} onChange={(e) => setAlso((a) => (e.target.checked ? [...a, g.id] : a.filter((x) => x !== g.id)))} />
-                      <label htmlFor={`lb-also-${g.id}`}>{g.name}</label>
-                    </div>
-                  ))}
-                </fieldset>
-              )}
-              <div className="field-row-stacked">
-                <label htmlFor="lb-welcome">{t('linkb.welcome')}</label>
-                <input id="lb-welcome" maxLength={300} placeholder={t('linkb.welcome.placeholder')} value={welcome} onChange={(e) => setWelcome(e.target.value)} />
-              </div>
-            </>
-          )}
-
-          {step === 3 && (
-            <>
-              <div className="field-row">
+              <div className="lf-grid">
                 <label htmlFor="lb-uses">{t('linkb.uses')}</label>
                 <select id="lb-uses" value={uses} onChange={(e) => setUses(Number(e.target.value))}>
                   {USES.map((n) => (
@@ -261,93 +187,139 @@ export function LinkBuilder({ spaces, space: from, tabs, onClose }: { spaces: Sp
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className="field-row">
-                <label htmlFor="lb-days">{t('invite.expires.after')}</label>
+                <label htmlFor="lb-days">{t('linkb.expires')}</label>
                 <select id="lb-days" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-                  {DAYS.map((n) => (
+                  {EXPIRY.map((n) => (
                     <option key={n} value={n}>
-                      {t('invite.days', { n })}
+                      {n < 1 ? t('linkb.expiry.30m') : t('linkb.expiry.days', { n })}
                     </option>
                   ))}
                 </select>
               </div>
+              {!toMe && (
+                <div className="field-row">
+                  <input type="checkbox" id="lb-confirm" checked={confirm} onChange={(e) => setConfirm(e.target.checked)} />
+                  <label htmlFor="lb-confirm">{t('linkb.confirm')}</label>
+                  <Info>{t('linkb.confirm.help')}</Info>
+                </div>
+              )}
               <p className="small muted">{t('linkb.who.note')}</p>
             </>
           )}
 
-          {step === 4 && (
+          {step === 3 && (
             <>
-              <div className="field-row">
-                <input type="checkbox" id="lb-preview" checked={preview} onChange={(e) => setPreview(e.target.checked)} />
-                <label htmlFor="lb-preview">{t('linkb.card.on')}</label>
+              {/* The card as a messenger shows it (Signal's: the picture on the left, the bold title, the line, the site), edited in place. */}
+              <div className={`lf-card${noPreview ? ' off' : ''}${shown ? '' : ' no-picture'}`} aria-label={t('linkb.card.looks')}>
+                <button type="button" className="lf-card-picture" disabled={noPreview} title={t('linkb.card.pick')} onClick={() => setPicking(true)}>
+                  {shown === WEAVE ? <img src={weaveMark} alt="" /> : shown ? <BlobImage src={shown} /> : <span className="small">{t('linkb.card.pick')}</span>}
+                </button>
+                <div className="lf-card-body">
+                  <input className="lf-edit lf-edit-title" disabled={noPreview} maxLength={100} title={t('linkb.card.edit')} aria-label={t('linkb.card.title')} placeholder={title || 'Weave'} value={cardTitle ?? title} onChange={(e) => setCardTitle(e.target.value)} />
+                  <textarea className="lf-edit" disabled={noPreview} maxLength={300} rows={2} title={t('linkb.card.edit')} aria-label={t('linkb.card.text')} placeholder={line} value={cardText ?? line} onChange={(e) => setCardText(e.target.value)} />
+                  <span className="lf-card-site">{CARD_SITE}</span>
+                </div>
               </div>
-              {preview && (
-                <>
-                  <div className="field-row-stacked">
-                    <label htmlFor="lb-card-text">{t('linkb.card.text')}</label>
-                    <input id="lb-card-text" maxLength={300} placeholder={line} value={previewText} onChange={(e) => setPreviewText(e.target.value)} />
-                  </div>
-                  {where === 'space' && space?.kind === 'project' && (
-                    <div className="field-row">
-                      <label htmlFor="lb-image">{t('linkb.card.image')}</label>
-                      <select id="lb-image" value={image} onChange={(e) => setImage(e.target.value as typeof image)}>
-                        <option value="banner">{t('linkb.image.banner')}</option>
-                        <option value="icon">{t('linkb.image.icon')}</option>
-                        <option value="none">{t('linkb.image.none')}</option>
-                      </select>
-                    </div>
-                  )}
-                  <div className="link-card" aria-label={t('linkb.card.looks')}>
-                    <span className="link-card-site">{CARD_SITE}</span>
-                    <b>{title || 'Weave'}</b>
-                    <span>{line}</span>
-                  </div>
-                  <p className="small muted">{t('linkb.card.open')}</p>
-                </>
-              )}
+              <p className="small muted">{t('linkb.card.open')}</p>
+              <div className="field-row">
+                <input type="checkbox" id="lb-no-preview" checked={noPreview} onChange={(e) => setNoPreview(e.target.checked)} />
+                <label htmlFor="lb-no-preview">{t('linkb.card.none')}</label>
+              </div>
+              {picking && <PicturePicker places={places} chosen={shown} onPick={(ref) => (setPicture(ref), setPicking(false))} onClose={() => setPicking(false)} />}
             </>
           )}
 
           <div className="buttons">
-            {step > 1 ? <button onClick={() => setStep(step - 1)}>{t('linkb.back')}</button> : <button onClick={onClose}>{t('button.cancel')}</button>}
+            <button onClick={() => (step > 1 ? setStep(step - 1) : onClose(false))}>{t('linkb.back')}</button>
             {step < STEPS ? (
-              <button className="default" disabled={step === 1 && !target} onClick={() => setStep(step + 1)}>
+              <button className="default" onClick={() => setStep(step + 1)}>
                 {t('linkb.next')}
               </button>
             ) : (
-              <AsyncButton className="default" disabled={!target} onClick={create}>
+              <AsyncButton className="default" onClick={create}>
                 {t('linkb.create')}
               </AsyncButton>
             )}
           </div>
         </div>
       )}
-      {!!links?.length && (
-        <fieldset className="link-list">
-          <legend>{t('linkb.yours')}</legend>
-          {links.slice(0, 20).map((l) => (
-            <div className="field-row" key={l.code}>
-              <Icon name={KIND_ICON[l.kind]} />
-              <span className="grow">
-                {l.title} <span className="small muted">
-                  {l.revoked ? t('linkb.state.revoked') : l.used === undefined ? t('linkb.state.unknown') : l.uses ? t('linkb.state.used.of', { n: l.used, uses: l.uses }) : t('linkb.state.used', { n: l.used })}
-                  {l.expires && !l.revoked ? ` · ${t('linkb.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
-                </span>
-              </span>
-              {!l.revoked && (
-                <>
-                  <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('linkb.link') }))} title={t('button.copy')}>
-                    <Icon name="copy" />
-                  </button>
-                  <AsyncButton onClick={() => revoke(l)}>{t('linkb.revoke')}</AsyncButton>
-                </>
-              )}
-            </div>
-          ))}
-        </fieldset>
-      )}
     </Modal>
+  );
+}
+
+/** A place as the link's steps name it: its icon, then p/, g/ or r/ and its name, bold. */
+function PlaceName({ space }: { space: SpaceInfo }) {
+  return (
+    <span className="lf-place">
+      {space.kind === 'group' ? <GroupIcon space={space} size={16} /> : <ProjectIcon id={space.id} icon={space.icon} size={16} />}
+      <b>
+        {{ project: 'p/', community: 'r/', group: 'g/' }[space.kind as string] ?? ''}
+        {space.name}
+      </b>
+    </span>
+  );
+}
+
+/** Pictures for a link's card: Weave's mark, the places' icons and banners, pictures in their posts, or none. */
+function PicturePicker({ places, chosen, onPick, onClose }: { places: SpaceInfo[]; chosen?: string; onPick(ref: string | null): void; onClose(): void }) {
+  const { t } = useTexts();
+  const { data: pictures } = useApi(async () => {
+    const own = places.flatMap((s) => [s.background, s.icon]).filter((r): r is string => !!r);
+    const posted = (await Promise.all(places.map((s) => api<PostInfo[]>('posts', { space: s.id, sort: 'new' }).catch(() => [] as PostInfo[])))).flat().map((p) => p.image).filter((r): r is string => !!r);
+    return [...new Set([...own, ...posted])].slice(0, 40);
+  }, [places.map((s) => s.id).join()]);
+  return (
+    <Modal title={t('linkb.card.picker')} onClose={onClose}>
+      <div className="lf-pictures">
+        <button type="button" className={`lf-picture lf-picture-weave${chosen === WEAVE ? ' on' : ''}`} title="Weave" onClick={() => onPick(WEAVE)}>
+          <img src={weaveMark} alt="Weave" />
+        </button>
+        {(pictures ?? []).map((ref) => (
+          <button type="button" key={ref} className={`lf-picture${ref === chosen ? ' on' : ''}`} onClick={() => onPick(ref)}>
+            <BlobImage src={ref} />
+          </button>
+        ))}
+        <button type="button" className={`lf-picture lf-picture-none${chosen ? '' : ' on'}`} onClick={() => onPick(null)}>
+          {t('linkb.card.nopicture')}
+        </button>
+      </div>
+      {pictures && !pictures.length && <p className="small muted">{t('linkb.card.pictures.none')}</p>}
+    </Modal>
+  );
+}
+
+/** Your links, with how often each was used, to copy one again or take it back (Keys & devices). */
+export function YourLinks() {
+  const { t } = useTexts();
+  const { data: links } = useApi(() => api<OnboardLinkInfo[]>('onboardLinks').catch(() => [] as OnboardLinkInfo[]), []);
+  const revoke = async (l: OnboardLinkInfo) => {
+    if (!(await ask(t('linkb.revoke.ask', { link: l.code }), t('linkb.revoke')))) return;
+    await attempt(() => api('revokeOnboardLink', l.code).then(bump), t('linkb.revoked'));
+  };
+  if (!links?.length) return null;
+  return (
+    <fieldset className="link-list">
+      <legend>{t('linkb.yours')}</legend>
+      {links.slice(0, 20).map((l) => (
+        <div className="field-row" key={l.code}>
+          <Icon name={KIND_ICON[l.kind]} />
+          <span className="grow">
+            {l.title} <span className="small muted">
+              {l.revoked ? t('linkb.state.revoked') : l.used === undefined ? t('linkb.state.unknown') : l.uses ? t('linkb.state.used.of', { n: l.used, uses: l.uses }) : t('linkb.state.used', { n: l.used })}
+              {l.expires && !l.revoked ? ` · ${t('linkb.state.until', { date: new Date(l.expires).toLocaleDateString() })}` : ''}
+            </span>
+          </span>
+          {!l.revoked && (
+            <>
+              <button onClick={() => copy(l.link, t('copy.what.copied', { what: t('linkb.link') }))} title={t('button.copy')}>
+                <Icon name="copy" />
+              </button>
+              <AsyncButton onClick={() => revoke(l)}>{t('linkb.revoke')}</AsyncButton>
+            </>
+          )}
+        </div>
+      ))}
+    </fieldset>
   );
 }
 

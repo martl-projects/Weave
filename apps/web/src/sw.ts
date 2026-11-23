@@ -71,22 +71,29 @@ interface PushWorker {
   registration: { showNotification(title: string, options: NotificationOptions & { data?: unknown }): Promise<void> };
   clients: { matchAll(o: { type: 'window'; includeUncontrolled: boolean }): Promise<Array<{ url: string; visibilityState?: string; focused?: boolean; focus(): Promise<unknown>; navigate(url: string): Promise<unknown>; postMessage(m: unknown): void }>>; openWindow(url: string): Promise<unknown> };
   addEventListener(type: 'push', listener: (event: { data?: { json(): unknown }; waitUntil(work: Promise<unknown>): void }) => void): void;
-  addEventListener(type: 'notificationclick', listener: (event: { notification: { data?: { open?: string }; close(): void }; waitUntil(work: Promise<unknown>): void }) => void): void;
+  addEventListener(type: 'notificationclick', listener: (event: { notification: { data?: { open?: unknown }; close(): void }; waitUntil(work: Promise<unknown>): void }) => void): void;
 }
 const pushing = self as unknown as PushWorker;
 
 pushing.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
-      const { loadBadge, loadPushKey, openNotice, saveBadge } = await import('./pushkey.ts');
-      let notice: { title: string; text?: string; open?: string; tag?: string } = { title: 'Weave', text: 'Something new for you' };
+      const { loadBadge, loadKeyFor, loadPushKey, openNotice, saveBadge } = await import('./pushkey.ts');
+      // Only what opens with a key this browser still has is shown: an address it took back (from someone who no longer
+      // runs a place, or a place gone quiet) has no key any more, whatever the relay still sends, and what doesn't open
+      // with the key of the address it came to was never sealed to it. Nothing else is shown, not even a plain line.
+      let notice: { title: string; text?: string; open?: unknown; tag?: string };
       try {
-        const message = event.data?.json() as { from?: string; sealed?: unknown } | undefined;
-        const key = await loadPushKey();
-        if (key && message?.sealed) notice = openNotice(key, message.sealed as Parameters<typeof openNotice>[1]);
+        const message = event.data?.json() as { from?: string; to?: string; sealed?: unknown } | undefined;
+        const first = await loadPushKey();
+        // A place's own address has its own key (stage 3); the browser's first address is for its own tests.
+        const key = message?.to ? ((await loadKeyFor(message.to)) ?? (first?.address === message.to ? first : undefined)) : first;
+        if (!key || !message?.sealed) throw new Error(`no key here for ${message?.to ?? 'that address'}`);
+        notice = openNotice(key, message.sealed as Parameters<typeof openNotice>[1]);
+        if (typeof notice?.title !== 'string') throw new Error('not a notice');
       } catch (error) {
-        // Not for this key (an old subscription), or altered: the plain line above.
-        console.warn('weave: a push that does not open here:', (error as Error).message);
+        console.warn('weave: a push not shown:', (error as Error).message);
+        return;
       }
       // Weave open where it's seen: its node tells it itself (and on a computer shows its own); none on top of it.
       const windows = await pushing.clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -113,6 +120,8 @@ pushing.addEventListener('notificationclick', (event) => {
         there.postMessage({ type: 'weave-open', open });
         return;
       }
+      // A place as a notice says it (stage 3): the app finds its way there once it's open.
+      if (typeof open !== 'string') return void (await pushing.clients.openWindow(`/?open=${encodeURIComponent(JSON.stringify(open))}`));
       await pushing.clients.openWindow(`/${open.startsWith('#') ? open : `#${open}`}`);
     })(),
   );

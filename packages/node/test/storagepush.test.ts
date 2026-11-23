@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createIdentity } from '@weave/core';
 import { StorageClient } from '@weave/net';
 import { PUSH_PER_SENDER, StorageNode, type StorageNetwork } from '../src/storagenode.ts';
+import { storageServer } from '../src/storageserver.ts';
 import { textSocket } from '../src/websocket.ts';
 
 /*
@@ -87,16 +88,52 @@ describe('the push relay', { timeout: 30_000 }, () => {
     expect(got).toHaveLength(1);
     expect(got[0].url).toBe(ENDPOINT);
     expect(got[0].auth).toContain(`k=${key}`);
-    expect(b.open(got[0].body)).toEqual({ from: 'did:key:sender', sealed: { epk: 'e', nonce: 'n', ct: 'sealed by the sender' } });
+    expect(b.open(got[0].body)).toEqual({ from: 'did:key:sender', to: address, sealed: { epk: 'e', nonce: 'n', ct: 'sealed by the sender' } });
     // And to itself, over its connection: a test, or its own node.
     await client.pushSelf(address, { hello: 1 });
-    expect(b.open(got[1].body)).toEqual({ from: expect.stringMatching(/^did:key:/), sealed: { hello: 1 } });
+    expect(b.open(got[1].body)).toEqual({ from: expect.stringMatching(/^did:key:/), to: address, sealed: { hello: 1 } });
     expect(await node.push('no-such-address', { from: 'x', sealed: {} })).toBe('unknown');
     // A test a few seconds later: the answer at once, the push after.
     await client.pushSelf(address, { later: 1 }, 1);
     expect(got).toHaveLength(2);
     await new Promise((resolve) => setTimeout(resolve, 1300));
-    expect(b.open(got[2].body)).toEqual({ from: expect.stringMatching(/^did:key:/), sealed: { later: 1 } });
+    expect(b.open(got[2].body)).toEqual({ from: expect.stringMatching(/^did:key:/), to: address, sealed: { later: 1 } });
+  });
+
+  it("gives a place its own address (stage 3): pushed to by its managers, over HTTP or through the sender's own storage node", async () => {
+    const { node, client, got, connect } = await start();
+    const b = browser();
+    const first = await client.pushSubscribe(b.subscription);
+    const studio = await client.pushSubscribe(b.subscription, true);
+    const chat = await client.pushSubscribe(b.subscription, true);
+    expect(new Set([first, studio, chat]).size).toBe(3);
+    // The browser's own address stays what it was.
+    expect(await client.pushSubscribe(b.subscription)).toBe(first);
+
+    // A computer posts it.
+    const http = storageServer(node, { origins: [] });
+    servers.push(http);
+    await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+    const post = (address: string, body: unknown) => fetch(`${base}/push/${address}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await post(studio, { from: 'did:key:maintainer', sealed: { ct: 'release is out' } })).status).toBe(202);
+    expect(b.open(got.at(-1)!.body)).toEqual({ from: 'did:key:maintainer', to: studio, sealed: { ct: 'release is out' } });
+    expect((await post('nosuchaddress00', { from: 'did:key:x', sealed: {} })).status).toBe(404);
+    expect((await post(studio, { sealed: {} })).status).toBe(400);
+    expect((await fetch(`${base}/push/${studio}`)).status).toBe(405);
+
+    // A browser asks its own storage node, as its account.
+    const other = await connect();
+    const friend = createIdentity();
+    await other.register(friend, node.invite());
+    await other.pushForward(chat, { ct: 'are you coming?' });
+    expect(b.open(got.at(-1)!.body)).toEqual({ from: friend.did, to: chat, sealed: { ct: 'are you coming?' } });
+    await expect(other.pushForward('nosuchaddress00', {})).rejects.toThrow('no such push address here');
+
+    // The place goes quiet: its address is gone, the others stay.
+    await client.pushDrop(studio);
+    expect((await post(studio, { from: 'did:key:maintainer', sealed: {} })).status).toBe(404);
+    expect(await node.push(chat, { from: 'did:key:x', sealed: {} })).toBe('sent');
   });
 
   it('posts to push services only, never to an address of its own network', async () => {

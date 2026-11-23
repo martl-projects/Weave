@@ -154,6 +154,23 @@ describe('onboarding links', { timeout: 60_000 }, () => {
     expect((await bea.social()).friends.map((p) => p.name)).toContain('martl');
   });
 
+  it('makes a link for half an hour, with a picture the creator chose on its card', async () => {
+    const { dir, page } = await storage();
+    const martl = person('martl');
+    await martl.createProject({ name: 'Pferderennen' });
+    PlanStore.allowIn(dir, martl.identity.did);
+    // A 1x1 PNG, as the app makes one from a picture in the place.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const made = await martl.createOnboardLink({ project: 'Pferderennen', page, days: 1 / 48, preview: { title: 'Rennen heute', image: { png } } });
+    const minutes = (Date.parse(made.expires!) - Date.parse(made.created)) / 60_000;
+    expect(minutes).toBeGreaterThan(29);
+    expect(minutes).toBeLessThan(31);
+    const res = await fetch(`${page}/preview/${made.code}`);
+    expect(await res.json()).toMatchObject({ preview: { title: 'Rennen heute' }, image: true });
+    await expect(martl.createOnboardLink({ project: 'Pferderennen', page, preview: { image: { png: Buffer.from('not a png').toString('base64') } } })).rejects.toThrow(/must be a PNG/);
+    await expect(martl.createOnboardLink({ project: 'Pferderennen', page, days: 1 / 100 })).rejects.toThrow(/half an hour/);
+  });
+
   it('makes links to a board, a post and a live website in a project, each opening there', async () => {
     const { dir, page } = await storage();
     const martl = person('martl');

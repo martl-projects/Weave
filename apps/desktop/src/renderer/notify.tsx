@@ -4,6 +4,7 @@ import { api, bridge, navigate, onItem, shortDid, useApi } from './lib.ts';
 import { postHref, spaceHref } from './posts.tsx';
 import { ask, AsyncButton, attempt, Modal, ServiceOrigin, toast } from './ui.tsx';
 import { has, t, useTexts } from './texts.tsx';
+import { Icon } from './icons.tsx';
 
 /*
  * System notifications for live events the node marked as a notice (see
@@ -102,14 +103,25 @@ function flush(): void {
 }
 
 let started = false;
+/** Older than this, a notice in Weave Web came while it was closed. */
+const CATCHING_UP_MS = 2 * 60_000;
 
 /** Start listening for notices; once per app. */
 export function startNotifications(): void {
   // Weave Web: a push that came while Weave was open and seen (the service worker hands it here): said in the app.
-  if (!started && bridge.web) window.addEventListener('weave-push', (event) => {
-    const notice = (event as CustomEvent<{ title?: string; text?: string }>).detail;
-    if (notice?.title) toast(notice.text ? `${notice.title}: ${notice.text}` : notice.title);
-  });
+  if (!started && bridge.web) {
+    window.addEventListener('weave-push', (event) => {
+      const notice = (event as CustomEvent<{ title?: string; text?: string }>).detail;
+      if (notice?.title) toast(notice.text ? `${notice.title}: ${notice.text}` : notice.title);
+    });
+    // A tapped notification leads to its place: Weave was open, or it opened Weave.
+    const go = (open: unknown) => void hrefOf(open as Notice['open']).then(navigate, () => navigate('#/'));
+    window.addEventListener('weave-open', (event) => go((event as CustomEvent<unknown>).detail));
+    const opened = bridge.web.push.opened();
+    if (opened) go(opened);
+    // Pushes on here: each place's address follows (docs/web-push.md, stage 3).
+    void bridge.web.push.resume().catch((error: Error) => console.warn('weave: pushes:', error.message));
+  }
   if (started || typeof Notification === 'undefined') return;
   started = true;
   // What you open stops counting; so does what was open while the window was in the background.
@@ -127,6 +139,9 @@ export function startNotifications(): void {
     if (!(rule ? rule.notify : loadSettings()[notice.category]) || Notification.permission !== 'granted' || looking(notice.open)) return;
     // An agent's request shows as a popup in the app (see agents.tsx): a notification only when Weave is in the background.
     if (notice.type === 'permission' && document.hasFocus()) return;
+    // Weave Web catching up as it opens: what came while it was closed is counted on its icon (and pushed, where a
+    // push came), not told again one by one.
+    if (bridge.web && Date.now() - Date.parse(item.time) > CATCHING_UP_MS) return;
     pending.push(notice);
     clearTimeout(timer);
     timer = setTimeout(flush, 1200);
@@ -427,6 +442,35 @@ function NoticeRules() {
   );
 }
 
+/**
+ * A place's or a person's notifications at a glance, where they are (a group's, project's or community's head, a chat,
+ * a hub): as usual, counted only, or quiet. It's a rule like those in the notification settings, for that place or person.
+ */
+export function NoticeSwitch({ space, who }: { space?: string; who?: string }) {
+  const { t } = useTexts();
+  const [rules, setRules] = useState(loadRules);
+  useEffect(() => void loadRulesFromNode().then(() => setRules(loadRules())), []);
+  const at = rules.findIndex((r) => r.space === space && r.who === who && !r.board);
+  const rule = at < 0 ? undefined : rules[at];
+  const value = !rule || rule.notify ? 'on' : rule.count ? 'count' : 'off';
+  const choose = (next: string) => {
+    const kept = rules.filter((_, i) => i !== at);
+    const changed = next === 'on' ? kept : [...kept, { ...(space ? { space } : {}), ...(who ? { who } : {}), count: next === 'count', notify: false }];
+    setRules(changed);
+    void saveRules(changed).catch(() => setRules(loadRules()));
+  };
+  return (
+    <label className={`notice-switch ${value}`} title={t('switch.title')}>
+      <Icon name="megaphone" />
+      <select value={value} onChange={(e) => choose(e.target.value)} aria-label={t('switch.title')}>
+        <option value="on">{t('switch.on')}</option>
+        <option value="count">{t('switch.count')}</option>
+        <option value="off">{t('switch.off')}</option>
+      </select>
+    </label>
+  );
+}
+
 /** Where a hint service comes from, in its title: Weave's own (checked by its digest), or a project's release. */
 function HintOrigin({ service: s }: { service: HintServiceInfo }) {
   return <ServiceOrigin shipped={s.shipped} project={s.project?.name} tag={s.tag} />;
@@ -543,11 +587,17 @@ function WebPushBox() {
             <AsyncButton className="push-test" onClick={() => attempt(() => bridge.web!.push.test({ title: t('push.test.title'), text: t('push.test.text') }), t('push.test.sent'))}>
               {t('push.test')}
             </AsyncButton>
+            <AsyncButton className="push-renew" onClick={() => attempt(() => bridge.web!.push.renew().then(reload), t('push.renew.done'))}>
+              {t('push.renew')}
+            </AsyncButton>
             <AsyncButton onClick={() => attempt(() => bridge.web!.push.disable().then(reload))}>{t('push.off')}</AsyncButton>
           </>
         )}
       </div>
       <p className="small muted">{t('push.why')}</p>
+      <p className="small muted push-relay">
+        {t('push.relay', { host: bridge.web!.push.relay() })} {t('push.relay.own')}
+      </p>
     </fieldset>
   );
 }

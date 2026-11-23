@@ -65,6 +65,8 @@ export const WORDS = 'words';
 
 const lockFile = (dir: string) => join(dir, 'lock.json');
 const keepingFile = (dir: string) => join(dir, 'keeping.json');
+/** The words of a new account with a passkey, until they're written down: sealed in the home, never in a box. */
+const laterFile = (dir: string) => join(dir, 'words-later.json');
 
 const readLock = (dir: string): LockEntry[] => (existsSync(lockFile(dir)) ? (JSON.parse(readFileSync(lockFile(dir), 'utf8') as string) as LockEntry[]) : []);
 
@@ -86,7 +88,11 @@ function lockHome(dir: string, homeKey: Uint8Array, ways: WayIn[]): void {
   writeLock(dir, ways.map((way) => ({ id: way.id, home: sealHomeKey(way.opening, homeKey) })));
 }
 
-/** A new person. `words` go to them once; the words are also a way in, and with no passkey the only one. */
+/**
+ * A new person. `words` go to them once; the words are also a way in, and with no passkey the only one. With a passkey
+ * the passkey opens the account, so the words can wait: they're kept sealed in this browser's home (never in a box, so
+ * a passkey synced elsewhere still brings today's keys and no more) until the person says they wrote them down.
+ */
 export function createAccount(dir: string, name: string, passkey?: WayIn): { node: WeaveNode; words: string } {
   if (lockState(dir).exists) throw new Error('this browser has an account already');
   const words = newRecoveryWords();
@@ -97,6 +103,7 @@ export function createAccount(dir: string, name: string, passkey?: WayIn): { nod
   const { node } = WeaveNode.create(name, dir, { words });
   // The account at the storage node is made when it first connects; it has no key before that.
   writeSecretJson(home, keepingFile(dir), { keys: keptKeys(node.currentKeys(words)), account: null, ways: ways.map(wayOf) });
+  if (passkey) writeSecretJson(home, laterFile(dir), { words });
   lockHome(dir, homeKey, ways);
   return { node, words };
 }
@@ -212,10 +219,19 @@ export function addWay(dir: string, node: WeaveNode, way: WayIn): void {
   writeSecretJson(node.home, keepingFile(dir), { ...kept, ways: [...kept.ways, wayOf(way)] });
 }
 
+/** The words of a new account that aren't written down yet, if any: shown until they are. */
+export const laterWords = (dir: string, node: WeaveNode): string | undefined => readSecretJson<{ words: string }>(node.home, laterFile(dir))?.words;
+
+/** The person wrote their words down: this browser keeps them no longer. */
+export function wordsWritten(dir: string): void {
+  rmSync(laterFile(dir), { force: true });
+}
+
 /** A way in no more: here, and on a new browser, once its box is gone from the storage node. The words stay: nothing else is sure to be there. */
 export function removeWay(dir: string, node: WeaveNode, id: string): void {
   if (id === WORDS) throw new Error('your recovery words always open your account');
   if (readLock(dir).filter((e) => e.id !== id).length === 0) throw new Error('that is the only way into this browser: add another passkey first');
+  if (existsSync(laterFile(dir)) && !readLock(dir).some((e) => e.id !== id && e.id !== WORDS)) throw new Error('write your 24 words down first: without this passkey, they are the only way into your account');
   writeLock(dir, readLock(dir).filter((e) => e.id !== id));
   const kept = keeping(dir, node);
   const leaving = kept.ways.filter((w) => w.id === id).map((w) => w.token);

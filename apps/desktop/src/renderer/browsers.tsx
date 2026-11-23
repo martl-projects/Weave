@@ -47,6 +47,8 @@ export function LinkedBrowsers({ keys }: { keys: KeyInfo[] }) {
           <p className="small">{t('browser.scan')}</p>
           <div className="qr" style={{ maxWidth: 220 }} dangerouslySetInnerHTML={{ __html: made.svg }} />
           <p className="small muted">{t('browser.once')}</p>
+          {/* The browser brings the newest with it; the rest comes from here: this computer has to stay on for it. */}
+          <p className="notice">{t('browser.stay')}</p>
           <div className="buttons">
             <button onClick={() => void navigator.clipboard.writeText(made.link)}>{t('button.copy')}</button>
             <button onClick={() => setMade(undefined)}>{t('button.done')}</button>

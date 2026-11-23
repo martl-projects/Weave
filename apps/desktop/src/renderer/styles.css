@@ -169,6 +169,27 @@ button.door-switch:hover { text-decoration: none; }
   border-bottom: 1px solid #d4d4d4; font-family: var(--content-font);
 }
 .post-row.is-pinned { background: #f3fbf1; }
+/* What Weave itself says (a backup due): a quiet note on top of the list, in a hint's colour, the whole of it a link. */
+.weave-note { display: flex; align-items: center; gap: 10px; margin: 6px; padding: 8px 10px; border: 1px solid #c8b45a; background: #ffffe1; color: #000; font: 12px var(--content-font); text-decoration: none; }
+.weave-note > .icon { flex: none; color: #8a6d00; }
+.weave-note-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.weave-note-text > span { color: #555; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weave-note-go { flex: none; color: var(--link); white-space: nowrap; }
+.weave-note:hover .weave-note-go { text-decoration: underline; }
+:root[data-skin='clean'] .weave-note { border-color: color-mix(in srgb, #e0a800 35%, transparent); border-radius: var(--cl-radius, 8px); background: color-mix(in srgb, #e0a800 9%, transparent); color: var(--cl-text); }
+:root[data-skin='clean'] .weave-note > .icon { color: #d9a514; }
+:root[data-skin='clean'] .weave-note-text > span { color: var(--cl-text-2); }
+:root[data-skin='clean'] .weave-note-go { color: var(--cl-accent); }
+:root[data-skin='cozy'] .weave-note { border-radius: 10px; }
+/* A choice shown as its icon (a list's sort, Home's filter) and a button that's only an icon: flat until pointed at. */
+.icon-select { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 26px; border-radius: 4px; cursor: pointer; }
+.icon-select select { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 0; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+:root[data-skin] button.icon-btn { color: inherit; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; min-width: 30px; height: 26px; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; }
+.icon-select:hover, :root[data-skin] button.icon-btn:hover { background: #0000000f; }
+:root[data-skin='win95'] .icon-select:hover, :root[data-skin='win95'] button.icon-btn:hover { background: none; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; border-radius: 0; }
+:root[data-skin='clean'] .icon-select:hover, :root[data-skin='clean'] button.icon-btn:hover { background: var(--cl-hover); }
+.icon-select.marked::after, .icon-btn.marked::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--up); }
+.icon-btn { position: relative; }
 .post-row, .panel-line { cursor: pointer; }
 .votes { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .votes.row { flex-direction: row; }
@@ -346,6 +367,10 @@ button.link { min-width: 0; min-height: 0; padding: 0; background: none; box-sha
 .post-full-main { display: flex; gap: 10px; }
 .post-full h2.post-title { color: #000; font-size: 17px; }
 .post-full .md { font-size: 13px; margin: 6px 0; }
+/* Long links and words break inside the text instead of widening the page. */
+.md { min-width: 0; overflow-wrap: anywhere; }
+.md pre { max-width: 100%; }
+.post-full-main > * { min-width: 0; }
 .work { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0; background: var(--face); font-size: 12px; }
 .work .vote-buttons { display: flex; gap: 4px; }
 .work > .grow { min-width: 260px; }
@@ -452,6 +477,8 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .widget-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .widget-app { flex: none; }
 .widget-open { margin-left: auto; min-width: 0; min-height: 0; padding: 0 6px; }
+.widget-open.widget-withdraw { margin-left: 2px; display: inline-flex; align-items: center; }
+.widget-withdraw .icon { width: 12px; height: 12px; }
 .widget-frame { display: block; width: 100%; border: 0; background: #fff; border-radius: 4px; }
 .widget-wait { width: 100%; }
 .widget-state { max-height: 240px; overflow: auto; }
@@ -502,6 +529,29 @@ button.chosen { font-weight: bold; box-shadow: inset -1px -1px #fff, inset 1px 1
 .crown { margin-left: 3px; color: #a87400; }
 .member-sub { margin-left: 30px; font-size: 11px; color: #555; }
 .member-sub.agent { color: var(--agent); }
+
+/* ---------- side panes folded to a strip: Places to its icons, the members to their faces (main.tsx, useFolded) */
+.pane-fold { flex: none; min-width: 0 !important; min-height: 0 !important; padding: 0 6px !important; font-weight: bold; line-height: 1.3; }
+@media (min-width: 701px) {
+  :root .places.folded, :root .members.folded { width: 48px; }
+  :root .folded > .pane-head { justify-content: center; padding-left: 0; padding-right: 0; }
+  :root .folded > .pane-head b { display: none; }
+  :root .places.folded .tree-view { padding: 4px 3px; overflow-x: hidden; scrollbar-width: none; }
+  :root .places.folded .tree-view li { padding-left: 0 !important; }
+  :root .places.folded .tree-link { position: relative; justify-content: center; padding: 5px 0; }
+  :root .places.folded :is(.tree-label, .tree-none, .tree-game-app) { display: none; }
+  :root .places.folded .tree-head { height: 0; margin: 6px 4px !important; padding: 0; overflow: hidden; font-size: 0; border: none; border-bottom: 1px solid currentColor; opacity: 0.3; }
+  :root .places.folded .tree-hints { position: absolute; top: 0; right: 0; }
+  :root .places.folded .tree-hints .badge { min-width: 14px; padding: 0 3px; font-size: 9px; line-height: 14px; }
+  :root .places.folded .new-btn { margin: 4px 3px; padding: 0; min-width: 0; font-size: 0; }
+  :root .members.folded .members-list { padding: 4px 2px; overflow-x: hidden; scrollbar-width: none; }
+  :root .members.folded :is(.member-name, .member-sub, .space-photo, .space-services) { display: none; }
+  :root .members.folded .member-main { justify-content: center; }
+  :root .members.folded h4 { height: 0; margin: 6px 4px; padding: 0; overflow: hidden; font-size: 0; border-bottom: 1px solid currentColor; opacity: 0.3; }
+}
+@media (max-width: 700px) {
+  .pane-fold { display: none !important; }
+}
 .avatar { position: relative; display: inline-block; flex: none; line-height: 0; }
 .avatar .sprite { border: 1px solid #808080; }
 /* Weave avatars: someone's head, their avatar in a scene, and making yours. */
@@ -606,6 +656,10 @@ menu[role='tablist'] { margin-bottom: 0; }
 .notify-state .pill { padding: 1px 8px; border-radius: 10px; font-size: 11px; background: var(--muted-bg, rgba(127,127,127,.2)); }
 .notify-state .pill.on { background: #2e7d32; color: #fff; }
 .notify-more { margin: 10px 0; }
+/* A place's or person's notifications, at its head: as usual, counted only, or quiet (crossed out). */
+.notice-switch { display: inline-flex; align-items: center; gap: 4px; }
+.notice-switch select { max-width: 9.5em; }
+.notice-switch.off svg, .notice-switch.off img { opacity: .45; }
 .notify-more > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .notify-settings .marks-row { flex-wrap: wrap; }
 .notify-settings .marks-row > div { min-width: 0; flex: 1 1 200px; }
@@ -615,6 +669,53 @@ menu[role='tablist'] { margin-bottom: 0; }
 .first-ways { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .first-ways button { width: 100%; padding: 10px; }
 .first-ways p { margin: -4px 0 4px; }
+/*
+ * Weave Web's first screen (FirstStage): a quiet dark ground, the logo, its name and what it's for. Its own look, the same in every skin: the first of Weave anyone sees.
+ */
+.first-stage { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; overflow: auto; padding: 24px 16px; background: radial-gradient(ellipse at 50% 40%, #1b1b26 0%, #0b0b10 70%); color: #f2f2f6; font-family: var(--content-font, system-ui, sans-serif); }
+.first-card { position: relative; width: min(380px, 100%); display: flex; flex-direction: column; align-items: stretch; text-align: center; }
+.first-stage .first-logo, :root[data-skin] .first-stage .first-logo { align-self: center; width: 112px; height: 112px; border-radius: 26px; box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08), 0 18px 60px rgb(255 83 83 / 0.18), 0 6px 30px rgb(90 224 164 / 0.14); }
+.first-stage .first-title, :root[data-skin] .first-stage .first-title { margin: 18px 0 2px; font-size: 44px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; }
+.first-stage .first-tagline, :root[data-skin] .first-stage .first-tagline { margin: 6px 0 22px; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+.first-tagline .coral { color: #ff5353; }
+.first-tagline .yellow { color: #f5e471; }
+.first-tagline .mint { color: #5ae0a4; }
+.first-stage .first-hello, :root[data-skin] .first-stage .first-hello { margin: -12px 0 18px; opacity: 0.7; }
+.first-stage .first-invited, :root[data-skin] .first-stage .first-invited { text-align: center; margin: 0 0 4px; font-size: 18px; font-weight: 700; }
+.first-stage .first-quote, :root[data-skin] .first-stage .first-quote { text-align: center; margin: 0 0 14px; opacity: 0.8; font-style: italic; }
+.first-stage form { display: flex; flex-direction: column; text-align: left; }
+.first-stage label { font-size: 13px; opacity: 0.85; }
+.first-stage .field-row-stacked { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 0; }
+.first-stage input, :root[data-skin] .first-stage input { box-sizing: border-box; width: 100%; height: 44px; padding: 0 14px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; font: inherit; font-size: 15px; box-shadow: none; outline: none; }
+.first-stage input:focus { border-color: #f5e471; }
+.first-stage .first-ways { gap: 10px; margin: 14px 0 6px; }
+.first-btn, :root[data-skin] .first-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; padding: 0 18px; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 12px; background: rgb(255 255 255 / 0.04); color: #f2f2f6; box-shadow: none; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.15s; }
+.first-btn:hover:not(:disabled), :root[data-skin] .first-btn:hover:not(:disabled) { background: rgb(255 255 255 / 0.1); transform: translateY(-1px); }
+.first-btn.primary, :root[data-skin] .first-btn.primary { border-color: transparent; background: #f2f2f6; color: #111118; }
+.first-btn.primary:hover:not(:disabled), :root[data-skin] .first-btn.primary:hover:not(:disabled) { background: #ffffff; }
+.first-btn:disabled, :root[data-skin] .first-btn:disabled { opacity: 0.45; cursor: default; }
+.first-btn .icon { filter: none; opacity: 1; }
+.first-stage .notice { text-align: left; }
+.first-stage .muted { color: inherit; opacity: 0.6; }
+.first-stage .first-other a { color: #f5e471; }
+
+/* Weave Web's progress (WebSyncBar): a thin bar under the toolbar while it connects or content comes in. */
+.web-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 12px; font-size: 12px; background: color-mix(in srgb, #2563eb 12%, transparent); border-bottom: 1px solid color-mix(in srgb, #2563eb 30%, transparent); }
+.web-sync.offline { background: color-mix(in srgb, #d97706 14%, transparent); border-bottom-color: color-mix(in srgb, #d97706 35%, transparent); }
+.web-sync-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; animation: web-sync-pulse 1.2s ease-in-out infinite; }
+.web-sync.offline .web-sync-dot { background: #d97706; animation: none; }
+@keyframes web-sync-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .web-sync-dot { animation: none; } }
+.web-sync-hint { opacity: 0.75; }
+
+/* The start's quieter ways: folded under Other ways, and the line under Join. */
+.first-more { margin: 4px 0 0; text-align: center; }
+.first-more > summary { display: inline-block; cursor: pointer; opacity: 0.75; font-size: 12px; }
+.first-more > summary:hover, .first-more[open] > summary { opacity: 1; }
+.first-more[open] { text-align: left; }
+.first-more[open] > summary { display: block; text-align: center; margin-bottom: 4px; }
+.first-other { margin: 4px 0 0; text-align: center; }
+.first-other .link { display: inline; min-width: 0; min-height: 0; padding: 0; border: none; background: none; box-shadow: none; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 
 .toasts { position: fixed; right: 12px; bottom: 34px; z-index: 200; display: flex; flex-direction: column; gap: 6px; }
 .toast { max-width: 360px; font-family: var(--content-font); font-size: 12px; }
@@ -658,6 +759,79 @@ menu[role='tablist'] { margin-bottom: 0; }
 .link-card { display: grid; gap: 2px; margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent, #3b6cf6); background: var(--surface-2, #0001); border-radius: 4px; font-size: 12px; }
 .link-card-site { opacity: 0.6; font-size: 11px; }
 .link-list { margin-top: 12px; max-height: 220px; overflow: auto; }
+/* The link's steps (LinkFinish): a big title, the step under it; fields in one column of labels, one of controls. */
+/* One title, the step's, big in the window's title bar; which step it is just under it. */
+.modal:has(.link-builder, .onboard-made) .title-bar-text, :root[data-skin] .modal:has(.link-builder, .onboard-made) .title-bar-text { font-size: 17px; font-weight: bold; }
+/* The link's steps keep one height, their buttons at the bottom, so the dialog stays where it is from step to step. */
+.link-builder { display: flex; flex-direction: column; min-height: 330px; }
+.form.link-builder > .buttons, :root[data-skin] .form.link-builder > .buttons { margin-top: auto; }
+/* Help marks open as a floating note over what follows, not pushing it down. */
+.link-builder .info { position: relative; }
+.link-builder .info > .info-body { position: absolute; left: -8px; top: calc(100% + 6px); z-index: 30; width: 260px; margin: 0; padding: 6px 10px; box-shadow: 2px 2px 6px rgb(0 0 0 / 0.25); font-weight: normal; }
+/* Who gets the link, as a tree: a line down the left, a branch to each item, the last ending at its branch. */
+.lf-section { margin: 14px 0 2px; }
+.lf-tree { --lf-line: color-mix(in srgb, currentColor 35%, transparent); list-style: none; margin: 0 0 8px 6px; padding: 0; }
+.lf-tree > li { position: relative; padding: 4px 0 4px 18px; }
+.lf-tree > li::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--lf-line); }
+.lf-tree > li:last-child::before { bottom: auto; height: 13px; }
+.lf-tree > li::after { content: ''; position: absolute; left: 0; top: 13px; width: 12px; border-top: 1px solid var(--lf-line); }
+.lf-tree .share-mark { vertical-align: -3px; }
+.lf-tree-items { display: flex; flex-direction: column; gap: 3px; margin: 3px 0 0 22px; }
+.lf-path { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.lf-place { display: inline-flex; align-items: center; gap: 5px; line-height: 16px; }
+.lf-sep { opacity: 0.6; }
+/* A dialog's line under its title (Modal's subtitle): smaller, in the head with it. */
+.title-bar:has(.title-bar-sub) { height: auto; align-items: flex-start; padding-top: 4px; padding-bottom: 4px; }
+.title-bar-text:has(.title-bar-sub), :root[data-skin] .title-bar-text:has(.title-bar-sub) { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
+.title-bar-sub, :root[data-skin] .title-bar-sub { display: block; font-size: 12px; font-weight: normal; opacity: 0.75; }
+.lf-place .sprite, .lf-place .project-icon, .lf-place .group-icon { flex: none; }
+.lf-label { display: flex; align-items: center; gap: 6px; }
+.lf-grid { display: grid; grid-template-columns: max-content minmax(0, 220px); align-items: center; gap: 8px 12px; margin: 0 0 12px; }
+.lf-grid select { width: 100%; }
+/* The card as Signal shows a link: the picture on the left, then the bold title, the line and the site. */
+.lf-card { display: flex; gap: 12px; align-items: flex-start; margin: 0 0 8px; padding: 10px; border-radius: 10px; background: #2b2b30; color: #f2f2f4; }
+.lf-card.off { opacity: 0.4; }
+.lf-card-picture, :root[data-skin] .lf-card-picture { flex: none; display: grid; place-items: center; width: 72px; height: 72px; min-width: 0; min-height: 0; padding: 0; overflow: hidden; border: none; border-radius: 6px; background: #3a3a42; color: inherit; box-shadow: none; cursor: pointer; }
+.lf-card-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lf-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lf-card-site { padding: 0 3px; font-size: 12px; opacity: 0.6; }
+.lf-card .lf-edit, :root[data-skin] .lf-card .lf-edit { display: block; box-sizing: border-box; width: 100%; min-height: 0; margin: 0; padding: 1px 3px; border: 1px dashed transparent; border-radius: 3px; background: none; box-shadow: none; color: inherit; font: inherit; line-height: 1.35; resize: none; outline: none; }
+.lf-card .lf-edit:hover, .lf-card .lf-edit:focus, :root[data-skin] .lf-card .lf-edit:hover, :root[data-skin] .lf-card .lf-edit:focus { border-color: currentColor; }
+.lf-card .lf-edit-title, :root[data-skin] .lf-card .lf-edit-title { font-weight: bold; }
+.lf-picture-weave img { object-fit: contain !important; padding: 6px; box-sizing: border-box; }
+.lf-pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; max-height: 360px; overflow: auto; }
+.lf-picture, :root[data-skin] .lf-picture { min-width: 0; min-height: 0; aspect-ratio: 1.6; padding: 0; overflow: hidden; }
+.lf-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lf-picture.on { outline: 3px solid var(--navy, #000080); outline-offset: -3px; }
+/* Share mode (share.tsx): a frame around the app, a + beside each place in the tree, and the bar saying what the link does. */
+.app-window.sharing .panes { outline: 2px solid var(--navy, #000080); outline-offset: -2px; }
+.tree-with-extra { position: relative; }
+.share-add { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); min-width: 0; min-height: 0; width: 20px; height: 18px; padding: 0; line-height: 1; font-weight: bold; }
+.share-add, .share-add.on { right: 3px; width: 18px; border: none; background: none; box-shadow: none; }
+/* Share mode's marks (ShareMark): the icons' bitmaps here; at the far right of a row in the tree. */
+.share-mark { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; vertical-align: middle; }
+.share-marks { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 3px; pointer-events: none; }
+:is(.share-target, .share-path, .share-included) { position: relative; }
+.share-target > .tree-link { padding-right: 42px; }
+:is(.share-path, .share-included) > .tree-link { padding-right: 24px; }
+/* Where the link leads: a target (ring and dot), not a check, which marks the places it lets them into. */
+/* Every place the link adds them to has the same frame: where it leads, the space above it, and what the + added. */
+:is(.share-target, .share-path, .share-included) > .tree-link { box-shadow: inset 0 0 0 2px var(--navy, #000080); }
+/* Up the hierarchy from where it leads: the space a board or Live is in. */
+.share-path > .tree-link { background: color-mix(in srgb, var(--navy, #000080) 10%, transparent); }
+.share-path > .tree-link .tree-label { font-weight: bold; }
+.share-included > .tree-link { background: color-mix(in srgb, var(--navy, #000080) 10%, transparent); }
+.share-included > .tree-link .tree-label { font-weight: bold; }
+.pane-head .pane-share { margin-left: auto; min-width: 0; padding: 1px 6px; }
+.pane-head .pane-share.on { background: var(--navy, #000080); color: #fff; }
+.share-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 10px; border-top: 2px solid var(--navy, #000080); background: #ffffe1; color: #000; }
+.share-bar .buttons { margin: 0 0 0 auto; }
+.share-where, .share-also { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.share-label { opacity: 0.7; white-space: nowrap; }
+.share-sep { opacity: 0.5; }
+.share-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 2px 1px 8px; border-radius: 10px; background: color-mix(in srgb, currentColor 14%, transparent); }
+.share-chip button { min-width: 0; min-height: 0; padding: 0 5px; }
+.link-leads { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-weight: bold; }
 /* Inside a hub, links and quiet text follow the hub's theme, so they stay readable on any colors. */
 .space:not(.app-boxes) a:not(.button-link), .space:not(.app-boxes) .post-title { color: var(--accent); }
 .space:not(.app-boxes) :is(.muted, .post-meta, .post-meta a) { color: color-mix(in srgb, var(--text) 65%, transparent); }
@@ -805,12 +979,15 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   :root[data-skin] .app-window > .toolbar .tool { flex: 1 1 0; flex-direction: column; gap: 2px; min-width: 0; min-height: 50px; padding: 4px 2px; font-size: 11px; }
   :root[data-skin] .app-window > .toolbar .tool .icon { width: 22px !important; height: 22px !important; }
   .tool span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .panes { padding: 2px 0; gap: 0; }
+  .panes { padding: 0; gap: 0; }
+  /* Edge to edge: the window is the whole screen, under the status bar and the home indicator too, with no frame of
+     its own. On an iPhone's home screen the viewport stops short of the bottom edge: there it's the screen's height
+     (--app-height, phonechrome.ts: fitHomeScreen). */
+  html, body, #root { height: var(--app-height, 100dvh); }
+  :root[data-skin] .app-window { bottom: auto; height: var(--app-height, 100dvh); padding: 0; border: 0; border-radius: 0; box-shadow: none; }
   .places { display: none; }
   .places-open .places { display: flex; width: 100%; }
   .places-open .panes > :not(.places) { display: none; }
-  .project-sections { flex: none; gap: 2px; padding: 2px 4px; overflow-x: auto; }
-  .project-sections .tree-link { flex: none; }
   /* Fingers, not mouse pointers. */
   .tree-link { min-height: 36px; padding: 4px 6px; font-size: 14px; }
   .tree-head { font-size: 13px; padding: 6px; }
@@ -821,6 +998,9 @@ textarea.code { font-family: 'Lucida Console', Consolas, monospace; font-size: 1
   .pane-head b { font-size: 13px; }
   .pane-tools button { min-height: 28px; }
   .pane-tools select { height: 28px; }
+  /* Tools that are only icons stay beside the title. */
+  .pane-tools:has(> :is(.icon-select, .icon-btn):first-child) { flex: none; margin-left: auto; }
+  .pane-head > b:has(+ .pane-tools > :is(.icon-select, .icon-btn):first-child) { flex: 1 1 auto; min-width: 0; }
   /* 16px text in fields keeps iOS from zooming in on every tap. */
   input, textarea, select { font-size: 16px !important; }
   .page { font-size: 14px; }
@@ -1140,14 +1320,125 @@ button.session-title:hover { text-decoration: underline; }
   .board-chip { flex: none; white-space: nowrap; scroll-snap-align: start; }
 }
 
+/* ---------- phones: one bar per screen (main.tsx SpaceBar, phonechrome.ts) */
+.title-back { display: none; }
+@media (max-width: 700px) {
+  /* In a place: its own bar only, no title and no tabs; back (or a swipe from the left edge) leaves it. */
+  .phone-place > .title-bar, .phone-place > .toolbar { display: none !important; }
+  .phone-place .center { position: relative; }
+  .phone-place .panes { padding-top: 0; }
+  /* The bar says where you are: a view's own head keeps only its tools, in one row. */
+  .phone-place .pane-head > b { display: none; }
+  .phone-place .pane-head:not(:has(.pane-tools > *)) { display: none; }
+  .phone-place .pane-head .pane-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .space-bar { flex: none; flex-direction: column; padding-top: env(safe-area-inset-top); background: var(--navy); color: #fff; font-family: var(--content-font); }
+  .space-bar-row { display: flex; align-items: center; gap: 2px; min-height: 46px; padding: 2px 4px; }
+  :root[data-skin] .space-bar-row button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; min-width: 40px; padding: 0 6px; border: 0; border-radius: 6px; background: none; box-shadow: none; color: inherit; font: inherit; }
+  :root[data-skin] .space-bar-row button:active { background: #fff3; }
+  :root[data-skin] .space-bar .space-back { min-width: 32px; padding: 0; font-size: 28px; line-height: 1; }
+  :root[data-skin] .space-bar .space-id { flex: 0 1 auto; min-width: 0; justify-content: flex-start; font-size: 15px; }
+  .space-id b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .space-id :is(.sprite, .project-icon, .avatar, img) { flex: none; border-radius: 6px; }
+  .space-chips { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .space-chips::-webkit-scrollbar { display: none; }
+  .space-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 999px; color: inherit; font-size: 14px; white-space: nowrap; text-decoration: none; opacity: 0.85; }
+  .space-chip .icon { color: inherit !important; }
+  .space-chip.fresh { font-weight: bold; opacity: 1; }
+  .space-chip.on { background: #fff; color: var(--navy); opacity: 1; }
+  .space-chip .badge { margin-left: 2px; border-radius: 999px; }
+  :root[data-skin] .space-bar .space-menu-btn { margin-left: auto; flex: none; font-size: 18px; }
+  /* The menu: a popover under the bar, one list as Places has it (a head per section); a tap beside it closes it. */
+  .space-menu-scrim { position: fixed; inset: 0; z-index: -1; }
+  :root[data-skin] .space-menu { position: absolute; top: 100%; right: 2px; display: flex; flex-direction: column; width: min(290px, calc(100vw - 4px)); max-height: calc(100dvh - 100px - env(safe-area-inset-top)); margin: 0; padding: 3px; filter: drop-shadow(0 4px 10px #0005); font-family: var(--content-font); }
+  .space-menu > .tree-view { flex: 1; min-height: 0; margin: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
+  .space-menu .tree-view li { margin: 0; list-style: none; }
+  .space-menu .tree-view li::before { display: none; }
+  .space-menu .tree-head:first-child { margin-top: 0 !important; }
+  .space-menu .tree-link { width: 100%; box-sizing: border-box; min-height: 30px; padding-top: 2px; padding-bottom: 2px; }
+  .space-menu .tree-head { margin-top: 6px !important; }
+  .space-menu .tree-link .badge { margin-left: auto; }
+  :root[data-skin] .space-menu button.tree-link { justify-content: flex-start; min-width: 0; border: 0; text-align: left; font-family: inherit; }
+  :root[data-skin] .space-menu button.tree-link:not(.on) { background: none; box-shadow: none; }
+  :root[data-skin='win95'] .space-menu, :root[data-skin='win95'] .space-menu button.tree-link:not(.on) { color: #000; }
+  :root[data-skin='win95'] .space-menu button.tree-link.on, :root[data-skin='clean'] .space-menu button.tree-link.on { box-shadow: none; }
+  .space-menu-notify { display: flex; align-items: center; min-height: 36px; padding: 2px 6px; }
+  .space-menu-tools { display: flex; flex-direction: column; }
+  .space-bar { position: relative; z-index: 30; }
+  /* Folded: back and the place's icon, floating over the top left of what's read. */
+  .space-float { position: absolute; z-index: 20; top: calc(6px + env(safe-area-inset-top)); left: 6px; display: flex; align-items: center; gap: 6px; animation: space-float-in 0.2s ease-out; }
+  :root[data-skin] .space-float > button { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 3px; border: 0; border-radius: 12px; background: var(--navy); color: #fff; box-shadow: 0 3px 10px #0007, 0 1px 2px #0005; }
+  :root[data-skin] .space-float > .space-float-back { width: 38px; height: 38px; padding: 0 2px 3px 0; font-size: 28px; line-height: 1; }
+  .space-dot :is(.sprite, .project-icon, .avatar, img) { display: block; border-radius: 9px; }
+  /* The bar folds up into it and unfolds back down. */
+  .space-bar.folding .space-bar-row, .space-bar.unfolding .space-bar-row { overflow: hidden; }
+  .space-bar.folding .space-bar-row { animation: space-bar-out 0.16s ease-in forwards; }
+  .space-bar.unfolding .space-bar-row { animation: space-bar-in 0.2s ease-out; }
+  @keyframes space-bar-out { to { min-height: 0; max-height: 0; padding-block: 0; opacity: 0; } }
+  @keyframes space-bar-in { from { min-height: 0; max-height: 0; padding-block: 0; opacity: 0; } to { max-height: 60px; } }
+  @keyframes space-float-in { from { opacity: 0; transform: translateY(-10px) scale(0.85); } }
+  /* While reading on, the field to write in goes too, unless something is being written. */
+  .bars-folded.phone-place .composer-wrap:not(:focus-within) { display: none; }
+  /* A project's chat comes alone: the boards are in the bar, the card with its page is a view of its own. */
+  .project-home:not(.page-view) .hero, .project-home .hero-bar, .project-home .board-strip, .project-home .hero-fold { display: none !important; }
+  /* Posting to a board: low on the right, only in boards. */
+  :root[data-skin] .fab { position: absolute; z-index: 20; right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); gap: 6px; min-height: 48px; padding: 0 18px; border-radius: 24px; font-size: 15px; font-weight: bold; box-shadow: 0 3px 12px #0005; }
+  /* Home: folded, its icon floats at the top
+     and the tabs float at the bottom as Places alone; unfolded, the title comes back and they widen
+     to the right. Places, Inbox, People and My hub keep their title and tabs, unfolded. */
+  .title-back { display: flex; }
+  :root[data-skin] .title-bar .title-back { min-width: 28px; min-height: 22px; margin-right: 4px; padding: 0 6px; font-size: 20px; line-height: 1; }
+  .home-float { position: fixed; }
+  .app-window.bars-away:not(.phone-place) > .title-bar { display: none; }
+  /* The list starts below the status bar and ends above the tabs, and scrolls under both. */
+  .app-window.at-home.bars-away .pane-scroll { padding-top: env(safe-area-inset-top); }
+  .app-window.at-home .pane-scroll { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  /* Home's own bar (posting, its sources, the sort) goes and comes back with the title. */
+  .app-window.at-home .pane-main > .pane-head { overflow: hidden; animation: space-bar-in 0.2s ease-out; }
+  .app-window.at-home.bars-folded .pane-main > .pane-head { animation: space-bar-out 0.16s ease-in forwards; }
+  .app-window.at-home.bars-away .pane-main > .pane-head { display: none; }
+  .app-window > .title-bar.folding, .app-window > .title-bar.unfolding { overflow: hidden; }
+  .app-window > .title-bar.folding { animation: space-bar-out 0.16s ease-in forwards; }
+  .app-window > .title-bar.unfolding { animation: space-bar-in 0.2s ease-out; }
+  :root[data-skin] .app-window.at-home > .toolbar { position: fixed; z-index: 25; left: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); justify-content: flex-start; max-width: calc(100vw - 20px); padding: 3px; overflow: hidden; border: 0; background: var(--face); box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #fff, 0 4px 12px #0006; transition: max-width 0.28s ease; }
+  :root[data-skin] .app-window.at-home > .toolbar .tool { flex: none; width: 76px; min-height: 48px; }
+  :root[data-skin] .app-window.at-home.bars-folded > .toolbar { max-width: 82px; }
+}
+@media (max-width: 700px) {
+  /* Windows 95: the bar is a title bar, its chips and buttons square, the one you're at pressed in. */
+  :root[data-skin='win95'] .space-bar { background: linear-gradient(90deg, var(--navy), #1084d0); }
+  :root[data-skin='win95'] .space-bar-row button:active { background: none; }
+  :root[data-skin='win95'] .space-chip { border-radius: 0; padding: 4px 8px; }
+  :root[data-skin='win95'] .space-chip.on { background: var(--face); color: #000; box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
+  :root[data-skin='win95'] .space-chip .badge { border-radius: 0; }
+  :root[data-skin='win95'] .space-float > button { border-radius: 0; background: var(--face); color: #000; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 0 3px 10px #0006; }
+  :root[data-skin='win95'] .space-float > button:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080, 0 3px 10px #0006; }
+  :root[data-skin='win95'] .space-dot :is(.sprite, .project-icon, .avatar, img) { border-radius: 0; }
+  :root[data-skin='win95'] .fab { border-radius: 0; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 2px 2px 0 #0006; }
+  :root[data-skin='win95'] .fab:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
+  :root[data-skin='clean'] .space-bar, :root[data-skin='clean'] .space-float > button { background: var(--cl-panel); color: var(--cl-text); }
+  :root[data-skin='clean'] .app-window.at-home > .toolbar { border: 1px solid var(--cl-line); border-radius: 16px; background: var(--cl-panel); box-shadow: 0 4px 16px #0004; }
+  :root[data-skin='clean'] .space-bar { border-bottom: 1px solid var(--cl-line); }
+  :root[data-skin='clean'] .space-chip.on { background: var(--cl-accent-soft); color: var(--cl-accent); }
+}
+
+@media (max-width: 700px) and (prefers-reduced-motion: reduce) {
+  .space-float, .space-bar.folding .space-bar-row, .space-bar.unfolding .space-bar-row, .app-window > .title-bar { animation-duration: 1ms; }
+  .app-window > .toolbar { transition: none; }
+}
+
 /* A lens's view, and the same filling the screen: the browser's full screen, or laid over the app (an iPhone). */
 .lens-box { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--window, #fff); }
-.lens-box:fullscreen, .lens-box.lens-full { position: fixed; inset: 0; z-index: 10000; width: auto; height: auto; max-width: 100vw; max-height: 100dvh; box-sizing: border-box; overflow: hidden; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--window, #fff); }
+.lens-box:fullscreen, .lens-box.lens-full { position: fixed; inset: 0; bottom: auto; z-index: 10000; width: auto; height: var(--app-height, 100dvh); max-width: 100vw; max-height: none; box-sizing: border-box; margin: 0; border: 0; overflow: hidden; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--window, #fff); }
 /* A view that lays out the screen's edges itself ({weave: 'edges'}) gets all of it, under the notch and the home bar too. */
 .lens-box.lens-bleed:fullscreen, .lens-box.lens-bleed.lens-full { padding: 0; }
 .lens-box.lens-bleed .lens-full-exit { opacity: 0.6; }
 /* The view alone on the screen: its lines about hosts and place stay in the pane (they come back on leaving). */
 .lens-box:fullscreen .lens-net, .lens-box.lens-full .lens-net { display: none; }
 html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
-.lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1; opacity: 0.45; transition: opacity 0.2s; }
-.lens-full-exit:hover, .lens-full-exit:focus-visible { opacity: 1; }
+/* Its ✕, in the corner the view keeps free (corner: 40): a round dark button, in Windows 95 the title bar's close box. */
+:root[data-skin] .lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; display: grid; place-items: center; box-sizing: border-box; width: 30px; min-width: 0; height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 50%; background: #000a; box-shadow: 0 1px 4px #0006; color: #fff; text-shadow: none; font: 16px/1 system-ui, sans-serif; opacity: 0.75; cursor: pointer; transition: opacity 0.2s; }
+:root[data-skin='win95'] .lens-full-exit { width: 26px; height: 24px; border-radius: 0; background: var(--face, silver); color: #000; font: bold 14px/1 'Pixelated MS Sans Serif', Arial, sans-serif; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 0 2px 6px #0005; opacity: 0.9; }
+:root[data-skin='win95'] .lens-full-exit:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080; }
+:root[data-skin] .lens-full-exit:hover, :root[data-skin] .lens-full-exit:focus-visible { opacity: 1; }
+/* A mini-app filling the screen: its frame takes all of the box. */
+.lens-box.widget-full > .widget-frame { flex: 1; height: auto !important; min-height: 0; border-radius: 0; }

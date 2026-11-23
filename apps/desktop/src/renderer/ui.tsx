@@ -196,7 +196,8 @@ export function ServiceOrigin({ shipped, project, tag }: { shipped?: boolean; pr
 // ---------------------------------------------------------------- windows
 
 /** A Win95 dialog window over a dimmed screen. */
-export function Modal({ title, onClose, children, wide }: { title: string; onClose(): void; children: ReactNode; wide?: boolean }) {
+/** `subtitle`: a line under the title, in the window's head (which step of how many, say). */
+export function Modal({ title, subtitle, onClose, children, wide }: { title: string; subtitle?: ReactNode; onClose(): void; children: ReactNode; wide?: boolean }) {
   const { t } = useTexts();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -208,7 +209,10 @@ export function Modal({ title, onClose, children, wide }: { title: string; onClo
       <div className="modal-back" onClick={onClose} />
       <div className={`window modal${wide ? ' wide' : ''}`} role="dialog" aria-label={title}>
         <div className="title-bar">
-          <div className="title-bar-text">{title}</div>
+          <div className="title-bar-text">
+            {title}
+            {subtitle && <span className="title-bar-sub">{subtitle}</span>}
+          </div>
           <div className="title-bar-controls">
             <button aria-label={t('window.close')} onClick={onClose} />
           </div>

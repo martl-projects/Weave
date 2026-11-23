@@ -147,3 +147,4 @@ export type { AuditSinkInput } from './auditsinks.ts';
 export { HARDWARE_KEYSTORES, KEYSTORE_NAMES, type HardwareKeystore, type Keystore } from './vault.ts';
 export { readSecretJson, useHomeKey, vaultOf, writeSecretJson } from './vault.ts';
 export { keepReconciling } from './reconciling.ts';
+export { KIND_PUSH_TARGET, PushTargets, notifies, postPush, type PushHost, type PushNotice, type PushSend, type PushTarget } from './pushtargets.ts';

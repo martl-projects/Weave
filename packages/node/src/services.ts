@@ -48,7 +48,8 @@ export interface StoredProgramConsent {
  */
 export const KIND_SERVICE_HANDOVER = 'weave.service.handover';
 /** Always-on nodes' keys are named "node:<name>" among your keys. */
-export const NODE_PREFIX = 'node:';
+import { NODE_PREFIX } from './shared.ts';
+export { NODE_PREFIX };
 
 /**
  * The services built into Weave: what each does, as its contract and in words, and the settings it takes. Weave's

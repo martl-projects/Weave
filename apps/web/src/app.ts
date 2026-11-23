@@ -1,6 +1,6 @@
 import type { ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
-import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
+import type { AppState, Bridge, WebProgress } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
@@ -153,6 +153,22 @@ interface FromWorker {
   port?: MessagePort;
 }
 
+/**
+ * How far this browser is (the app's progress bar): its storage node's connection, and how much came in since the page
+ * opened. `linked`: this browser was just linked to a computer, whose content comes from there.
+ */
+const progress: WebProgress = { state: 'start', received: 0, at: 0, linked: false };
+const progressListeners: Array<(p: WebProgress) => void> = [];
+let progressSoon: ReturnType<typeof setTimeout> | undefined;
+const progressed = (now = false) => {
+  // At most a few times a second: a first sync brings thousands of events.
+  if (progressSoon && !now) return;
+  progressSoon = setTimeout(() => {
+    progressSoon = undefined;
+    for (const listen of progressListeners) listen({ ...progress });
+  }, now ? 0 : 250);
+};
+
 worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   if (data.event === 'service') {
     const service = new Worker('/service.js', { type: 'module' });
@@ -165,8 +181,18 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   }
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
   if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
-  if (data.event === 'status') return console.info('storage node:', data.state, data.detail ?? '');
-  if (typeof data.event === 'object') return listeners.forEach((listen) => listen(data.event as FeedItem));
+  if (data.event === 'status') {
+    progress.state = data.state as WebProgress['state'];
+    progress.detail = data.detail;
+    progressed(true);
+    return console.info('storage node:', data.state, data.detail ?? '');
+  }
+  if (typeof data.event === 'object') {
+    progress.received++;
+    progress.at = Date.now();
+    progressed();
+    return listeners.forEach((listen) => listen(data.event as FeedItem));
+  }
   waiting.get(data.id)?.(data.answer);
   waiting.delete(data.id);
 };
@@ -279,6 +305,16 @@ if (arrived) {
 const LINK_KEY = 'weave.link';
 /** Where to start after this browser was emptied on purpose (reset). */
 const START_KEY = 'weave.start';
+/** A tapped notification that opened Weave (the service worker's ?open=): where it leads, once unlocked. */
+let openedFrom: Record<string, unknown> | undefined;
+try {
+  const asked = new URLSearchParams(location.search).get('open');
+  if (asked) {
+    const parsed = JSON.parse(asked) as unknown;
+    if (parsed && typeof parsed === 'object') openedFrom = parsed as Record<string, unknown>;
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
+} catch {}
 const linkSecret = /^#link=([\w-]+)/.exec(location.hash)?.[1];
 if (linkSecret) {
   sessionStorage.setItem(LINK_KEY, linkSecret);
@@ -415,14 +451,36 @@ const web: Bridge['web'] = {
       const address = await own<string>('pushSubscribe', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
       const kept = await loadPushKey();
       if (kept?.address !== address) await savePushKey(makePushKey(address));
+      // Each place its own address, sealed to those who manage it (docs/web-push.md, stage 3).
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
     },
     disable: async () => {
+      await own('pushPlaces').catch(() => undefined);
       const kept = await loadPushKey();
       if (kept) await own('pushDrop', kept.address).catch(() => undefined);
       await (await (await navigator.serviceWorker.ready).pushManager.getSubscription())?.unsubscribe();
       await clearPushKey();
     },
     counted: async (total) => void (await saveBadge(total).catch(() => undefined)),
+    relay: () => new URL(STORAGE_AT).host,
+    // All anew: the subscription at the push service goes (whatever any relay still holds of it reaches nothing), and a
+    // new one with new addresses and keys for every place takes its place.
+    renew: async () => {
+      await web!.push.disable();
+      await web!.push.enable();
+    },
+    resume: async () => {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator)) return;
+      const subscription = await (await navigator.serviceWorker.ready).pushManager?.getSubscription();
+      if (!subscription || !(await loadPushKey())) return;
+      const keys = subscription.toJSON().keys ?? {};
+      await own('pushPlaces', { endpoint: subscription.endpoint, p256dh: keys.p256dh, auth: keys.auth });
+    },
+    opened: () => {
+      const kept = openedFrom;
+      openedFrom = undefined;
+      return kept;
+    },
     test: async (notice) => {
       const kept = await loadPushKey();
       if (!kept) throw new Error('notifications are off on this device');
@@ -455,6 +513,7 @@ const web: Bridge['web'] = {
     await own('link', STORAGE_AT, sessionStorage.getItem(LINK_KEY), made);
     sessionStorage.removeItem(LINK_KEY);
     passkey = true;
+    progress.linked = true;
     await goOnline(invite);
   },
   needsInvite: () => !invitation() && !onboardPlan.plan,
@@ -471,7 +530,14 @@ const web: Bridge['web'] = {
         ? { problem: onboardPlan.problem }
         : undefined,
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
+  progress: () => ({ ...progress }),
+  onProgress: (listener) => {
+    progressListeners.push(listener);
+    return () => void progressListeners.splice(progressListeners.indexOf(listener), 1);
+  },
   ways: () => own<string[]>('ways'),
+  laterWords: () => own<string | undefined>('laterWords'),
+  wordsWritten: () => own<void>('wordsWritten'),
   addPasskey: async () => {
     await own('addWay', await makePasskey(passkeyLabel(((await ask('profile')) as { result?: { name?: string } }).result?.name ?? 'Weave')));
     passkey = true;
@@ -519,7 +585,8 @@ window.weave = {
     if (!invite) throw new Error('Weave on the web is by invitation for now: open the link you were given');
     const made = await makePasskey(passkeyLabel(name)).catch((error: Error) => (console.warn('no passkey:', error.message), undefined));
     passkey = !!made;
-    const { words } = await own<{ words: string }>('create', name, made);
+    // With a passkey, the words wait (laterWords): the newcomer comes straight in.
+    const { words } = await own<{ words?: string }>('create', name, made);
     await goOnline(invite);
     if (viaLink) await followOnboard(true).catch((error: Error) => console.warn('the link\'s steps:', error.message));
     return words;
@@ -543,10 +610,13 @@ window.weave = {
 
 // A notification tapped while Weave is open: the service worker says where it leads.
 // One that came while Weave was in front isn't shown (the node here tells it): it's said to the page.
-navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: string; notice?: unknown }>) => {
+navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string; open?: unknown; notice?: unknown }>) => {
   if (event.data?.type === 'weave-push') return void window.dispatchEvent(new CustomEvent('weave-push', { detail: event.data.notice }));
   if (event.data?.type === 'weave-push-failed') return void console.warn('a push could not be shown:', (event.data as { why?: string }).why);
-  if (event.data?.type === 'weave-open' && event.data.open) location.hash = event.data.open.startsWith('#') ? event.data.open : `#${event.data.open}`;
+  const open = event.data?.type === 'weave-open' ? event.data.open : undefined;
+  // A place as a notice says it (stage 3): the app finds its way there.
+  if (open && typeof open === 'object') return void window.dispatchEvent(new CustomEvent('weave-open', { detail: open }));
+  if (typeof open === 'string' && open) location.hash = open.startsWith('#') ? open : `#${open}`;
 });
 
 await import('../../desktop/src/renderer/main.tsx');

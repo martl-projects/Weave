@@ -13,6 +13,11 @@ export interface StoredSpace extends SpaceKeys {
   via?: Did;
   /** Epochs shredded by the space's managers: their keys are gone and never taken again. */
   shredded?: number[];
+  /**
+   * Only on this person's computers: never given to a browser of theirs or an always-on node, so no storage node learns
+   * of it. Theirs alone, set on any of their computers; the others take it with their node index.
+   */
+  devicesOnly?: true;
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {

@@ -28,6 +28,9 @@ export const RECENT_HOLD_MS = 14 * 24 * 3600 * 1000;
 
 /** Every space of ours (but direct chats) and its keys, in our own space, for our always-on nodes (stage 18). */
 export const KIND_NODE_INDEX = 'weave.node.index';
+/** The names of the keys a person's computers give a browser (linkBrowser) and an always-on node (linkNode). */
+export const BROWSER_PREFIX = 'browser:';
+export const NODE_PREFIX = 'node:';
 
 /** Content kinds that are a space's latest state, restated for newcomers along with its control events (see #carry). */
 export const CARRIED_STATE = new Set(['weave.project.page', 'weave.space.photo', 'weave.app', 'weave.catalog.entry', 'weave.channel', 'weave.curate', 'weave.theme']);

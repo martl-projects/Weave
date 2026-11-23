@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { HomeSource, SpaceInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bump } from './lib.ts';
-import { PostList, spaceLabel } from './posts.tsx';
+import { IconSelect, PostList, spaceLabel } from './posts.tsx';
 import { useTexts } from './texts.tsx';
 import { attempt, Modal } from './ui.tsx';
 
@@ -61,7 +61,25 @@ function SourcesDialog({ spaces, onClose }: { spaces: SpaceInfo[]; onClose(): vo
   );
 }
 
-export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meDid: string; onSubmit(): void }) {
+/**
+ * What Weave itself has to say, as a quiet note on top of Home rather than a banner over everything: nobody else can
+ * bring a person's data back, said until a backup was saved and again when the last one is a month old.
+ */
+export function BackupPost({ due }: { due: 'never' | 'again' }) {
+  const { t } = useTexts();
+  return (
+    <a className="weave-note" href="#/keys">
+      <Icon name="lock" />
+      <span className="weave-note-text">
+        <b>{t(due === 'again' ? 'backup.post.title.again' : 'backup.post.title')}</b>
+        <span>{t(due === 'again' ? 'backup.due.again' : 'backup.due.never')}</span>
+      </span>
+      <span className="weave-note-go">{t('backup.post.open')} ›</span>
+    </a>
+  );
+}
+
+export function HomeFeed({ spaces, meDid, above }: { spaces: SpaceInfo[]; meDid: string; above?: ReactNode }) {
   const { t } = useTexts();
   const [from, setFrom] = useState<HomeSource>(readSource);
   const [choosing, setChoosing] = useState(false);
@@ -81,21 +99,13 @@ export function HomeFeed({ spaces, meDid, onSubmit }: { spaces: SpaceInfo[]; meD
         meDid={meDid}
         toolbar={
           <>
-            <button onClick={onSubmit}>
-              <Icon name="pencil" /> {t('tool.submit')}
-            </button>
-            <select value={from} onChange={(e) => choose(e.target.value as HomeSource)} aria-label={t('home.from')}>
-              {SOURCES.map((s) => (
-                <option key={s} value={s}>
-                  {t(`home.source.${s}`)}
-                </option>
-              ))}
-            </select>
-            <button onClick={() => setChoosing(true)} title={t('home.sources.title')}>
-              {hiddenCount ? t('home.sources.hidden', { n: hiddenCount }) : t('home.sources')}
+            <IconSelect icon="filter" label={t('home.from')} value={from} marked={from !== 'all'} options={SOURCES.map((s) => ({ value: s, label: t(`home.source.${s}`) }))} onChange={(v) => choose(v as HomeSource)} />
+            <button className={`icon-btn${hiddenCount ? ' marked' : ''}`} onClick={() => setChoosing(true)} title={`${t('home.sources.title')}${hiddenCount ? ` (${t('home.sources.hidden', { n: hiddenCount })})` : ''}`} aria-label={t('home.sources')}>
+              <Icon name="sliders" />
             </button>
           </>
         }
+        above={above}
         empty={<>{t(`home.empty.${from}`)}</>}
       />
       {choosing && <SourcesDialog spaces={spaces} onClose={() => setChoosing(false)} />}

@@ -8,13 +8,14 @@ import type { Admission, BoardInfo, ChannelInfo, ChatInfo, MemberInfo, PostInfo,
 import { ArcadeWell, useArcade } from './arcade.tsx';
 import { ChatView } from './chat.tsx';
 import { InviteLinkDialog, InviteToDialog, isInviteHref, openInviteLink } from './invites.tsx';
-import { joinLinkOf, LinkBuilder, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
-import { AppBadge, HintSigns, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
+import { mayShare, ShareAdd, ShareBar, ShareMark, startShare, stopShare, useShare } from './share.tsx';
+import { joinLinkOf, ONBOARD_IN_TEXT, OnboardLinkDialog, openOnboardLink, QuickRoute, QuickStarts } from './onboardlinks.tsx';
+import { AppBadge, HintSigns, NoticeSwitch, NotificationSettings, startNotifications, useHints, type Shown } from './notify.tsx';
 import { MarksSettings } from './marks.tsx';
 import { Elsewhere, KeysView, Onboarding, Unlock } from './keys.tsx';
 import { AgentAsks, AgentsOffer } from './agents.tsx';
 import { PhoneConnecting, PhoneNotConnected, PhonePairing } from './phones.tsx';
-import { HomeFeed } from './home.tsx';
+import { BackupPost, HomeFeed } from './home.tsx';
 import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './websites.tsx';
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
@@ -25,9 +26,10 @@ import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
 import { chooseWorker, SessionsView, WorkerChooser } from './sessions.tsx';
 import { Icon, type IconName } from './icons.tsx';
 import { api, applyMode, applySkin, bridge, bump, enrollLinkOpened, isActive, isUnread, loadMode, loadSkin, MODES, navigate, postRefOfHref, shortDid, SKINS, SPACE_LINK, spaceRoute, useApi, useRoute, useSeenTick, type AppState, type Mode, type Skin } from './lib.ts';
-import { boardIcon, postHref, PostList, PostView, spaceHref, spaceLabel, SubmitDialog } from './posts.tsx';
+import { boardIcon, FollowButton, postHref, PostList, PostView, spaceHref, spaceLabel, SortButtons, SubmitDialog } from './posts.tsx';
 import { attempt, Avatar, Menu, Modal, ProjectIcon, Sprite, toast, Toasts, WeaveMark } from './ui.tsx';
 import { GroupIcon, SpacePhoto } from './avatar-editor.tsx';
+import { backFrom, fitHomeScreen, rememberOutside, useBarsFolded, useFoldPlay, useIsPhone, useSwipeBack } from './phonechrome.ts';
 import { AgentAvatar } from './avatar.tsx';
 import { startAppOpens } from './accounts.tsx';
 import { onlyAWebsite, SpaceServices } from './services.tsx';
@@ -49,19 +51,72 @@ import {
   SpaceView,
 } from './views.tsx';
 
-type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'build'; space?: SpaceInfo } | { kind: 'submit'; space?: string; board?: string };
+type Dialog = { kind: 'new' } | { kind: 'notify' } | { kind: 'marks' } | { kind: 'updates' } | { kind: 'desk' } | { kind: 'invite'; space: SpaceInfo } | { kind: 'link' } | { kind: 'submit'; space?: string; board?: string };
+
+// ---------------------------------------------------------------- side panes, folded
+
+/**
+ * Places and the member list can fold to a narrow strip: Places to its icons, the members to their faces, each with
+ * its counts. Remembered on this device; the View menu and the button in the pane's head both fold it.
+ */
+const FOLDED = 'weave-fold';
+function useFolded(pane: 'places' | 'members'): [boolean, () => void] {
+  const key = `weave.fold.${pane}`;
+  const stored = () => {
+    try {
+      return localStorage.getItem(key) === '1';
+    } catch {
+      return false;
+    }
+  };
+  const [folded, setFolded] = useState(stored);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; folded: boolean }>).detail;
+      if (detail.key === key) setFolded(detail.folded);
+    };
+    addEventListener(FOLDED, changed);
+    return () => removeEventListener(FOLDED, changed);
+  }, [key]);
+  const toggle = () => {
+    const next = !folded;
+    try {
+      localStorage.setItem(key, next ? '1' : '0');
+    } catch {
+      // Not kept on this device: it stays folded until Weave reloads.
+    }
+    dispatchEvent(new CustomEvent(FOLDED, { detail: { key, folded: next } }));
+  };
+  return [folded, toggle];
+}
+
+/** The button in a side pane's head: it points the way the pane goes (Places sits left, the members right). */
+function FoldButton({ folded, side, onClick }: { folded: boolean; side: 'left' | 'right'; onClick(): void }) {
+  const { t } = useTexts();
+  const label = folded ? t('pane.unfold') : t('pane.fold');
+  return (
+    <button className="pane-fold" title={label} aria-label={label} aria-expanded={!folded} onClick={onClick}>
+      {folded === (side === 'left') ? '»' : '«'}
+    </button>
+  );
+}
 
 // ---------------------------------------------------------------- places tree
 
-function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0 }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number }) {
+function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, badge, hint, depth = 0, extra, mark }: { href: string; icon?: IconName; sprite?: string; image?: string; face?: boolean; group?: SpaceInfo; label: ReactNode; on: boolean; unread?: boolean; badge?: number; hint?: Shown; depth?: number; extra?: ReactNode; mark?: 'target' | 'path' | 'included' }) {
   // What your hint services say: a number (with badge, e.g. who waits to join), a tint, signs under the number.
   const count = (badge ?? 0) + (hint?.count ?? 0);
+  const { t } = useTexts();
+  // Share mode (share.tsx): where the link leads has a target and a check, the places above it a check (it lets them in there),
+  // and so do the places the + added (their + turned check).
+  const classes = [extra ? 'tree-with-extra' : '', mark ? `share-${mark}` : ''].filter(Boolean).join(' ');
   return (
-    <li style={{ paddingLeft: depth * 14 }}>
-      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip}>
+    <li style={{ paddingLeft: depth * 14 }} className={classes || undefined}>
+      <a className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}${hint?.tone ? ` tint-${hint.tone}` : ''}`} href={href} title={hint?.tooltip ?? (typeof label === 'string' ? label : undefined)}>
         {/* People (face): their avatar; groups: their photo or their people's faces; spaces: their icon or sprite. */}
         {group ? <GroupIcon space={group} size={16} /> : sprite ? face ? <Avatar did={sprite} size={16} /> : image ? <ProjectIcon id={sprite} icon={image} size={16} /> : <Sprite seed={sprite} size={16} /> : icon && <Icon name={icon} />}
         <span className="tree-label">{label}</span>
+
         {(!!count || !!hint?.signs.length) && (
           <span className="tree-hints">
             {!!count && <span className="badge">{count}</span>}
@@ -69,6 +124,13 @@ function TreeLink({ href, icon, sprite, image, face, group, label, on, unread, b
           </span>
         )}
       </a>
+      {(mark === 'target' || mark === 'path') && (
+        <span className="share-marks">
+          {mark === 'target' && <ShareMark kind="target" title={t('sharemode.target')} />}
+          <ShareMark kind="check" title={t('sharemode.joins')} />
+        </span>
+      )}
+      {extra}
     </li>
   );
 }
@@ -87,6 +149,13 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
+  // Share mode: which of these the link leads to (a board, Live with a website chosen, or the space), or that it lets them in here too.
+  const share = useShare();
+  const shareable = share.on && mayShare(space);
+  const targetHere = shareable && open;
+  const boardTarget = targetHere && view === 'b' ? arg : undefined;
+  const liveTarget = targetHere && view === 'live' && !!share.website;
+  const spaceMark = targetHere ? (boardTarget || liveTarget ? 'path' : 'target') : shareable && share.also.includes(space.id) ? 'included' : undefined;
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
   const shownBoards = open && hasBoards ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
@@ -95,11 +164,11 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const channelHint = (name: string) => under[shownBoards.length + shownChannels.findIndex((c) => c.name === name)];
   return (
     <>
-      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
+      <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} extra={<ShareAdd space={space} route={route} />} mark={spaceMark} />
       {open && (
         <>
           {hasBoards &&
-            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} />)}
+            (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} mark={boardTarget === b.name ? 'target' : undefined} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
               key={c.name}
@@ -112,7 +181,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
               hint={channelHint(c.name)}
             />
           ))}
-          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live')} on={view === 'live'} unread={!!rooms?.length} />}
+          {space.kind === 'project' && <TreeLink depth={1} href={`${base}/live`} icon="globe" label={rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live')} on={view === 'live'} unread={!!rooms?.length} mark={liveTarget ? 'target' : undefined} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/available`} icon="store" label={t('nav.available')} on={view === 'available'} />}
           {space.kind === 'project' && <TreeLink depth={1} href={`${base}/services`} icon="zap" label={t('nav.services')} on={view === 'services' && !arg} />}
           {space.kind === 'project' && (services ?? []).map((s) => <TreeLink key={s.did} depth={2} href={`${base}/services/${s.did}`} icon={serviceIcon(s)} label={s.name} on={view === 'services' && arg === s.did} />)}
@@ -127,8 +196,52 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   );
 }
 
+/**
+ * Weave Web: how far this browser is, in a thin bar over everything: connecting to its storage node, content coming in
+ * (with how much), or no connection. Just linked to a computer: where the content comes from, and to leave Weave open
+ * there. Gone a few seconds after things go quiet.
+ */
+function WebSyncBar() {
+  const { t } = useTexts();
+  const [progress, setProgress] = useState(() => bridge.web!.progress());
+  const [, setNow] = useState(0);
+  useEffect(() => bridge.web!.onProgress(setProgress), []);
+  // While it shows, look again each second: it goes when nothing new came for a while.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const recent = Date.now() - progress.at < 4000;
+  const waitingForComputer = progress.linked && progress.state === 'connected' && progress.received === 0;
+  let text: string | undefined;
+  if (progress.state === 'start' || progress.state === 'connecting') text = t('websync.connecting');
+  else if (progress.state === 'offline') text = t('websync.offline');
+  else if (recent) text = t('websync.receiving', { n: progress.received.toLocaleString() });
+  else if (waitingForComputer) text = t('websync.waiting');
+  if (!text) return null;
+  return (
+    <div className={`web-sync${progress.state === 'offline' ? ' offline' : ''}`} role="status" title={progress.detail}>
+      <span className="web-sync-dot" aria-hidden="true" />
+      <span>{text}</span>
+      {progress.linked && progress.state !== 'offline' && <span className="web-sync-hint">{t('websync.computer')}</span>}
+    </div>
+  );
+}
+
+/** In the places tree's head: share mode on, or off again. */
+function ShareToggle() {
+  const { t } = useTexts();
+  const { on } = useShare();
+  return (
+    <button className={`pane-share${on ? ' on' : ''}`} title={t('sharemode.button.title')} aria-pressed={on} onClick={on ? stopShare : startShare}>
+      <Icon name="share" /> {t('sharemode.button')}
+    </button>
+  );
+}
+
 function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: SpaceInfo[]; chats: ChatInfo[]; route: string[]; waiting: Admission[]; inbox: number; onNew(): void }) {
   useSeenTick(); // unread state lives in localStorage
+  const [folded, fold] = useFolded('places');
   const { t } = useTexts();
   const chatHints = useHints('place', chats.map((c) => ({ space: c.space.id })));
   const section = (kind: SpaceInfo['kind'], title: string, icon: IconName) => {
@@ -146,10 +259,12 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
     );
   };
   return (
-    <aside className="places">
+    <aside className={`places${folded ? ' folded' : ''}`}>
       <ArcadeWellIfOn />
       <header className="pane-head">
         <b>{t('tree.places')}</b>
+        <ShareToggle />
+        <FoldButton folded={folded} side="left" onClick={fold} />
       </header>
       <ul className="tree-view">
         <TreeLink href="#/" icon="home" label={t('nav.home')} on={route.length === 0} />
@@ -191,7 +306,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
           </>
         )}
       </ul>
-      <button className="new-btn" onClick={onNew}>
+      <button className="new-btn" onClick={onNew} title={t('tree.new')}>
         <Icon name="plus" /> {t('tree.new')}
       </button>
     </aside>
@@ -202,6 +317,7 @@ function Places({ spaces, chats, route, waiting, inbox, onNew }: { spaces: Space
 
 function MemberList({ space, members, meDid }: { space: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { t } = useTexts();
+  const [folded, fold] = useFolded('members');
   const online = members.filter((m) => m.did === meDid || isActive(m.lastActive));
   const offline = members.filter((m) => !online.includes(m));
   const crown = space.kind === 'project' ? 'maintainer' : space.kind === 'community' ? 'moderator' : 'founder';
@@ -214,12 +330,13 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
         ? t('member.how.invited', { name: m.invitedByName })
         : t('role.founder');
     const crowned = m.maintainer || (space.kind !== 'project' && m.did === space.founder);
+    const name = m.did === meDid ? t('member.you', { name: m.name ?? t('word.you') }) : (m.name ?? shortDid(m.did));
     return (
       <div key={m.did} className={`member${on ? '' : ' away'}`}>
-        <a className="member-main" href={`#/space/${encodeURIComponent(m.did)}`} title={how}>
+        <a className="member-main" href={`#/space/${encodeURIComponent(m.did)}`} title={`${name}\n${how}`}>
           <Avatar did={m.did} size={24} status={on ? 'online' : 'offline'} />
           <span className="member-name">
-            {m.did === meDid ? t('member.you', { name: m.name ?? t('word.you') }) : (m.name ?? shortDid(m.did))}
+            {name}
             {crowned && (
               <span className="crown" title={t(`role.${crown}`)}>
                 ★
@@ -237,9 +354,10 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
     );
   };
   return (
-    <aside className="members">
+    <aside className={`members${folded ? ' folded' : ''}`}>
       <ArcadeWellIfOn />
       <header className="pane-head">
+        <FoldButton folded={folded} side="right" onClick={fold} />
         <b>{t(space.kind === 'project' ? 'members.participants' : 'members.members', { n: members.length })}</b>
       </header>
       <div className="members-list sunken">
@@ -257,32 +375,172 @@ function MemberList({ space, members, meDid }: { space: SpaceInfo; members: Memb
 
 // ---------------------------------------------------------------- spaces
 
-/** On a phone, where the tree is a pane of its own: a project's boards, Live and Settings at the top of its pages. */
-function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; boards: BoardInfo[]; view?: string; arg?: string }) {
-  const { data: rooms } = useApi(() => api<WebsiteInfo[]>('websites', space.id), [space.id]);
+/** A project's chat is its channel named general: a name, not a text. */
+const GENERAL = 'general';
+
+/** The bars on a phone: folded while reading on (phonechrome.ts), and how to bring them back. */
+type Bars = { folded: boolean; unfold(): void };
+
+/**
+ * On a phone, the head of a place (a project, group, community or direct chat), and the only bar there: back, the
+ * place's icon, its boards as chips (those with something new first, then Live when it has websites), and a menu
+ * with the rest, which a tap on the icon opens too: a popover in sections (all its boards, its services, sharing it,
+ * how the list is sorted). Folded away while reading on, it leaves the place's icon alone; a tap on it, or pulling the
+ * page down, brings it back.
+ */
+function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting }: { space?: SpaceInfo; chat?: ChatInfo; route: string[]; boards: BoardInfo[]; bars: Bars; open(d: Dialog): void; onInviteTo?(): void; sorting?: ReactNode }) {
   const { t } = useTexts();
-  const base = spaceHref(space);
-  const link = (href: string, icon: IconName, label: string, on: boolean, unread?: boolean) => (
-    <a key={href} className={`tree-link${on ? ' on' : ''}${unread ? ' unread' : ''}`} href={href}>
-      <Icon name={icon} />
-      <span className="tree-label">{label}</span>
-    </a>
+  useSeenTick(); // unread channels live in localStorage
+  const [menu, setMenu] = useState(false);
+  const routeKey = route.join('/');
+  useEffect(() => setMenu(false), [routeKey]);
+  const id = space?.id ?? chat?.space.id ?? '';
+  const project = space?.kind === 'project';
+  const { data: rooms } = useApi(() => (project ? api<WebsiteInfo[]>('websites', id) : Promise.resolve([])), [id]);
+  const hints = useHints('place', project ? boards.map((b) => ({ board: { space: id, name: b.name } })) : []);
+  const [view, arg] = [route[2], route[3]];
+  const base = space ? spaceHref(space) : `#/d/${id}`;
+  const name = chat ? (chat.peer.name ?? shortDid(chat.peer.did)) : (space?.name ?? '');
+  const icon = (size: number) =>
+    chat ? <Avatar did={chat.peer.did} size={size} /> : space?.kind === 'group' ? <GroupIcon space={space} size={size} /> : space?.icon ? <ProjectIcon id={space.id} icon={space.icon} size={size} /> : <Sprite seed={id} size={size} />;
+
+  type Chip = { href: string; icon: IconName; label: string; on: boolean; count?: number; fresh?: boolean };
+  let chips: Chip[] = [];
+  if (project) {
+    const ordered = boards
+      .map((b, i) => ({ b, hint: hints[i] }))
+      .sort((x, y) => (y.hint?.count ?? 0) - (x.hint?.count ?? 0) || (y.b.active ?? '').localeCompare(x.b.active ?? ''));
+    chips = [
+      { href: base, icon: 'hash', label: GENERAL, on: !view },
+      ...ordered.map(({ b, hint }): Chip => ({ href: `${base}/b/${b.name}`, icon: boardIcon(b), label: b.title, on: view === 'b' && arg === b.name, count: hint?.count })),
+      ...(rooms?.length ? [{ href: `${base}/live`, icon: 'globe' as IconName, label: t('nav.live.n', { n: rooms.length }), on: view === 'live', fresh: true }] : []),
+    ];
+  } else if (space?.kind === 'group') {
+    const here = view === 'c' ? (arg ?? 'general') : view ? undefined : 'general';
+    chips = [...(space.channels ?? [])]
+      .map((c) => ({ c, fresh: isUnread(`${space.id}/${c.name}`, c.last) }))
+      .sort((x, y) => Number(y.fresh) - Number(x.fresh) || (y.c.name === 'general' ? 1 : 0) - (x.c.name === 'general' ? 1 : 0))
+      .map(({ c, fresh }) => ({ href: c.name === 'general' ? base : `${base}/c/${c.name}`, icon: 'hash', label: c.name, on: here === c.name, fresh: fresh && here !== c.name }));
+  }
+  const boardItems = chips;
+  if (chips.length < 2) chips = [];
+
+  // Folding plays the bar away first, then shows the place's icon (with back beside it); unfolding plays it back in.
+  const play = useFoldPlay(bars.folded);
+
+  if (play.away && !menu)
+    return (
+      <div className="space-float mobile-only">
+        <button className="space-float-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
+          ‹
+        </button>
+        <button className="space-dot" onClick={bars.unfold} title={name} aria-label={name}>
+          {icon(40)}
+        </button>
+      </div>
+    );
+
+  type Item = { icon: IconName; label: string; go: string | (() => void); on?: boolean; count?: number };
+  const page = (path: string) => view === path;
+  const services: Item[] = chat
+    ? [{ icon: 'user', label: t('chat.hub'), go: `#/space/${encodeURIComponent(chat.peer.did)}` }]
+    : project
+      ? [
+          { icon: 'notes', label: t('space.page'), go: `${base}/page`, on: page('page') },
+          { icon: 'store', label: t('nav.available'), go: `${base}/available`, on: page('available') },
+          { icon: 'zap', label: t('nav.services'), go: `${base}/services`, on: page('services') },
+          { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
+          ...(!bridge.web ? [{ icon: 'clock' as IconName, label: t('nav.routines'), go: `${base}/routines`, on: page('routines') }] : []),
+          { icon: 'gear', label: t('nav.settings'), go: `${base}/settings`, on: page('settings') },
+        ]
+      : space?.kind === 'community'
+        ? [
+            { icon: 'info', label: t('nav.about'), go: `${base}/about`, on: page('about') },
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
+          ]
+        : [
+            { icon: 'bookmark', label: t('nav.catalog'), go: `${base}/catalog`, on: page('catalog') },
+            { icon: 'gear', label: t('nav.settings'), go: `${base}/settings`, on: page('settings') },
+          ];
+  const share: Item[] = chat
+    ? onInviteTo
+      ? [{ icon: 'userPlus', label: t('chat.invite.to'), go: onInviteTo }]
+      : []
+    : [
+        ...(project || space?.kind === 'community' ? [{ icon: 'pencil' as IconName, label: t('word.post'), go: () => open({ kind: 'submit', space: id }) }] : []),
+        { icon: 'userPlus', label: t('space.invite'), go: () => space && open({ kind: 'invite', space }) },
+      ];
+  const boardsList: Item[] = boardItems.map((c) => ({ icon: c.icon, label: c.label, go: c.href, on: c.on, count: c.count }));
+  // One list as Places has it: a head per section, a row per thing, the one you're at marked.
+  const item = (it: Item) => (
+    <li key={it.label}>
+      {typeof it.go === 'string' ? (
+        <a className={`tree-link space-menu-item${it.on ? ' on' : ''}`} href={it.go} onClick={() => setMenu(false)}>
+          <Icon name={it.icon} /> <span className="tree-label">{it.label}</span>
+          {!!it.count && <span className="badge">{it.count}</span>}
+        </a>
+      ) : (
+        <button className="tree-link space-menu-item" onClick={() => (setMenu(false), (it.go as () => void)())}>
+          <Icon name={it.icon} /> <span className="tree-label">{it.label}</span>
+        </button>
+      )}
+    </li>
   );
+  const section = (title: string, body: ReactNode) => (
+    <>
+      <li className="tree-head">{title}</li>
+      {body}
+    </>
+  );
+
   return (
-    <nav className="project-sections mobile-only">
-      {link(base, 'hash', 'general', !view)}
-      {link(`${base}/live`, 'globe', rooms?.length ? t('nav.live.n', { n: rooms.length }) : t('nav.live'), view === 'live', !!rooms?.length)}
-      {link(`${base}/available`, 'store', t('nav.available'), view === 'available')}
-      {link(`${base}/services`, 'zap', t('nav.services'), view === 'services')}
-      {boards.map((b) => link(`${base}/b/${b.name}`, boardIcon(b), b.title, view === 'b' && arg === b.name))}
-      {link(`${base}/catalog`, 'bookmark', t('nav.catalog'), view === 'catalog')}
-      {!bridge.web && link(`${base}/routines`, 'clock', t('nav.routines'), view === 'routines')}
-      {link(`${base}/settings`, 'gear', t('nav.settings'), view === 'settings')}
-    </nav>
+    <header className={`space-bar mobile-only${menu ? ' open' : ''}${menu ? '' : play.className}`}>
+      <div className="space-bar-row">
+        <button className="space-back" onClick={() => backFrom(route)} title={t('nav.back')} aria-label={t('nav.back')}>
+          ‹
+        </button>
+        <button className="space-id" onClick={() => setMenu(!menu)} aria-expanded={menu} title={name}>
+          {icon(32)}
+          {(chips.length === 0 || menu) && <b>{name}</b>}
+        </button>
+        {chips.length > 0 && !menu && (
+          <nav className="space-chips">
+            {chips.map((c) => (
+              <a key={c.href} className={`space-chip${c.on ? ' on' : ''}${c.fresh || c.count ? ' fresh' : ''}`} href={c.href}>
+                <Icon name={c.icon} /> {c.label}
+                {!!c.count && <span className="badge">{c.count}</span>}
+              </a>
+            ))}
+          </nav>
+        )}
+        <button className="space-menu-btn" onClick={() => setMenu(!menu)} aria-expanded={menu} title={t('space.menu')} aria-label={t('space.menu')}>
+          {menu ? '✕' : '☰'}
+        </button>
+      </div>
+      {menu && (
+        <>
+          <div className="space-menu-scrim" onClick={() => setMenu(false)} />
+          <div className="space-menu window" role="menu">
+            <ul className="tree-view">
+              {boardsList.length > 1 && section(t(project ? 'space.menu.boards' : 'space.menu.channels'), boardsList.map(item))}
+              {services.length > 0 && section(t('space.menu.services'), services.map(item))}
+              {section(
+                t('space.menu.share'),
+                <>
+                  {share.map(item)}
+                  <li className="space-menu-notify">{chat ? <NoticeSwitch who={chat.peer.did} /> : <NoticeSwitch space={id} />}</li>
+                </>,
+              )}
+              {sorting && section(t('space.menu.sort'), <li className="space-menu-tools">{sorting}</li>)}
+            </ul>
+          </div>
+        </>
+      )}
+    </header>
   );
 }
 
-function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void }) {
+function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void; bars: Bars }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
   const { data: boards } = useApi(() => (space.kind === 'project' || space.kind === 'group' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
@@ -296,7 +554,8 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   const [lensFull, setLensFull] = useState(false);
   useEffect(() => setLensFull(false), [lensBoard?.name, space.id]);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
-  const invite = () => open({ kind: 'invite', space });
+  // A space's own Invite buttons make a Weave link, in share mode (share.tsx); the toolbar's Invite has the plain invite link.
+  const invite = startShare;
   const { t } = useTexts();
 
   let body: ReactNode;
@@ -309,9 +568,10 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
     const channel = view === 'c' ? (arg ?? 'general') : 'general';
     body = (
       <section className="pane-main">
-        <header className="pane-head">
+        <header className="pane-head not-mobile">
           <b># {channel}</b>
           <span className="pane-tools">
+            <NoticeSwitch space={space.id} />
             <button onClick={invite}>
               <Icon name="userPlus" /> {t('space.invite')}
             </button>
@@ -381,7 +641,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
           toolbar={
             <>
               {board && <LensSwitch board={board} on={lensOn} choose={chooseLens} />}
-              <button onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
+              <button className="not-mobile" onClick={() => open({ kind: 'submit', space: space.id, board: arg })}>
                 <Icon name="pencil" /> {t(board?.type === 'issues' ? 'board.open.issue' : board?.type === 'proposals' ? 'board.propose' : 'board.post')}
               </button>
             </>
@@ -401,19 +661,37 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
   } else if (view === 'settings') {
     body = <ProjectSettings project={space} spaces={spaces} members={list} meDid={me.did} tab={arg} />;
   } else {
-    body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} />;
+    body = <ProjectHome project={space} members={list} meDid={me.did} meName={me.name} spaces={spaces} onInvite={invite} pageView={view === 'page'} />;
   }
+  // On a phone, posting to a board is a button of its own, low on the right, and only in boards.
+  const board = view === 'b' && arg && !postId && !(lensBoard?.lens && lensOn) ? boards?.find((b) => b.name === arg) : undefined;
+  // How a list of posts is sorted (and following it, its lens): on a phone in the bar's menu, not over the list.
+  const sorting = board ? (
+    <>
+      <SortButtons query={{ space: space.id, board: board.name }} board={board} />
+      <FollowButton space={space.id} board={board} row />
+      <LensSwitch board={board} on={lensOn} choose={chooseLens} className="tree-link" />
+    </>
+  ) : space.kind === 'community' && !view ? (
+    <SortButtons query={{ space: space.id }} />
+  ) : undefined;
+  const fab = board && (
+    <button className="fab mobile-only" onClick={() => open({ kind: 'submit', space: space.id, board: board.name })}>
+      <Icon name="pencil" /> {t(board.type === 'issues' ? 'board.open.issue' : board.type === 'proposals' ? 'board.propose' : 'board.post')}
+    </button>
+  );
 
   return (
     <>
       <div className="center">
-        {space.kind === 'project' && <ProjectSections space={space} boards={boards ?? []} view={view} arg={arg} />}
+        <SpaceBar space={space} route={route} boards={boards ?? []} bars={bars} open={open} sorting={sorting} />
         {mine.length > 0 && view !== 'settings' && (
           <a className="notice" href={`${spaceHref(space)}/settings/people`}>
             <Icon name="inbox" /> {t('space.waiting', { name: mine[0].name ?? t('word.someone'), group: mine[0].group.name, more: mine.length - 1 })}
           </a>
         )}
         {body}
+        {fab}
       </div>
       <MemberList space={space} members={list} meDid={me.did} />
     </>
@@ -421,13 +699,14 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
 }
 
 /** A direct chat with a friend: just the chat, Discord-DM style. */
-function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
+function DirectScreen({ chat, me, route, bars, open }: { chat: ChatInfo; me: Profile; route: string[]; bars: Bars; open(d: Dialog): void }) {
   const { data: members } = useApi(() => api<MemberInfo[]>('members', chat.space.id), [chat.space.id]);
   const { t } = useTexts();
   const name = chat.peer.name ?? shortDid(chat.peer.did);
   const [inviting, setInviting] = useState(false);
   return (
     <div className="center">
+      <SpaceBar chat={chat} route={route} boards={[]} bars={bars} open={open} onInviteTo={chat.friend ? () => setInviting(true) : undefined} />
       {inviting && <InviteToDialog chat={chat.space} peerName={name} onClose={() => setInviting(false)} />}
       {!chat.friend && (
         <div className="notice">
@@ -435,11 +714,12 @@ function DirectScreen({ chat, me }: { chat: ChatInfo; me: Profile }) {
         </div>
       )}
       <section className="pane-main">
-        <header className="pane-head">
+        <header className="pane-head not-mobile">
           <b>
             <Icon name="message" /> @{name}
           </b>
           <span className="pane-tools">
+            <NoticeSwitch who={chat.peer.did} />
             {chat.friend && (
               <button onClick={() => setInviting(true)} title={t('chat.invite.title', { name })}>
                 <Icon name="userPlus" /> {t('chat.invite.to')}
@@ -727,6 +1007,7 @@ function Shell() {
   const { data: me } = useApi(() => api<Profile>('profile'), []);
   const { data: spaces } = useApi(() => api<SpaceInfo[]>('spaces'), []);
   const { data: status } = useApi(() => api<Status>('status'), []);
+  const { data: laterWords } = useApi(() => bridge.web?.laterWords().catch(() => undefined) ?? Promise.resolve(undefined), []);
   const { data: waiting } = useApi(() => api<Admission[]>('admissions'), []);
   const { data: chats } = useApi(() => api<ChatInfo[]>('chats'), []);
   const { data: requests } = useApi(() => api<MembershipRequestInfo[]>('membershipRequests'), []);
@@ -739,22 +1020,40 @@ function Shell() {
   const [skin, setSkin] = useState<Skin>(loadSkin);
   const [mode, setMode] = useState<Mode>(loadMode);
   const { t, setting: language, setLanguage } = useTexts();
-  // On a phone the places tree is a screen of its own; picking something closes it.
-  const [placesOpen, setPlacesOpen] = useState(false);
+  // On a phone the places tree is a screen of its own (#/places), left again by picking something or going back.
+  const placesOpen = route[0] === 'places';
+  const [placesFolded, foldPlaces] = useFolded('places');
+  const [membersFolded, foldMembers] = useFolded('members');
   const routeKey = route.join('/');
-  useEffect(() => setPlacesOpen(false), [routeKey]);
+  const sharing = useShare().on;
+  // On a phone: in a place there's only its own bar (SpaceBar), elsewhere the tabs; both fold while reading on.
+  const phone = useIsPhone();
+  const inPlace = ['p', 'g', 'r', 'd'].includes(route[0]);
+  // Home starts folded: its icon floats at the top and the tabs at the bottom are only Places; a tap on the icon, or
+  // pulling the page down, brings the title back and widens the tabs.
+  // Places, Inbox, People and My hub keep their title and tabs as they are: nothing folds there.
+  const atHome = route.length === 0;
+  const [barsFolded, setBarsFolded] = useBarsFolded(phone && (inPlace || atHome), routeKey, atHome);
+  const bars: Bars = { folded: barsFolded, unfold: () => setBarsFolded(false) };
+  const titlePlay = useFoldPlay(barsFolded);
+  useEffect(() => {
+    if (!inPlace) rememberOutside(location.hash);
+  }, [routeKey]);
+  // Back: out of a place to where it was opened from; from Places, Inbox, People or a hub to Home.
+  const back = () => (inPlace ? backFrom(route) : navigate('#/'));
+  useSwipeBack(phone && route.length > 0, back);
   if (!me || !spaces) return <div className="desktop" />;
 
   const space = ['p', 'g', 'r'].includes(route[0]) ? spaces.find((s) => s.id === route[1]) : undefined;
   const chat = route[0] === 'd' ? chats?.find((c) => c.space.id === route[1]) : undefined;
-  const whereName = ({ saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', me: 'nav.me', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
+  const whereName = ({ places: 'tree.places', saved: 'nav.saved', inbox: 'nav.inbox', people: 'nav.people', memberships: 'nav.memberships', keys: 'nav.keys', me: 'nav.me', space: route[1] ? 'nav.hub.theirs' : 'nav.hub', post: 'word.post' } as Record<string, string>)[route[0]] ?? 'nav.home';
   const where = space ? spaceLabel(space) : chat ? spaceLabel(chat.space) : t(whereName);
   const close = () => setDialog(undefined);
   const online = !!status && status.peers > 0;
 
   let body: ReactNode;
-  if (space) body = <SpaceScreen space={space} spaces={spaces} route={route} me={me} waiting={waiting ?? []} open={setDialog} />;
-  else if (chat) body = <DirectScreen chat={chat} me={me} />;
+  if (space) body = <SpaceScreen space={space} spaces={spaces} route={route} me={me} waiting={waiting ?? []} open={setDialog} bars={bars} />;
+  else if (chat) body = <DirectScreen chat={chat} me={me} route={route} bars={bars} open={setDialog} />;
   else {
     let center: ReactNode;
     if (route[0] === 'd') center = <Page title={t('page.chat')}>{chats ? t('chat.not.here') : null}</Page>;
@@ -770,7 +1069,9 @@ function Shell() {
     else if (route[0] === 'play' && route[1]) center = <QuickRoute code={route[1]} />;
     else if (route[0] === 'saved')
       center = <PostList title={<>{t('nav.saved')}</>} query={{ saved: true }} spaces={spaces} meDid={me.did} empty={t('saved.empty')} />;
-    else center = <HomeFeed spaces={spaces} meDid={me.did} onSubmit={() => setDialog({ kind: 'submit' })} />;
+    // Nobody else can bring a person's data back: a post pinned on Home until a backup was saved, and again when the
+    // last one is a month old.
+    else center = <HomeFeed spaces={spaces} meDid={me.did} above={status?.backupDue && !bridge.web && <BackupPost due={status.backupDue} />} />;
     // Keys anyone could copy: said everywhere but on Keys & devices, which explains it.
     const unprotected = status?.keystoreWarning && route[0] !== 'keys' && (
       <a className="notice alarm" href="#/keys">
@@ -783,27 +1084,44 @@ function Shell() {
         <Icon name="plug" /> {t('status.shipped.missing')}
       </div>
     );
-    // Nobody else can bring a person's data back: said until a backup was saved, and again when the last one is a month old.
-    const backupDue = status?.backupDue && !bridge.web && routeKey !== 'keys' && (
+    // Weave Web: an account made with a passkey came straight in; its words wait on Keys & devices until written down.
+    const wordsDue = laterWords && routeKey !== 'keys' && (
       <a className="notice" href="#/keys">
-        <Icon name="lock" /> {t(status.backupDue === 'again' ? 'backup.due.again' : 'backup.due.never')}
+        <Icon name="lock" /> {t('words.later.notice')}
       </a>
     );
     body = (
       <div className="center">
         <DesktopHint />
         {unprotected}
+        {wordsDue}
         {shippedMissing}
-        {backupDue}
         {center}
       </div>
     );
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
-      <div className="title-bar app-title" onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${sharing ? ' sharing' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+      {phone && !inPlace && titlePlay.away && (
+        <div className="space-float home-float mobile-only">
+          {route.length > 0 && (
+            <button className="space-float-back" onClick={back} title={t('nav.back')} aria-label={t('nav.back')}>
+              ‹
+            </button>
+          )}
+          <button className="space-dot" onClick={() => setBarsFolded(false)} title={t('tabs.show')} aria-label={t('tabs.show')}>
+            <WeaveMark size={40} />
+          </button>
+        </div>
+      )}
+      <div className={`title-bar app-title${phone && !inPlace ? titlePlay.className : ''}`} onDoubleClick={() => bridge.platform !== 'darwin' && void bridge.windowControl?.('maximize')}>
         <div className="title-bar-text">
+          {route.length > 0 && (
+            <button className="title-back mobile-only" onClick={back} title={t('nav.back')} aria-label={t('nav.back')}>
+              ‹
+            </button>
+          )}
           <WeaveMark size={14} /> {t('window.title', { where })}
         </div>
         <WindowButtons />
@@ -814,7 +1132,7 @@ function Shell() {
           items={[
             { label: t('menu.file.new'), onClick: () => setDialog({ kind: 'new' }) },
             { label: t('menu.file.join'), onClick: () => setDialog({ kind: 'new' }) },
-            { label: t('menu.file.link'), onClick: () => setDialog({ kind: 'build', space }) },
+            { label: t('menu.file.link'), onClick: startShare },
             ...(bridge.web ? [] : [{ label: t('menu.file.desk'), onClick: () => setDialog({ kind: 'desk' as const }) }]),
             'sep',
             { label: t('menu.file.close'), onClick: () => window.close() },
@@ -830,6 +1148,9 @@ function Shell() {
             { label: t('nav.hub'), onClick: () => navigate('#/space') },
             { label: t('nav.keys'), onClick: () => navigate('#/keys') },
             ...(bridge.mentions ? [{ label: t('menu.view.mentions'), onClick: () => void bridge.mentions!('show') }] : []),
+            'sep',
+            { label: `${placesFolded ? '' : '● '}${t('menu.view.places')}`, onClick: foldPlaces },
+            { label: `${membersFolded ? '' : '● '}${t('menu.view.members')}`, onClick: foldMembers },
             'sep',
             { label: t('menu.view.refresh'), onClick: bump },
             { label: t('menu.view.notifications'), onClick: () => setDialog({ kind: 'notify' }) },
@@ -878,15 +1199,15 @@ function Shell() {
       </nav>
       <div className="toolbar">
         {/* On a phone the toolbar is a tab bar at the bottom; "mobile-only" and "not-mobile" pick its buttons. */}
-        <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" on={placesOpen} onClick={() => setPlacesOpen((open) => !open)} />
-        <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0 && !placesOpen} />
+        <ToolButton icon="notes" label={t('tree.places')} className="mobile-only" href="#/places" on={placesOpen} />
+        <ToolButton icon="home" label={t('nav.home')} href="#/" on={route.length === 0} className="not-mobile" />
         <ToolButton icon="bookmark" label={t('nav.saved')} href="#/saved" on={route[0] === 'saved'} className="not-mobile" />
         <ToolButton icon="inbox" label={inbox ? t('nav.inbox.n', { n: inbox }) : t('nav.inbox')} href="#/inbox" on={route[0] === 'inbox' && !placesOpen} />
         <ToolButton icon="users" label={t('nav.people')} href="#/people" on={route[0] === 'people' && !placesOpen} />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
         <span className="tool-sep" />
-        <ToolButton icon="pencil" label={t('tool.submit')} onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
+        <ToolButton icon="pencil" label={t('tool.submit')} className="not-mobile" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
         {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
         {/* A link someone sent (an invite, a contact link, a post): one place for all of them, one click away. */}
@@ -906,10 +1227,12 @@ function Shell() {
           </small>
         </div>
       </div>
+      {bridge.web && <WebSyncBar />}
       <div className="panes">
         <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} inbox={inbox} onNew={() => setDialog({ kind: 'new' })} />
         {body}
       </div>
+      <ShareBar route={route} spaces={spaces} />
       <div className="status-bar">
         <p className="status-bar-field">
           <Avatar did={me.did} size={12} /> {me.name ?? t('word.you')}
@@ -930,7 +1253,6 @@ function Shell() {
         </p>
       </div>
       {dialog?.kind === 'new' && <NewDialog onClose={close} />}
-      {dialog?.kind === 'build' && <LinkBuilder spaces={spaces ?? []} space={dialog.space} onClose={close} />}
       {dialog?.kind === 'invite' && <InviteDialog space={dialog.space} spaces={spaces ?? []} onClose={close} />}
       {dialog?.kind === 'link' && <OpenLinkDialog onClose={close} />}
       {dialog?.kind === 'submit' && <SubmitDialog spaces={spaces} space={dialog.space} board={dialog.board} onClose={close} />}
@@ -993,6 +1315,7 @@ function App() {
 
 applySkin(loadSkin());
 applyMode(loadMode());
+fitHomeScreen();
 startNotifications();
 startAppOpens();
 createRoot(document.getElementById('root')!).render(

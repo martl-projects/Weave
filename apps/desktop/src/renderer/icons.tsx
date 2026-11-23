@@ -31,6 +31,9 @@ import folder from 'pixelarticons/svg/folder.svg';
 import globe from 'pixelarticons/svg/globe.svg';
 import plug from 'pixelarticons/svg/plug.svg';
 import store from 'pixelarticons/svg/store.svg';
+import filter from 'pixelarticons/svg/filter.svg';
+import sliders from 'pixelarticons/svg/sliders.svg';
+import sortVertical from 'pixelarticons/svg/sort-vertical.svg';
 import mail16 from './serenity/16x16/app-mail.png';
 import projects16 from './serenity/16x16/app-hack-studio.png';
 import presenter16 from './serenity/16x16/app-presenter.png';
@@ -42,6 +45,14 @@ import certificate16 from './serenity/16x16/certificate.png';
 import copy16 from './serenity/16x16/edit-copy.png';
 import emoji16 from './serenity/16x16/emoji.png';
 import export16 from './serenity/16x16/file-export.png';
+// Drawn for Weave, not from SerenityOS: share mode's target, in the same style, and its check and box, the checked and empty checkbox of
+// Windows 95 (98.css's box and checkmark.svg, pixel for pixel).
+import shareTarget16 from './serenity/16x16/share-target.png';
+import shareTarget32 from './serenity/32x32/share-target.png';
+import shareCheck16 from './serenity/16x16/share-check.png';
+import shareCheck32 from './serenity/32x32/share-check.png';
+import shareBox16 from './serenity/16x16/share-box.png';
+import shareBox32 from './serenity/32x32/share-box.png';
 import text16 from './serenity/16x16/filetype-text.png';
 import find16 from './serenity/16x16/find.png';
 import home16 from './serenity/16x16/go-home.png';
@@ -87,6 +98,9 @@ const BITMAPS = {
   copy: [copy16],
   mapPin: [pin16],
   share: [export16],
+  target: [shareTarget16, shareTarget32],
+  check: [shareCheck16, shareCheck32],
+  box: [shareBox16, shareBox32],
   star: [priority16],
   externalLink: [internet16],
   emoji: [emoji16],
@@ -97,7 +111,7 @@ const BITMAPS = {
 } satisfies Record<string, [string, string?]>;
 
 /** Tintable SVGs, for what SerenityOS doesn't cover. */
-const VECTORS = { arrowDown, arrowUp, attachment, bulletList, clock, code, database, download, eye, eyeOff, file, fire, folder, github, globe, hash, heading2, heading3, image, link, lock, message, plug, quote, redo, store, trash, trophy, undo };
+const VECTORS = { arrowDown, arrowUp, attachment, bulletList, clock, code, database, download, eye, eyeOff, file, filter, fire, folder, github, globe, hash, heading2, heading3, image, link, lock, message, plug, quote, redo, sliders, sortVertical, store, trash, trophy, undo };
 
 export type IconName = keyof typeof BITMAPS | keyof typeof VECTORS;
 

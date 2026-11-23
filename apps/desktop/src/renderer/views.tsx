@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { NoticeSwitch } from './notify.tsx';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
 import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
@@ -10,8 +11,8 @@ import { MembershipRequestCard, MySupport, SupportBox } from './memberships.tsx'
 import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
-import { LinkBuilder } from './onboardlinks.tsx';
-import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
+import { startShare } from './share.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Info, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubAccounts } from './accounts.tsx';
 import { ImprintButton } from './imprint.tsx';
 import { VisitorsSettings } from './visitors.tsx';
@@ -186,6 +187,7 @@ export function SpaceView({ who, meDid }: { who?: string; meDid: string }) {
                 </button>
               )}
               {edge('follow', !p.following, t(p.following ? 'people.unfollow' : 'people.follow'))}
+              <NoticeSwitch who={p.did} />
               {edge('mute', !p.muted, t(p.muted ? 'hub.unmute' : 'hub.mute'))}
               {edge('block', !p.blocked, t(p.blocked ? 'hub.unblock' : 'hub.block'))}
               <ImprintButton did={p.did} me={false} name={name} />
@@ -609,24 +611,28 @@ function useHeroOpen(project: string): [boolean, (open: boolean) => void] {
 
 /**
  * A project's front page: a hero card (icon, banner, title, subtitle, votes)
- * over its boards and general chat. The card expands into the project's page.
+ * over its boards and general chat. The card expands into the project's page. On a phone the chat comes alone (its
+ * bar has the boards), and the card with the page is a view of its own (pageView, #/p/<id>/page).
  */
-export function ProjectHome({ project, members, meDid, meName, spaces, onInvite }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void }) {
+export function ProjectHome({ project, members, meDid, meName, spaces, onInvite, pageView = false }: { project: SpaceInfo; members: MemberInfo[]; meDid: string; meName?: string; spaces: SpaceInfo[]; onInvite(): void; pageView?: boolean }) {
   const { t } = useTexts();
   const { data: info } = useApi(() => api<ProjectInfo>('project', project.id), [project.id]);
   const { data: boards } = useApi(() => api<BoardInfo[]>('boards', project.id), [project.id]);
   const [sharing, setSharing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [heroOpen, setHeroOpen] = useHeroOpen(project.id);
+  const [expanded, setExpanded] = useState(pageView);
+  useEffect(() => setExpanded(pageView), [pageView]);
+  const [heroKept, setHeroOpen] = useHeroOpen(project.id);
+  const heroOpen = heroKept || pageView;
   const page = info?.page;
   const banner = page?.banner || project.background;
   const title = page?.title || project.name;
   return (
-    <section className="pane-main">
-      <header className="pane-head">
+    <section className={`pane-main project-home${pageView ? ' page-view' : ''}`}>
+      <header className="pane-head not-mobile">
         <b>p/{project.name}</b>
         <span className="pane-tools">
+          <NoticeSwitch space={project.id} />
           <button onClick={() => setSubmitting(true)}>
             <Icon name="pencil" /> {t('word.post')}
           </button>
@@ -664,7 +670,7 @@ export function ProjectHome({ project, members, meDid, meName, spaces, onInvite 
             </div>
             {page?.subtitle ? <p className="hero-subtitle">{page.subtitle}</p> : !page?.body && info && <p className="hero-subtitle muted">{t(info.maintainer ? 'phome.no.page.write' : 'phome.no.page')}</p>}
             {(page?.body || info?.maintainer) && (
-              <button className="hero-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+              <button className="hero-toggle" aria-expanded={expanded} onClick={() => (pageView ? navigate(spaceHref(project)) : setExpanded(!expanded))}>
                 {t(expanded ? 'phome.back.to.chat' : 'phome.project.page')}
               </button>
             )}
@@ -1075,6 +1081,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
           <SpacePhotoSettings space={project} members={members} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
+          <OnlyOnComputers space={project} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
       )}
@@ -1196,6 +1203,31 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
   );
 }
 
+// ---------------------------------------------------------------- where it lies
+
+/**
+ * Only on your computers: your browsers and always-on nodes don't get the place, so no storage node learns of it. Yours
+ * alone (the others aren't told), and only set on a computer: on Weave Web such a place isn't there at all.
+ */
+export function OnlyOnComputers({ space }: { space: SpaceInfo }) {
+  const { t } = useTexts();
+  if (bridge.web) return null;
+  const set = (on: boolean) => attempt(() => api('setDevicesOnly', { space: space.id, on }).then(bump), t(on ? 'devicesonly.on' : 'devicesonly.off', { space: space.name }));
+  return (
+    <fieldset>
+      <legend>{t('devicesonly.legend')}</legend>
+      <div className="field-row">
+        <input id={`devices-only-${space.id}`} type="checkbox" checked={!!space.devicesOnly} onChange={(e) => void set(e.target.checked)} />
+        <label htmlFor={`devices-only-${space.id}`}>
+          <b>{t('devicesonly.label')}</b>
+        </label>
+        <Info>{t('devicesonly.more')}</Info>
+      </div>
+      <p className="small muted">{t('devicesonly.what')}</p>
+    </fieldset>
+  );
+}
+
 // ---------------------------------------------------------------- what newcomers read
 
 const HISTORY_CHOICES: Array<NonNullable<SpaceInfo['history']>> = ['all', '30d', 'joining'];
@@ -1306,6 +1338,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
     <Page title={<><Icon name="gear" /> {t('nav.settings')} · g/{group.name}</>}>
       <SpacePhotoSettings space={group} members={members} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
+      <OnlyOnComputers space={group} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
@@ -1422,6 +1455,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
       <CommunityRule community={community} canSet={info.moderator} />
       <SpacePhotoSettings space={community} members={members} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
+      <OnlyOnComputers space={community} />
       <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
@@ -1543,8 +1577,6 @@ export function NewDialog({ onClose }: { onClose(): void }) {
 
 export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo; spaces?: SpaceInfo[]; onClose(): void }) {
   const { t } = useTexts();
-  // A project's own: a link to play (onboardlinks.tsx), one short link that makes the account and the friendship too.
-  const [toPlay, setToPlay] = useState(true);
   const [accept, setAccept] = useState(false);
   const [days, setDays] = useState(7);
   const [rights, setRights] = useState<Record<string, 'none' | 'read' | 'write'>>({});
@@ -1559,16 +1591,14 @@ export function InviteDialog({ space, spaces = [], onClose }: { space: SpaceInfo
   };
   const tabs = !link && (
     <div className="buttons tabs-row">
-      <button className={toPlay ? 'default' : ''} onClick={() => setToPlay(true)}>
-        {t('linkb.tab')}
+      <button onClick={() => (onClose(), startShare())}>
+        <Icon name="share" /> {t('linkb.tab')}
       </button>
-      <button className={toPlay ? '' : 'default'} onClick={() => setToPlay(false)}>
+      <button className="default">
         {t('linkb.tab.plain')}
       </button>
     </div>
   );
-  // The link builder, with this space chosen in its first step; the tabs switch to a plain invite link.
-  if (toPlay) return <LinkBuilder spaces={spaces} space={space} tabs={tabs} onClose={onClose} />;
   return (
     <Modal title={t('invite.title', { space: spaceLabel(space) })} onClose={onClose}>
       {tabs}

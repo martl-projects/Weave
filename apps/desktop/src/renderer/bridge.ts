@@ -20,6 +20,17 @@ export interface AppState {
   elsewhere?: boolean;
 }
 
+/** Weave Web's progress (bridge.web.progress): its storage node's connection, and how many events came in since it opened. */
+export interface WebProgress {
+  state: 'start' | 'connecting' | 'connected' | 'offline';
+  detail?: string;
+  received: number;
+  /** When the last one came (ms). */
+  at: number;
+  /** Just linked to one of the person's computers: what's missing comes from there. */
+  linked: boolean;
+}
+
 export interface Bridge {
   state(): Promise<AppState>;
   /** Start the daemon again; restart also ends one that holds the home but doesn't answer. Not in the browser preview. */
@@ -125,6 +136,14 @@ export interface Bridge {
       test(notice: { title: string; text?: string; open?: string }): Promise<void>;
       /** What waits, as the app counted it: the service worker counts on from here while Weave is closed. */
       counted(total: number): Promise<void>;
+      /** The relay: the storage node that holds this browser's subscription and sends its pushes (its host name). */
+      relay(): string;
+      /** A new subscription, new addresses and keys everywhere: the old ones reach nothing any more. */
+      renew(): Promise<void>;
+      /** Weave open again with pushes on: the places' addresses (stage 3) follow this browser's subscription. */
+      resume(): Promise<void>;
+      /** A tapped notification that opened Weave: where it leads (once), as a notice says it. */
+      opened(): Record<string, unknown> | undefined;
     };
     /** Empty this browser of its account and start again: at the start, or straight at linking it with a computer. */
     reset(then?: 'link'): Promise<void>;
@@ -140,6 +159,13 @@ export interface Bridge {
     onboarding?(): { by: string; title: string; welcome?: string; app?: string } | { problem: string } | undefined;
     /** The invitation, as a link or as its code. */
     invite(given: string): void;
+    /** A new account's words while they aren't written down yet (made with a passkey, they come later). */
+    laterWords(): Promise<string | undefined>;
+    /** They're written down: this browser forgets them. */
+    wordsWritten(): Promise<void>;
+    /** How far this browser is: its storage node's connection, and how much came in (the progress bar). */
+    progress(): WebProgress;
+    onProgress(listener: (progress: WebProgress) => void): () => void;
     /** The ways into this account: the passkeys' ids, and `words`. */
     ways(): Promise<string[]>;
     addPasskey(): Promise<void>;

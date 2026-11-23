@@ -14,6 +14,8 @@ import { WalletBox } from './wallet.tsx';
 import { Page } from './views.tsx';
 import { FetchersBox, ServicesBox } from './services.tsx';
 import { T, useTexts } from './texts.tsx';
+import weaveLogo from './weave-logo.png';
+import { YourLinks } from './onboardlinks.tsx';
 
 /*
  * Identity and keys. The 24 recovery words are the identity: every root key
@@ -43,6 +45,26 @@ function Words({ words }: { words: string }) {
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * Weave Web's first screen, the first of Weave anyone may see: a stage of its own, the same in every look. On a quiet dark
+ * ground the logo and its name, then what Weave is for (in the logo's colors: coral, yellow, mint), and the ways in.
+ */
+function FirstStage({ children }: { children: React.ReactNode }) {
+  const { t } = useTexts();
+  return (
+    <div className="first-stage">
+      <main className="first-card">
+        <img className="first-logo" src={weaveLogo} alt="" />
+        <h1 className="first-title">Weave</h1>
+        <p className="first-tagline">
+          <span className="coral">{t('brand.build')}</span> · <span className="yellow">{t('brand.share')}</span> · <span className="mint">{t('brand.belong')}</span>
+        </p>
+        {children}
+      </main>
+    </div>
   );
 }
 
@@ -80,6 +102,8 @@ export function Onboarding({ onDone }: { onDone(): void }) {
   // A backup file to restore from, with the words: then nobody else has to be online.
   const [backupFile, setBackupFile] = useState('');
   const [busy, setBusy] = useState(false);
+  // Weave Web with a link that invites: Already on Weave? Sign in shows the ways in instead of Join.
+  const [signingIn, setSigningIn] = useState(false);
   // Weave Web opened with an onboarding link: who invites to what.
   const invited = bridge.web?.onboarding?.();
 
@@ -296,7 +320,20 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       </form>,
     );
 
-  // Weave Web, first time in this browser: sign in with a passkey, make an account, or the words.
+  // A new account: the name given, a passkey where the browser has one; then its words, now or (with a passkey) later.
+  const makeAccount = async () => {
+    setBusy(true);
+    const created = await attempt(() => bridge.init(name).then((recovery) => ({ recovery })));
+    setBusy(false);
+    if (!created) return; // failed; the toast says why
+    if (created.recovery) setWords(created.recovery);
+    else onDone();
+  };
+
+  // Weave Web, first time in this browser. One way first, a second beside it, the rest folded away:
+  // - with a link that invites them: their name and Join, on this one screen (Join makes the passkey and the account);
+  //   who has Weave already signs in instead, so nobody makes a second account by mistake;
+  // - without one: sign in with a passkey, or make an account; the 24 words and a computer's link under Other ways.
   if (mode === 'start') {
     const fromGame = !!invited && 'title' in invited;
     const passkey = async () => {
@@ -305,101 +342,134 @@ export function Onboarding({ onDone }: { onDone(): void }) {
       setBusy(false);
       if (ok) onDone();
     };
-    return window(
-      t('onboard.welcome'),
-      <>
-        <div className="welcome-head">
-          <WeaveMark size={48} />
-          {fromGame ? (
-            <p>
-              <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b>
-              <br />
-              {t('web.first.intro.game')}
-            </p>
-          ) : (
-            <p>{t('web.first.intro')}</p>
-          )}
-        </div>
-        {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
-        {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
-        {/* With the Weave app on this computer: the link goes there instead, which asks to join and opens what it leads to. */}
-        {invited && 'app' in invited && invited.app && (
-          <p className="notice">
-            {t('linkb.web.have.app')}{' '}
-            <a className="button" href={invited.app}>
-              {t('linkb.web.open.app')}
-            </a>
+    const head = fromGame ? <h2 className="first-invited">{t('linkb.web.invited', { by: invited.by, title: invited.title })}</h2> : <p className="first-hello">{t('brand.tagline')}</p>;
+    const welcomeLine = invited && 'welcome' in invited && invited.welcome && <p className="first-quote">“{invited.welcome}”</p>;
+    if (fromGame && !signingIn)
+      return (
+        <FirstStage>
+        <form
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            void makeAccount();
+          }}
+        >
+          {head}
+          {welcomeLine}
+          <div className="field-row-stacked">
+            <label htmlFor="welcome-name">{t('onboard.name')}</label>
+            <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="first-ways">
+            <button id="first-join" className="first-btn primary" disabled={busy || !name.trim()}>
+              <Icon name="lock" /> {t('web.join')}
+            </button>
+          </div>
+          <p className="first-other small">
+            {t('web.join.have')}{' '}
+            <button type="button" className="link" onClick={() => setSigningIn(true)}>
+              {t('web.join.signin')}
+            </button>
+            {'app' in invited && invited.app && (
+              <>
+                {' · '}
+                <a href={invited.app}>{t('linkb.web.open.app')}</a>
+              </>
+            )}
           </p>
-        )}
+        </form>
+        </FirstStage>
+      );
+    return (
+      <FirstStage>
+        {head}
+        {welcomeLine}
+        {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
         <div className="first-ways">
-          <button id="first-passkey" className={fromGame ? '' : 'default'} disabled={busy} onClick={() => void passkey()}>
+          <button id="first-passkey" className="first-btn primary" disabled={busy} onClick={() => void passkey()}>
             <Icon name="lock" /> {t('web.first.passkey')}
           </button>
-          <p className="small muted">{t('web.first.passkey.why')}</p>
-          <button id="first-create" className={fromGame ? 'default' : ''} disabled={busy} onClick={() => setMode('create')}>
-            {t(fromGame ? 'linkb.web.create' : 'web.first.create')}
-          </button>
-          <button id="first-words" disabled={busy} onClick={() => setMode('restore')}>
-            {t('web.first.words')}
-          </button>
-          <button id="first-link" disabled={busy} onClick={() => setMode('paste')}>
-            {t('web.first.link')}
+          <button id="first-create" className="first-btn" disabled={busy} onClick={() => (fromGame ? setSigningIn(false) : setMode('create'))}>
+            {t(fromGame ? 'web.join.new' : 'web.first.create')}
           </button>
         </div>
-        <p className="notice">{t('web.link.hint')}</p>
-      </>,
+        <details className="first-more">
+          <summary>{t('web.first.more')}</summary>
+          <div className="first-ways">
+            <button id="first-words" className="first-btn" disabled={busy} onClick={() => setMode('restore')}>
+              {t('web.first.words')}
+            </button>
+            <button id="first-link" className="first-btn" disabled={busy} onClick={() => setMode('paste')}>
+              {t('web.first.link')}
+            </button>
+          </div>
+          <p className="small muted">{t('web.first.passkey.why')}</p>
+          <p className="small muted">{t('web.link.hint')}</p>
+        </details>
+      </FirstStage>
     );
   }
 
+  if (bridge.web)
+    return (
+      <FirstStage>
+        <form
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            void makeAccount();
+          }}
+        >
+          {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
+          <div className="field-row-stacked">
+            <label htmlFor="welcome-name">{t('onboard.name')}</label>
+            <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          {bridge.web.needsInvite() && (
+            <div className="field-row-stacked">
+              <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
+              <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
+              <p className="small muted">{t('web.invite.why')}</p>
+            </div>
+          )}
+          <div className="first-ways">
+            <button className="first-btn primary" disabled={busy || !name.trim()}>
+              <Icon name="lock" /> {t('onboard.create')}
+            </button>
+          </div>
+          <p className="first-other small">
+            <button type="button" className="link" onClick={() => setMode('start')}>
+              {t('button.back')}
+            </button>
+          </p>
+        </form>
+      </FirstStage>
+    );
+
+  // The app on a computer: a name, then the words; or restore, or a company account. (Weave Web has its stage above.)
   return window(
     t('onboard.welcome'),
     <form
-      onSubmit={async (e: FormEvent) => {
+      onSubmit={(e: FormEvent) => {
         e.preventDefault();
-        setBusy(true);
-        const created = await attempt(() => bridge.init(name).then((recovery) => ({ recovery })));
-        setBusy(false);
-        if (!created) return; // failed; the toast says why
-        if (created.recovery) setWords(created.recovery);
-        else onDone();
+        void makeAccount();
       }}
     >
       <div className="welcome-head">
         <WeaveMark size={48} />
-        {invited && 'title' in invited ? (
-          <p>
-            <b>{t('linkb.web.invited', { by: invited.by, title: invited.title })}</b>
-            <br />
-            {t('linkb.web.invited.how')}
-          </p>
-        ) : (
-          <p>{t(bridge.web ? 'onboard.intro.web' : 'onboard.intro')}</p>
-        )}
+        <p>{t('onboard.intro')}</p>
       </div>
-      {invited && 'welcome' in invited && invited.welcome && <p className="small">“{invited.welcome}”</p>}
-      {invited && 'problem' in invited && <p className="notice">{t('linkb.web.problem', { problem: invited.problem })}</p>}
       <div className="field-row-stacked">
         <label htmlFor="welcome-name">{t('onboard.name')}</label>
         <input id="welcome-name" required maxLength={40} autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </div>
-      {bridge.web?.needsInvite() && (
-        <div className="field-row-stacked">
-          <label htmlFor="welcome-invite">{t('web.invite.label')}</label>
-          <input id="welcome-invite" required spellCheck={false} onChange={(e) => bridge.web!.invite(e.target.value)} />
-          <p className="small muted">{t('web.invite.why')}</p>
-        </div>
-      )}
       <div className="buttons">
-        {!bridge.web && (
-          <button type="button" onClick={() => setMode('company')}>
-            {t('onboard.company.button')}
-          </button>
-        )}
-        <button type="button" onClick={() => setMode(bridge.web ? 'start' : 'restore')}>
-          {t(bridge.web ? 'button.back' : 'onboard.restore.button')}
+        <button type="button" onClick={() => setMode('company')}>
+          {t('onboard.company.button')}
+        </button>
+        <button type="button" onClick={() => setMode('restore')}>
+          {t('onboard.restore.button')}
         </button>
         <button className="default" disabled={busy}>
-          {t(invited && 'title' in invited ? 'linkb.web.create' : 'onboard.create')}
+          {t('onboard.create')}
         </button>
       </div>
     </form>,
@@ -407,10 +477,49 @@ export function Onboarding({ onDone }: { onDone(): void }) {
 }
 
 /** Weave Web: what opens this account, and leaving this browser. */
+/** Weave Web: a new account's words, made with a passkey, until they're written down. */
+function LaterWords() {
+  const { t } = useTexts();
+  const { data: words } = useApi(() => bridge.web!.laterWords(), []);
+  const [shown, setShown] = useState(false);
+  const [wrote, setWrote] = useState(false);
+  if (!words) return null;
+  return (
+    <fieldset id="later-words">
+      <legend>{t('words.later.legend')}</legend>
+      <p>
+        <T name="words.later.write" />
+      </p>
+      {shown ? (
+        <>
+          <Words words={words} />
+          <div className="field-row">
+            <input id="later-wrote" type="checkbox" checked={wrote} onChange={(e) => setWrote(e.target.checked)} />
+            <label htmlFor="later-wrote">{t('onboard.words.wrote')}</label>
+          </div>
+          <div className="buttons">
+            <AsyncButton disabled={!wrote} onClick={() => attempt(() => bridge.web!.wordsWritten().then(bump), t('words.later.saved'))}>
+              {t('words.later.done')}
+            </AsyncButton>
+          </div>
+        </>
+      ) : (
+        <div className="buttons">
+          <button className="default" onClick={() => setShown(true)}>
+            {t('words.later.show')}
+          </button>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
 function WebAccountBox() {
   const { t } = useTexts();
   const { data: ways, reload } = useApi(() => bridge.web!.ways(), []);
   return (
+    <>
+    <LaterWords />
     <fieldset>
       <legend>{t('web.ways.legend')}</legend>
       <p className="small">{t('web.ways.why')}</p>
@@ -441,6 +550,7 @@ function WebAccountBox() {
         <AsyncButton onClick={async () => void ((await ask(t('web.forget.ask'), t('web.forget.button'))) && (await attempt(() => bridge.web!.forget())))}>{t('web.forget.button')}</AsyncButton>
       </div>
     </fieldset>
+    </>
   );
 }
 
@@ -1249,6 +1359,8 @@ export function KeysView() {
           onClose={() => setDialog(undefined)}
         />
       )}
+      {/* The Weave links you made (share mode), with their uses: to copy one again or take it back. */}
+      <YourLinks />
       {dialog?.kind === 'permissions' && <AgentPermissionsDialog agent={dialog.key} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'avatar' && me && <AgentAvatarEditor me={me} agent={dialog.agent} onClose={() => setDialog(undefined)} />}
       {dialog?.kind === 'rotate' && (

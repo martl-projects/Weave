@@ -253,8 +253,9 @@ export class StorageClient {
   }
 
   /** A browser's subscription in, the address senders push to out (the same one again for the same browser). */
-  async pushSubscribe(subscription: { endpoint: string; p256dh: string; auth: string }): Promise<string> {
-    return (await this.#ask({ t: 'push.subscribe', ...subscription })).address as string;
+  /** A browser's subscription in, an address out; `scoped`: a new address of its own (one place's, docs/web-push.md). */
+  async pushSubscribe(subscription: { endpoint: string; p256dh: string; auth: string }, scoped?: boolean): Promise<string> {
+    return (await this.#ask({ t: 'push.subscribe', ...subscription, ...(scoped ? { scoped: true } : {}) })).address as string;
   }
 
   async pushDrop(address: string): Promise<void> {
@@ -264,6 +265,11 @@ export class StorageClient {
   /** A push to one of this account's own addresses: what was sealed to that browser's push key; with `after`, that many seconds later. */
   async pushSelf(address: string, sealed: unknown, after?: number): Promise<void> {
     await this.#ask({ t: 'push.self', address, sealed: sealed as Record<string, unknown>, ...(after ? { after } : {}) });
+  }
+
+  /** A push to someone's address at this storage node, from this account (docs/web-push.md, stage 3). */
+  async pushForward(address: string, sealed: unknown): Promise<void> {
+    await this.#ask({ t: 'push.forward', address, sealed: sealed as Record<string, unknown> });
   }
 
   async usage(): Promise<StorageUsage> {
