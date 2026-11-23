@@ -687,7 +687,11 @@ menu[role='tablist'] { margin-bottom: 0; }
 .first-stage label { font-size: 13px; opacity: 0.85; }
 .first-stage .field-row-stacked { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 0; }
 .first-stage input, :root[data-skin] .first-stage input { box-sizing: border-box; width: 100%; height: 44px; padding: 0 14px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; font: inherit; font-size: 15px; box-shadow: none; outline: none; }
-.first-stage input:focus { border-color: #f5e471; }
+.first-stage textarea, :root[data-skin] .first-stage textarea { box-sizing: border-box; width: 100%; padding: 10px 14px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; font: inherit; font-size: 15px; box-shadow: none; outline: none; resize: vertical; }
+.first-stage input:focus, .first-stage textarea:focus { border-color: #f5e471; }
+.first-stage .notice, :root[data-skin] .first-stage .notice { margin: 8px 0; padding: 10px 12px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; }
+.first-stage .notice.alarm, :root[data-skin] .first-stage .notice.alarm { border-color: rgb(255 110 110 / 0.6); background: rgb(255 83 83 / 0.12); }
+.first-stage .notice p { margin: 0 0 4px; }
 .first-stage .first-ways { gap: 10px; margin: 14px 0 6px; }
 .first-btn, :root[data-skin] .first-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; padding: 0 18px; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 12px; background: rgb(255 255 255 / 0.04); color: #f2f2f6; box-shadow: none; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.15s; }
 .first-btn:hover:not(:disabled), :root[data-skin] .first-btn:hover:not(:disabled) { background: rgb(255 255 255 / 0.1); transform: translateY(-1px); }

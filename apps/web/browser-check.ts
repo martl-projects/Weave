@@ -97,7 +97,7 @@ try {
       'the account open',
       async () => {
         if (await run<boolean>(`!!document.querySelector('.app-window')`)) return true;
-        if (await run<boolean>(`!!document.querySelector('#unlock-words') && document.querySelector('.buttons button.default') && !document.querySelector('.buttons button.default').disabled`)) await run(clickDefault);
+        if (await run<boolean>(`!!document.querySelector('#unlock-passkey') && !document.querySelector('#unlock-passkey').disabled`)) await run(`document.querySelector('#unlock-passkey').click()`);
         return false;
       },
       30_000,
@@ -105,7 +105,8 @@ try {
   const lockedOrOpen = `!!document.querySelector('#unlock-words') || !!document.querySelector('.app-window')`;
   const call = <T>(method: string, ...args: unknown[]) => run<{ result?: T; error?: string }>(`window.weave.call(${JSON.stringify(method)}, ...${JSON.stringify(args)})`);
   const texts = async () => ((await call<Array<{ text: string }>>('messages', 'Climb')).result ?? []).map((m) => m.text);
-  const clickDefault = `document.querySelector('.buttons button.default').click()`;
+  // The way on: a window's default button, or on Weave Web's first stage its primary one.
+  const clickDefault = `(document.querySelector('.buttons button.default') ?? document.querySelector('.first-btn.primary')).click()`;
 
   await open(ORIGIN);
   await until('the first screen', () => run<boolean>(`!!document.querySelector('#first-create')`));
@@ -468,7 +469,7 @@ try {
   const who = (await call<{ did: string; signer: string }>('whoami')).result!;
   await sleep(600);
   await run(`void window.weave.web.forget()`);
-  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#first-passkey.default')`));
+  await until('an empty browser', () => run<boolean>(`!!document.querySelector('#first-passkey.primary')`));
   if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'first.png'), Buffer.from(((await send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
   passed('leaving takes everything from this browser, and asks first for a passkey');
   await run(`document.querySelector('#first-passkey').click()`);
@@ -495,6 +496,7 @@ try {
   await tab.run(`document.querySelector('#take-over').click()`);
   await until('the first tab to let go', () => run<boolean>(takeOver));
   await until('the second tab to have it', () => tab.run<boolean>(locked));
+  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'locked.png'), Buffer.from(((await tab.send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
   passed('it takes the account over, and the first tab lets go');
   await run(`document.querySelector('#take-over').click()`);
   await until('the first tab to have it again', () => run<boolean>(lockedOrOpen));
