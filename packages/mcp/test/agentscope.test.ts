@@ -88,6 +88,27 @@ describe('an agent key with a scope', () => {
     expect(martl.agentGate(vm2)).toMatchObject({ name: 'vm-coder', machine: 'build-vm-2' });
   });
 
+  it('names and stacks its own sessions, marked with its agent and machine, and no others', async () => {
+    const { martl, url } = await setup();
+    const remote = remoteAgent(url, (await martl.agentToken({ name: 'vm-coder', machine: 'build-vm-1' })).token!);
+    const item = await martl.submit({ space: 'Studio', title: 'Build the thing' });
+
+    const named = await remote.nameSession({ session: { id: 'vm-session-1' }, name: 'Mosaik', about: 'Builds on the VM' });
+    expect(named).toMatchObject({ name: 'Mosaik', agent: 'vm-coder', machine: { name: 'build-vm-1', kind: 'agent-token' } });
+    const working = await remote.workOn({ session: { id: 'vm-session-1' }, post: item.id });
+    expect(working.stack.map((s) => s.post.id)).toEqual([item.id]);
+    expect((await martl.sessions()).find((s) => s.id === 'vm-session-1')).toMatchObject({ agent: 'vm-coder', machine: { name: 'build-vm-1' } });
+
+    // A session of this computer's isn't the token's to name or stack.
+    await martl.nameSession({ session: { id: 'local-session' }, name: 'Loom', about: 'Plans the day' });
+    await expect(remote.nameSession({ session: { id: 'local-session' }, name: 'Taken' })).rejects.toThrow(/isn't one of vm-coder's/);
+    await expect(remote.workOn({ session: { id: 'local-session' }, post: item.id })).rejects.toThrow(/isn't one of vm-coder's/);
+
+    // Scoped away from Studio: it can't take Studio's item onto its stack.
+    await martl.setAgentScope({ name: 'vm-coder', space: 'Secret', access: { read: ['posts'], write: ['posts'] } });
+    await expect(remote.workOn({ session: { id: 'vm-session-1' }, post: item.id })).rejects.toThrow(/doesn't reach/);
+  });
+
   it('refuses a space it doesn’t know, and an agent it doesn’t hold', async () => {
     const { martl } = await setup();
     await expect(martl.setAgentScope({ name: 'vm-coder', space: 'Nowhere', access: { read: ['posts'], write: [] } })).rejects.toThrow(/no group, project or friend/);

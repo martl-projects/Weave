@@ -964,6 +964,8 @@ export class Sessions {
       ...(known?.avatar ? { avatar: known.avatar } : {}),
       ...(known?.last ? { last: known.last } : {}),
       ...(known?.hidden ? { hidden: true as const } : {}),
+      ...((ref.agent ?? known?.agent) ? { agent: ref.agent ?? known?.agent } : {}),
+      ...((ref.machine ?? known?.machine) ? { machine: ref.machine ?? known?.machine } : {}),
       time: known?.time ?? new Date().toISOString(),
     };
   }
@@ -986,6 +988,8 @@ export class Sessions {
       ...(record.avatar ? { avatar: record.avatar as unknown as Json } : {}),
       ...(record.last ? { last: { post: record.last.post, time: record.last.time } } : {}),
       ...(record.hidden ? { hidden: true } : {}),
+      ...(record.agent ? { agent: record.agent } : {}),
+      ...(record.machine ? { machine: record.machine } : {}),
     };
     const event = this.node.replica.write(this.node.identity, this.core.sealForSelf({ kind: KIND_SESSION, body }));
     return this.#sessionInfo({ ...record, ...(title ? { title } : {}), time: event.time }, new Map(this.core.allPosts().map((p) => [p.id, p])));
@@ -1021,6 +1025,8 @@ export class Sessions {
       ...(record.last ? { last: { post: brief(record.last), time: record.last.time } } : {}),
       ...(record.provider === 'claude-code' && this.#archived.ids.has(record.id) ? { archived: true as const } : {}),
       ...(record.hidden ? { hidden: true as const } : {}),
+      ...(record.machine ? { machine: { id: `token:${record.machine}`, name: record.machine, kind: 'agent-token' } } : record.provider === 'claude-code' ? { machine: this.#archived.machineOf(record.id) } : {}),
+      ...(record.agent ? { agent: record.agent } : {}),
       time: record.time,
     };
   }

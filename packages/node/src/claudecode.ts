@@ -266,6 +266,20 @@ export function claudeAppSessionDirs(): string[] {
   return dirs.filter((d) => existsSync(d));
 }
 
+/** Where a session runs: this computer, or a remote environment of the Claude app (an SSH machine, say). */
+export interface SessionMachine {
+  /** "local" for this computer; "preset:<id>" for one of the Claude app's environments. */
+  id: string;
+  /** The environment's name in the Claude app; "" for this computer (the app says it in its language). */
+  name: string;
+  /** The app's target kind: local, ssh, … */
+  kind: string;
+  /** Its host, when the app's file names one. */
+  host?: string;
+}
+
+export const LOCAL_MACHINE: SessionMachine = { id: 'local', name: '', kind: 'local' };
+
 /**
  * Which Claude Code sessions you archived in the Claude app, read from its session files (`cliSessionId`,
  * `isArchived`; the app's own, undocumented format: files it can't read count as not archived). Read only, never
@@ -273,13 +287,62 @@ export function claudeAppSessionDirs(): string[] {
  */
 export class ArchivedSessions {
   readonly #dirs: () => string[];
-  /** File → when it was read, and the session it says is archived (if it does). */
-  readonly #files = new Map<string, { mtime: number; archived?: string }>();
+  /** File → when it was read, the session it's for, the environment (preset) it started in, and whether it's archived. */
+  readonly #files = new Map<string, { mtime: number; archived?: string; session?: string; env?: string }>();
   #at = 0;
   #set = new Set<string>();
+  /** Presets file → when it was read, and its presets' targets by id. */
+  readonly #presets = new Map<string, { mtime: number; targets: Map<string, { name: string; kind: string; host?: string }> }>();
 
   constructor(dirs: () => string[] = claudeAppSessionDirs) {
     this.#dirs = dirs;
+  }
+
+  /**
+   * The machine a Claude Code session runs on, from the Claude app's files: its session file names the environment it
+   * started in (`envScopeId`, `startedFromEnvironmentId`), a preset in ccd-session-presets.json next to the sessions
+   * folder, whose `target.kind` says where (local, or a remote such as SSH). No preset, a built-in or a local target:
+   * this computer. Anything the files don't say clearly is this computer too; never written.
+   */
+  machineOf(session: string): SessionMachine {
+    void this.ids;
+    const env = [...this.#files.values()].find((f) => f.session === session)?.env;
+    if (!env || env.startsWith('builtin')) return LOCAL_MACHINE;
+    for (const dir of this.#dirs()) {
+      const target = this.#presetTargets(join(dir, '..', 'ccd-session-presets.json')).get(env);
+      if (!target) continue;
+      if (target.kind === 'local') return LOCAL_MACHINE;
+      return { id: `preset:${env}`, name: target.name, kind: target.kind, ...(target.host ? { host: target.host } : {}) };
+    }
+    return LOCAL_MACHINE;
+  }
+
+  #presetTargets(file: string): Map<string, { name: string; kind: string; host?: string }> {
+    let mtime: number;
+    try {
+      mtime = statSync(file).mtimeMs;
+    } catch {
+      return new Map();
+    }
+    const known = this.#presets.get(file);
+    if (known?.mtime === mtime) return known.targets;
+    const targets = new Map<string, { name: string; kind: string; host?: string }>();
+    try {
+      const json = JSON.parse(readFileSync(file, 'utf8')) as { byAccount?: Record<string, { presets?: unknown }> };
+      for (const account of Object.values(json.byAccount ?? {})) {
+        for (const p of Array.isArray(account?.presets) ? account.presets : []) {
+          const preset = p as { id?: unknown; name?: unknown; target?: Record<string, unknown> };
+          if (typeof preset.id !== 'string' || !preset.target || typeof preset.target.kind !== 'string') continue;
+          const t = preset.target;
+          const host = [t.host, t.hostname, t.sshHost, t.alias, t.connection].find((v): v is string => typeof v === 'string' && v.length > 0);
+          targets.set(preset.id, { name: typeof preset.name === 'string' && preset.name ? preset.name : String(t.kind), kind: t.kind as string, ...(host ? { host } : {}) });
+        }
+      }
+    } catch {
+      // being written, or not the format we know
+    }
+    this.#presets.set(file, { mtime, targets });
+    return targets;
   }
 
   /** The archived sessions' Claude Code ids; looked at again at most once a second. */
@@ -318,13 +381,17 @@ export class ArchivedSessions {
     }
     if (this.#files.get(file)?.mtime === mtime) return;
     let archived: string | undefined;
+    let session: string | undefined;
+    let env: string | undefined;
     try {
-      const json = JSON.parse(readFileSync(file, 'utf8')) as { cliSessionId?: unknown; isArchived?: unknown };
-      if (json.isArchived === true && typeof json.cliSessionId === 'string') archived = json.cliSessionId;
+      const json = JSON.parse(readFileSync(file, 'utf8')) as { cliSessionId?: unknown; isArchived?: unknown; envScopeId?: unknown; startedFromEnvironmentId?: unknown };
+      if (typeof json.cliSessionId === 'string') session = json.cliSessionId;
+      if (json.isArchived === true && session) archived = session;
+      env = [json.envScopeId, json.startedFromEnvironmentId].find((v): v is string => typeof v === 'string' && v.length > 0);
     } catch {
       // being written, or not the format we know
     }
-    this.#files.set(file, { mtime, ...(archived ? { archived } : {}) });
+    this.#files.set(file, { mtime, ...(archived ? { archived } : {}), ...(session ? { session } : {}), ...(env ? { env } : {}) });
   }
 }
 

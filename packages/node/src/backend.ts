@@ -1474,6 +1474,9 @@ export interface SessionRef {
   /** The provider's other id for it, e.g. the Claude app's local_… id. */
   host?: string;
   folder?: string;
+  /** Set by the agent API for a session that reaches the node with an agent token: its agent and machine. */
+  agent?: string;
+  machine?: string;
 }
 
 /** A work item on a session's stack: the post as it is now, shown like on a board. */
@@ -1518,6 +1521,10 @@ export interface SessionInfo {
   archived?: true;
   /** You hid it in Weave: left out the same way, until you unhide it. */
   hidden?: true;
+  /** Where it runs: this computer (id "local") or one of the Claude app's remote environments, an SSH machine say. */
+  machine?: { id: string; name: string; kind: string; host?: string };
+  /** The agent key it acts with, when it reaches this node with an agent token; none: this computer's daemon. */
+  agent?: string;
 }
 
 /** Where to work on an item: its latest session, or the folders known for its project, and the message to start with. */

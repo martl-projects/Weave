@@ -1,5 +1,5 @@
 import type { Did } from '@weave/core';
-import type { Backend, ChatInfo, FeedItem, PostInfo, RpcMethod } from './backend.ts';
+import type { Backend, ChatInfo, FeedItem, PostInfo, RpcMethod, SessionRef } from './backend.ts';
 import { allows, areaOfKind, areaOfPost, type AgentScope, type Area } from './agentscope.ts';
 
 /*
@@ -32,8 +32,14 @@ const WRITES = ['publish', 'submit', 'editPost', 'deletePost', 'upvote', 'say', 
 /** Reads, and storing a file to attach (no event, nothing signed). */
 const READS = ['agentBoards', 'whoami', 'feed', 'spaces', 'posts', 'post', 'members', 'boards', 'project', 'threads', 'issues', 'proposals', 'messages', 'channels', 'chats', 'openChat', 'profile', 'imprint', 'tiers', 'blob', 'putBlob', 'putFile', 'agentBlocked'] as const satisfies readonly RpcMethod[];
 
+/**
+ * A session's own name and stack, for a session that reaches the node with the token (one on a VM): only sessions of
+ * this token's agent, which it marks with its agent and machine, so the Sessions view draws them in that frame.
+ */
+const SESSION_TOOLS = ['session', 'workOn', 'doneWith', 'nameSession'] as const satisfies readonly RpcMethod[];
+
 /** Every method an agent token may call, one by one: a new method stays off until it's added here on purpose. */
-export const AGENT_TOKEN_METHODS: readonly RpcMethod[] = [...WRITES, ...READS];
+export const AGENT_TOKEN_METHODS: readonly RpcMethod[] = [...WRITES, ...READS, ...SESSION_TOOLS];
 
 const isWrite = (method: string): boolean => (WRITES as readonly string[]).includes(method);
 
@@ -109,7 +115,24 @@ export function agentCall(backend: Backend, grant: AgentGrant, method: string, a
     }
     throw outOfScope('that message');
   };
+  /** The session a ref names, made this agent's (and this machine's); refused when it's another agent's or this computer's. */
+  const ownSession = async (ref: unknown): Promise<SessionRef> => {
+    const r = (ref ?? {}) as SessionRef;
+    if (typeof r.id !== 'string' || !r.id) throw new Error('say which session (its id)');
+    const known = (await backend.sessions()).find((s) => s.provider === (r.provider ?? 'claude-code') && (s.id === r.id || s.host === r.id));
+    if (known && known.agent !== grant.name) throw new Error(`that session isn't one of ${grant.name}'s: an agent token names and stacks only its own sessions`);
+    return { ...r, agent: grant.name, ...(grant.machine ? { machine: grant.machine } : {}) };
+  };
   return (async () => {
+    if ((SESSION_TOOLS as readonly string[]).includes(method)) {
+      if (method === 'session') return call('session', [await ownSession(args[0])]);
+      const input = { ...((args[0] ?? {}) as Record<string, unknown>) };
+      input.session = await ownSession(input.session);
+      if (method === 'workOn' || method === 'doneWith') input.as = grant.name;
+      if (method === 'workOn' && input.post && postHidden((await call('post', [input.post])) as PostInfo, grant)) throw outOfScope('that post');
+      if (method === 'workOn' && input.create) await need((input.create as { space?: unknown }).space, 'posts', 'write');
+      return call(method as RpcMethod, [input, ...args.slice(1)]);
+    }
     if (isWrite(method)) {
       const input: Record<string, unknown> = { ...((args[0] ?? {}) as Record<string, unknown>), as: grant.name };
       const w = method as (typeof WRITES)[number];

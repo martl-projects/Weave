@@ -62,6 +62,10 @@ export interface SessionRecord {
   last?: { post: string; time: string };
   /** You hid it: left out of your sessions and workers like an archived one, until you unhide it. */
   hidden?: true;
+  /** The agent key it acts with, when it reaches your node with an agent token (a session on a VM, say). */
+  agent?: string;
+  /** The machine that token was made for. */
+  machine?: string;
   /** When it last changed. */
   time: string;
 }
@@ -132,6 +136,8 @@ export function sessionsOf(entries: Entry[]): Map<string, SessionRecord> {
       ...((avatar) => (avatar ? { avatar } : {}))(figureOf(b?.avatar)),
       ...(str(last?.post, 100) ? { last: { post: str(last?.post, 100), time: str(last?.time, 40) || e.event.time } } : {}),
       ...(b?.hidden === true ? { hidden: true as const } : {}),
+      ...(typeof b?.agent === 'string' && b.agent ? { agent: b.agent } : {}),
+      ...(typeof b?.machine === 'string' && b.machine ? { machine: b.machine } : {}),
       time: e.event.time,
     });
   }
