@@ -952,14 +952,27 @@ export class WeaveNode implements Backend {
   }
 
 
+  /** How long each part of opening took (ms), for open() to say when it was long. */
+  #opening: Array<[string, number]> = [];
+
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
     this.#identity = identity;
+    let last = performance.now();
+    const mark = (what: string): void => {
+      const now = performance.now();
+      this.#opening.push([what, now - last]);
+      last = now;
+    };
     // Homes from before separate encryption keys use the root key for encryption.
     const stored = loadEncryptionKeys(home);
     this.#encryption = stored.length ? stored : [{ did: identity.did, keys: identity.keys }];
     this.#releaseLock = acquireLock(home);
-    this.replica = new Replica(this.#openStore(home));
+    mark('keys and lock');
+    const store = this.#openStore(home);
+    mark('the store');
+    this.replica = new Replica(store);
+    mark('the log');
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
     if (loadConfig(home).standby) this.#companies.refuseWrites();
     this.blobs = new BlobStore(home.blobs);
@@ -969,14 +982,20 @@ export class WeaveNode implements Backend {
     // Weave's own GitHub sign-in is gone (services have their own access): its token isn't kept.
     rmSync(joinPath(home.dir, 'github.json'), { force: true });
     for (const file of [this.#payments.gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
+    mark('settings and secrets');
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
     this.#managed.loadHalves();
+    mark('spaces');
     // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
     for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#companies.seeGeneration(r);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
-    for (const event of this.replica.events(isKeys)) this.#kernel.takeKeys(event);
+    mark('generations');
+    const keyEvents = this.replica.events(isKeys);
+    mark('reading key events');
+    for (const event of keyEvents) this.#kernel.takeKeys(event);
+    mark(`taking ${keyEvents.length} key events`);
     this.replica.admit = this.#holding.admit;
     this.replica.onAppend((event) => {
       if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#companies.seeGeneration(event);
@@ -1019,7 +1038,13 @@ export class WeaveNode implements Backend {
       node.#moveToProtocol3();
     }
     const done = performance.now();
-    if (done - began >= 2000) console.warn(`weave: opening took ${Math.round(done - began)} ms: the node ${Math.round(made - began)} ms, older homes ${Math.round(migrated - made)} ms, protocol 3 ${Math.round(done - migrated)} ms`);
+    if (done - began >= 2000)
+      console.warn(
+        `weave: opening took ${Math.round(done - began)} ms: the node ${Math.round(made - began)} ms (${node.#opening
+          .filter(([, ms]) => ms >= 50)
+          .map(([what, ms]) => `${what} ${Math.round(ms)} ms`)
+          .join(', ')}), older homes ${Math.round(migrated - made)} ms, protocol 3 ${Math.round(done - migrated)} ms`,
+      );
     return node;
   }
 
