@@ -1002,6 +1002,8 @@ export class WeaveNode implements Backend {
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
       if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
+      // What is kept of the sealed events by space is from before this one.
+      this.#managed.forgetSealed();
       const kept = scoped ? this.#managed.rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#kernel.directs.get(scoped)?.space) : undefined;
       // A company half or setting arriving changes which key opens what: decode again.

@@ -82,11 +82,31 @@ export class ManagedKeys {
   managedRaw(space: StoredSpace): ManagedRaw {
     const kept = this.rawCache.get(space.id);
     if (kept) return kept;
-    const scope = spaceScope(space);
     const out: ManagedRaw = { parts: new Map() };
-    for (const r of this.node.replica.events((e) => e.scope === scope && e.kind === KIND_SEALED && !e.missing)) this.takeRaw(space, out, r);
+    for (const r of this.sealedIn(spaceScope(space))) this.takeRaw(space, out, r);
     this.rawCache.set(space.id, out);
     return out;
+  }
+
+  /**
+   * The sealed events this node holds whose bodies are here, by their space, oldest first: read once for all spaces.
+   * Reading the whole log for each space made decoding everything take a browser's node a minute (0.8 s a space, with
+   * its person waiting for their account to open). Dropped when an event arrives or decoded views go stale.
+   */
+  #sealed?: Map<string, WeaveRecord[]>;
+  sealedIn(scope: string): WeaveRecord[] {
+    if (!this.#sealed) {
+      this.#sealed = new Map();
+      for (const e of this.node.replica.events((r) => r.kind === KIND_SEALED && !r.missing)) {
+        const list = this.#sealed.get(e.scope);
+        if (list) list.push(e);
+        else this.#sealed.set(e.scope, [e]);
+      }
+    }
+    return this.#sealed.get(scope) ?? [];
+  }
+  forgetSealed(): void {
+    this.#sealed = undefined;
   }
 
   /** One event of a space, for its managed setting and halves (only those sealed with the Weave half open here). */

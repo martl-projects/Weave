@@ -75,6 +75,8 @@ export class Kernel {
   /** Decoded views go stale: keys came or went, bodies were dropped. */
   invalidateDecoded(): void {
     this.decoded = undefined;
+    // Bodies may have been dropped: what is kept of the sealed events is read again.
+    this.core.managed.forgetSealed();
   }
 
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -878,17 +880,8 @@ export class Kernel {
    * (reading the whole log for each took a browser's node half a second a key, at every start). Dropped when an event
    * arrives (decodedAdd).
    */
-  #sealed?: Map<string, WeaveRecord[]>;
   #sealedIn(scope: string): WeaveRecord[] {
-    if (!this.#sealed) {
-      this.#sealed = new Map();
-      for (const e of this.node.replica.events((r) => r.kind === KIND_SEALED && !r.missing)) {
-        const list = this.#sealed.get(e.scope);
-        if (list) list.push(e);
-        else this.#sealed.set(e.scope, [e]);
-      }
-    }
-    return this.#sealed.get(scope) ?? [];
+    return this.core.managed.sealedIn(scope);
   }
 
   #opens(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
@@ -1369,7 +1362,9 @@ export class Kernel {
       // An always-on node passes its person's direct chats on, sealed, but opens them only for an agent there that reads them.
       if (space?.kind === 'direct' && !this.node.takesDirectChats) return undefined;
       const raw = space ? openIn(space, event) : undefined;
-      const inner = space && (openIn(this.core.managed.cipher(space), event) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
+      // A space that isn't managed is opened with its own keys: once, not twice.
+      const cipher = space && this.core.managed.cipher(space);
+      const inner = space && ((cipher === space ? raw : openIn(cipher!, event)) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
       if (!inner) return undefined;
       decoded = { event, inner, space };
       // An event of a read-limited board: readable only with that board's key.
@@ -1456,6 +1451,8 @@ export class Kernel {
       if (took >= 2000) console.warn(`weave: decoding everything took ${Math.round(took)} ms: ${parts.filter(([, ms]) => ms >= 50).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
       if (!again) break;
     }
+    // Every space's managed setting is kept now: the sealed events by space aren't held on to (as much again in memory).
+    this.core.managed.forgetSealed();
     return this.decoded!;
   }
 
@@ -1470,7 +1467,7 @@ export class Kernel {
    * have already dropped the decoded events.
    */
   decodedAdd(event: WeaveRecord): void {
-    this.#sealed = undefined;
+    this.core.managed.forgetSealed();
     const decoded = this.decoded;
     if (!decoded) return;
     // A v2 event standing for a v1 event already decoded (same id, re-signed): decode again, so it replaces it (rare).
