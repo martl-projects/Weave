@@ -7,6 +7,7 @@ import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { webMethods } from './methods.ts';
+import { called, measure, measureWaiting, watchBusy } from './slow.ts';
 /** What Weave ships with for newcomers (martl's contact, through martl's front door), as `weave init` applies it. */
 import bundle from '../../../weave.bundle.json' with { type: 'json' };
 import { openWasmDatabase, wipeDatabases } from './wasmdb.ts';
@@ -53,6 +54,10 @@ const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, open
 /** A node that's open does what the daemon has it do on a computer. */
 async function ready(opened: WeaveNode): Promise<void> {
   node = opened;
+  // What keeps this Worker busy, said in the console when it was (slow.ts): events taken in, and the node's duties.
+  measure(opened.replica, 'ingest', 'events taken in');
+  measureWaiting(opened, 'reconcile', 'duties');
+  watchBusy();
   stopReconciling = (await import('@weave/node')).keepReconciling(opened);
   node.wasmSetup.shippedDir = SHIPPED;
   // As the daemon's /events: everything new, with what it means for this person.
@@ -277,7 +282,7 @@ self.onmessage = async ({ data: { id, method, args } }) => {
     }
     if (!node) throw new Error('this account is locked');
     const call = (node as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    self.postMessage({ id, answer: { result: await call.apply(node, args) } });
+    self.postMessage({ id, answer: { result: await called(method, () => call.apply(node, args) as Promise<unknown>) } });
   } catch (error) {
     self.postMessage({ id, answer: errorToWire(error) });
   }

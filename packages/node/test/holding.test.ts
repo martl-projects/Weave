@@ -97,4 +97,29 @@ describe("a person's spaces on each of their devices", () => {
     expect(names).toContain('Crowd');
     for (const node of [martl, restored, ...others]) await node.close();
   });
+
+  it('a device that came with an older list of spaces (a browser from its box) still gets the newer ones', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weave-holding-'));
+    dirs.push(dir);
+    const { node: martl, words } = WeaveNode.create('Martl', dir);
+    await martl.createProject({ name: 'Old' });
+    await martl.reconcile();
+    // The browser comes with what its box holds: the keys' events, nothing of the spaces' list yet. It is asked to do
+    // its duties before anything of its other devices arrived, and again later.
+    const second = mkdtempSync(join(tmpdir(), 'weave-holding-'));
+    dirs.push(second);
+    const browser = await WeaveNode.restore(words, second, { events: martl.replica.events((r) => r.scope === 'public' || r.v === 1).map((r) => r.wire) });
+    await browser.reconcile();
+    await martl.createProject({ name: 'New' });
+    await martl.reconcile();
+    for (let round = 0; round < 3; round++) {
+      sync(martl, browser);
+      sync(browser, martl);
+      await browser.reconcile();
+      await martl.reconcile();
+    }
+    expect((await browser.spaces()).map((s) => s.name).sort()).toEqual(['New', 'Old']);
+    expect((await martl.spaces()).map((s) => s.name).sort()).toEqual(['New', 'Old']);
+    for (const node of [martl, browser]) await node.close();
+  });
 });
