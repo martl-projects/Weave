@@ -248,7 +248,11 @@ export class Lenses {
     const lens = this.pinned(input.from.space, input.from.board);
     const { space, board } = this.#board(input.space, input.board);
     if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} choose how its boards are shown`);
-    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require' }, space: space.id });
+    // Its release file goes along as blobs (as the board it came from carried it, or fetched and checked here): its
+    // project alone hands out a release from GitHub, and the people here needn't be in it.
+    const wasm = lens.manifest.install?.assets?.wasm;
+    const files = lens.files ?? (lens.origin.project !== space.id && wasm && !wasm.parts?.length ? await this.#svc().carryRelease({ project: lens.origin.project, id: lens.origin.release, tag: lens.tag, manifest: lens.manifest }, 'wasm', PURE_MAX).then((carried) => ({ wasm: carried })).catch(() => undefined) : undefined);
+    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require', ...(files ? { files: files as unknown as Json } : {}) }, space: space.id });
     return this.boardView({ space: space.id, board: board.name });
   }
 
