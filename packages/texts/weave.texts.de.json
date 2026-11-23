@@ -534,6 +534,7 @@
     "websync.computer": "Das Neueste kam mit dem Link, der Rest kommt von deinem Computer: Lass Weave dort offen, bis alles da ist.",
     "browser.stay": "Lass Weave auf diesem Computer offen, bis der Browser alles hat: Das Neueste bringt der Link mit, ältere Inhalte holt sich der Browser von hier.",
     "browser.revoke.ask": "Den Browser {name} widerrufen? Was er ab jetzt signiert, zählt nirgends.",
+    "web.unlock.title": "Weave ist gesperrt",
     "web.unlock.intro": "Dein Konto in diesem Browser ist versiegelt. Öffne es mit deinem Passkey oder deinen Wiederherstellungswörtern.",
     "web.unlock.passkey": "Mit meinem Passkey öffnen",
     "web.unlock.words": "Deine Wiederherstellungswörter",

@@ -665,6 +665,10 @@ menu[role='tablist'] { margin-bottom: 0; }
 .notify-settings .marks-row > div { min-width: 0; flex: 1 1 200px; }
 .notify-settings .notice-rule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .welcome { width: min(420px, calc(100vw - 32px)); }
+.unlock .first-ways button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.unlock .first-ways button.default { font-weight: bold; }
+.unlock .first-more { margin-top: 2px; font-family: var(--content-font); font-size: 12px; }
+.unlock .first-more[open] > summary { margin-bottom: 8px; }
 .welcome-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-family: var(--content-font); font-size: 12px; }
 .first-ways { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .first-ways button { width: 100%; padding: 10px; }
