@@ -1216,7 +1216,7 @@ export class WeaveNode implements Backend {
           .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
         ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
-      spaces: this.#nodeSpaces() as unknown as Json[],
+      spaces: this.#nodeSpaces(true) as unknown as Json[],
       bootstrap: this.config.bootstrap as unknown as Json,
     };
     return { answer: encodeNodeAnswer(me, boxTo(key, payload as unknown as Json) as unknown as Json), key, name };
@@ -1286,7 +1286,7 @@ export class WeaveNode implements Backend {
           .flatMap((signer) => this.replica.store.range(signer as Did, 1)),
         ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
-      spaces: this.#nodeSpaces() as unknown as Json[],
+      spaces: this.#nodeSpaces(true) as unknown as Json[],
       // What's in them, newest first, as much as the handover carries: the browser shows it at once, and hands it on to
       // its storage node itself, instead of waiting for the storage node to find this computer on the DHT.
       recent: this.#recentForBrowser(),
@@ -1306,7 +1306,7 @@ export class WeaveNode implements Backend {
    * takes from its storage node afterwards, which reconciles only what's missing.
    */
   #recentForBrowser(): Json[] {
-    const spaces = (this.#nodeSpaces() as Array<{ id: string; kind: string }>).map((s) => spaceScope(s as Parameters<typeof spaceScope>[0]));
+    const spaces = (this.#nodeSpaces(true) as Array<{ id: string; kind: string }>).map((s) => spaceScope(s as Parameters<typeof spaceScope>[0]));
     const control: Json[] = [];
     const content: Array<{ time: string; wire: Json }> = [];
     for (const space of spaces)
@@ -1364,11 +1364,35 @@ export class WeaveNode implements Backend {
     return !this.#isLinkedNode || this.#nodeAgents.directChatsHere();
   }
 
-  /** Our spaces for our always-on nodes: all but direct chats, with their keys. */
-  #nodeSpaces(): unknown[] {
+  /**
+   * Our spaces for our other devices: all but direct chats, with their keys and whether each is only for our computers.
+   * `handed`: for a browser or always-on node we hand them to, without those (their keys never leave our computers).
+   */
+  #nodeSpaces(handed = false): unknown[] {
     return [...this.#spaces.values()]
-      .filter((s) => s.kind !== 'direct' && !this.#kernel.directs.has(s.id))
-      .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) }));
+      .filter((s) => s.kind !== 'direct' && !this.#kernel.directs.has(s.id) && !(handed && s.devicesOnly))
+      .map((s) => ({ ...this.#kernel.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}), ...(s.devicesOnly && !handed ? { devicesOnly: true as const } : {}) }));
+  }
+
+  /**
+   * Keep a place only on our computers (or not again), on one of them: browsers we linked and always-on nodes don't get
+   * it, and let it go if they have it, so no storage node of ours learns of it. Our other computers take it with the
+   * node index. The other members aren't told: it's ours.
+   */
+  async setDevicesOnly(input: { space: string; on: boolean }): Promise<SpaceInfo> {
+    if (!this.#kernel.onComputer) throw new Error("set that on one of your computers: this one is what it's kept from");
+    const space = this.#kernel.space(input.space);
+    this.#setDevicesOnly(space, input.on);
+    this.#writeNodeIndex(true);
+    return this.#kernel.spaceInfo(space);
+  }
+
+  #setDevicesOnly(space: StoredSpace, on: boolean): void {
+    if (on) space.devicesOnly = true;
+    else delete space.devicesOnly;
+    saveSpace(this.home, space);
+    // A browser or always-on node lets its storage node know (it holds the space no more), or takes it up again.
+    this.#swarm?.announce();
   }
 
   /**
@@ -3593,6 +3617,10 @@ export class WeaveNode implements Backend {
         return n.#isLinkedNode || n.#isLinkedBrowser;
       },
       keysOnly: n.#kernel.keysOnly.bind(n.#kernel),
+      get onComputer() {
+        return n.#kernel.onComputer;
+      },
+      setDevicesOnly: (space, on) => n.#setDevicesOnly(space, on),
       get managed() {
         return n.#managed;
       },

@@ -93,6 +93,10 @@ export interface HoldingCore {
   /** An always-on node or a linked browser: it takes its spaces from the node index its person's computers write. */
   readonly readsNodeIndex: boolean;
   keysOnly(space: StoredSpace): SpaceKeys;
+  /** One of the person's computers (not a browser they linked, not an always-on node). */
+  readonly onComputer: boolean;
+  /** Keep a space only on the person's computers, or not: saved, and held or let go here as that says. */
+  setDevicesOnly(space: StoredSpace, on: boolean): void;
   readonly managed: ManagedKeys;
   managers(state: SpaceState): Set<Did>;
   /** A person by name, id or url. */
@@ -347,7 +351,7 @@ export class Holding {
     // A device that just came (a restore, a browser from the words) has none yet: its empty list would be the latest, and
     // hide the list it is to take its spaces from. It writes once it has some.
     if (!spaces.length && !this.#keeping.index && this.core.selfBodies(KIND_KEEP_INDEX).length) return 0;
-    const body = { spaces: spaces.map((s) => ({ ...this.core.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}) })) };
+    const body = { spaces: spaces.map((s) => ({ ...this.core.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}), ...(s.devicesOnly ? { devicesOnly: true as const } : {}) })) };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (hash === this.#keeping.index) return 0;
     this.node.replica.write(this.node.identity, this.core.sealForSelf({ kind: KIND_KEEP_INDEX, body: body as unknown as Json }));
@@ -365,7 +369,13 @@ export class Holding {
 
   #adoptSpaces(spaces: StoredSpace[]): void {
     for (const space of spaces) {
-      if (!space || typeof space.id !== 'string' || this.core.spaces.has(space.id)) continue;
+      if (!space || typeof space.id !== 'string') continue;
+      const have = this.core.spaces.get(space.id);
+      // Only on the person's computers, or not (set on another of them): this one goes along with it.
+      if (have && !!have.devicesOnly !== !!space.devicesOnly) this.core.setDevicesOnly(have, space.devicesOnly === true);
+      if (have) continue;
+      // A browser or always-on node doesn't take a space that's only for the computers.
+      if (space.devicesOnly && !this.core.onComputer) continue;
       void this.core.addSpace({ ...space, entry: { topics: [this.node.identity.author], bootstrap: [] } });
     }
   }

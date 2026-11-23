@@ -8,7 +8,8 @@ import { b64u, open, seal, sha256, utf8, type Json, type Sealed } from '@weave/c
  */
 
 /** A browser's key, as its grant names it: `browser:<name>`. It shows as the person, not as an agent. */
-export const BROWSER_PREFIX = 'browser:';
+import { BROWSER_PREFIX } from './shared.ts';
+export { BROWSER_PREFIX };
 
 /** How long a link's handover waits at the storage node. */
 export const LINK_MS = 15 * 60_000;

@@ -48,7 +48,7 @@ export class Membership {
   // ---------------------------------------------------------------- groups and projects
 
   async spaces(kind?: SpaceKind): Promise<SpaceInfo[]> {
-    return [...this.core.spaces.values()].filter((s) => !kind || s.kind === kind).map((s) => this.core.kernel.spaceInfo(s));
+    return [...this.core.spaces.values()].filter((s) => (!kind || s.kind === kind) && !this.core.kernel.hiddenHere(s)).map((s) => this.core.kernel.spaceInfo(s));
   }
 
   async createGroup(name: string): Promise<SpaceInfo> {

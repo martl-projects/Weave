@@ -2,7 +2,7 @@ import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDG
 import type { HeldSpace, SpaceAccess, SwarmNode } from '@weave/net';
 import { type Actor, type Admission, type BoardInfo, type FeedItem, type HomeSource, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type ProjectPage, type ProjectStatus, type ProposalInfo, type ReactionInfo, type ReplyInfo, type SpaceInfo, type SpaceRef, type ThreadInfo } from './backend.ts';
 import type { People } from './people.ts';
-import { CARRIED_STATE, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
+import { BROWSER_PREFIX, CARRIED_STATE, NODE_PREFIX, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
 import type { StoredSpace } from './spacestore.ts';
 import type { KeyPair, Recipient } from '@weave/core';
 import type { Network, SpaceStorage } from './ports.ts';
@@ -105,7 +105,7 @@ export class Kernel {
   #boardKeysSeen = new Set<string>();
   /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
   keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, ...keys } = space;
+    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, devicesOnly: _devicesOnly, ...keys } = space;
     return keys;
   }
 
@@ -559,7 +559,9 @@ export class Kernel {
     // Anyone whose log we hold can make our direct chat's key: only with those we chose to know does it let them in.
     const chosen = new Set<Did>([...this.core.people.contacts().keys(), ...(this.graph().get(this.node.identity.author)?.following ?? [])]);
     return [
-      ...[...this.core.spaces.values()].map(held),
+      // A space only for the person's computers isn't held here when this is a browser or an always-on node: its storage
+      // node never learns of it.
+      ...[...this.core.spaces.values()].filter((s) => !this.hiddenHere(s)).map(held),
       ...[...this.directs.values()].map(({ space, peer }) => ({ ...held(space), admits: chosen.has(peer) })),
       { space: SELF_SCOPE, keys: [selfKey(this.core.selfSecret())] },
       // Meeting points: ours, which whoever we gave a link holds, and theirs, from the links we were given.
@@ -929,6 +931,17 @@ export class Kernel {
     return page;
   }
 
+  /** This node is one of its person's computers, not a browser they linked or an always-on node. */
+  get onComputer(): boolean {
+    const name = this.node.replica.authority.grant(this.node.identity.did)?.name ?? '';
+    return !name.startsWith(BROWSER_PREFIX) && !name.startsWith(NODE_PREFIX);
+  }
+
+  /** A space this node keeps out of sight: set to be only on its person's computers, and this isn't one. */
+  hiddenHere(space: StoredSpace): boolean {
+    return space.devicesOnly === true && !this.onComputer;
+  }
+
   spaceInfo(space: StoredSpace): SpaceInfo {
     const state = this.state(space);
     // A project's or a community's icon, from its page.
@@ -951,6 +964,7 @@ export class Kernel {
       ...(this.core.retention.held(state) ? { hold: { until: state.hold!.until, reason: state.hold!.reason } } : {}),
       ...(this.core.homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
       ...(this.#mayInvite(space, state) ? { mayInvite: true as const } : {}),
+      ...(space.devicesOnly ? { devicesOnly: true as const } : {}),
     };
   }
 

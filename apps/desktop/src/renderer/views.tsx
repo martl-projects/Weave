@@ -12,7 +12,7 @@ import { Icon } from './icons.tsx';
 import { ago, api, applyAppTheme, bridge, bump, navigate, shortDid, themeVars, useAction, useApi } from './lib.ts';
 import { boardIcon, copy, lifetimeText, PostHeader, ruleText, ShareDialog, spaceHref, spaceLabel, startChat, SubmitDialog, VoteBox } from './posts.tsx';
 import { startShare } from './share.tsx';
-import { ask, attempt, AsyncButton, Avatar, BlobImage, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
+import { ask, attempt, AsyncButton, Avatar, BlobImage, Info, Markdown, Modal, ProjectIcon, Sprite, toast, WeaveMark } from './ui.tsx';
 import { HubAccounts } from './accounts.tsx';
 import { ImprintButton } from './imprint.tsx';
 import { VisitorsSettings } from './visitors.tsx';
@@ -1081,6 +1081,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
           <SpacePhotoSettings space={project} members={members} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
+          <OnlyOnComputers space={project} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
       )}
@@ -1202,6 +1203,31 @@ function PeopleSettings({ project, info, spaces, members, meDid, admissions }: {
   );
 }
 
+// ---------------------------------------------------------------- where it lies
+
+/**
+ * Only on your computers: your browsers and always-on nodes don't get the place, so no storage node learns of it. Yours
+ * alone (the others aren't told), and only set on a computer: on Weave Web such a place isn't there at all.
+ */
+export function OnlyOnComputers({ space }: { space: SpaceInfo }) {
+  const { t } = useTexts();
+  if (bridge.web) return null;
+  const set = (on: boolean) => attempt(() => api('setDevicesOnly', { space: space.id, on }).then(bump), t(on ? 'devicesonly.on' : 'devicesonly.off', { space: space.name }));
+  return (
+    <fieldset>
+      <legend>{t('devicesonly.legend')}</legend>
+      <div className="field-row">
+        <input id={`devices-only-${space.id}`} type="checkbox" checked={!!space.devicesOnly} onChange={(e) => void set(e.target.checked)} />
+        <label htmlFor={`devices-only-${space.id}`}>
+          <b>{t('devicesonly.label')}</b>
+        </label>
+        <Info>{t('devicesonly.more')}</Info>
+      </div>
+      <p className="small muted">{t('devicesonly.what')}</p>
+    </fieldset>
+  );
+}
+
 // ---------------------------------------------------------------- what newcomers read
 
 const HISTORY_CHOICES: Array<NonNullable<SpaceInfo['history']>> = ['all', '30d', 'joining'];
@@ -1312,6 +1338,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
     <Page title={<><Icon name="gear" /> {t('nav.settings')} · g/{group.name}</>}>
       <SpacePhotoSettings space={group} members={members} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
+      <OnlyOnComputers space={group} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
     </Page>
@@ -1428,6 +1455,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
       <CommunityRule community={community} canSet={info.moderator} />
       <SpacePhotoSettings space={community} members={members} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
+      <OnlyOnComputers space={community} />
       <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />
     </Page>
