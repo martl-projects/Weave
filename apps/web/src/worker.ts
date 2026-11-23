@@ -55,6 +55,8 @@ const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, open
 async function ready(opened: WeaveNode): Promise<void> {
   node = opened;
   // What keeps this Worker busy, said in the console when it was (slow.ts): events taken in, and the node's duties.
+  // This Worker is the store's one writer: what a reading of the whole log gives is kept until something changes.
+  opened.replica.keepEvents();
   measure(opened.replica, 'ingest', 'events taken in');
   measure(opened.replica, 'events', 'reading the whole log');
   measureWaiting(opened, 'reconcile', 'duties');

@@ -65,6 +65,30 @@ export class Replica {
    */
   admit?: (event: EventV2, body: Json | undefined) => string | undefined;
 
+  /**
+   * Every valid event, as `events` reads them, kept between readings: only where this replica is its store's one
+   * writer and reading is dear (a browser: half a second for 15000 events, and the page asks several things a
+   * second, each a reading). Let go whenever anything is taken in or a body leaves.
+   */
+  #kept?: WeaveRecord[];
+  #keeps = false;
+
+  /** Keep what `events` reads until something changes (see #kept). Only for a store nobody else writes to. */
+  keepEvents(): void {
+    if (this.#keeps) return;
+    this.#keeps = true;
+    // Every write to the store lets go of it: events taken in (those that waited too, taken after listeners heard of
+    // the one they waited for), bodies that come, and bodies that leave past the replica (retention, releasing).
+    const store = this.store as unknown as Record<string, (...args: unknown[]) => unknown>;
+    for (const method of ['append', 'add2', 'putBody', 'releaseBody', 'dropBody']) {
+      const original = store[method].bind(this.store);
+      store[method] = (...args: unknown[]) => {
+        this.#kept = undefined;
+        return original(...args);
+      };
+    }
+  }
+
   /** 1 writes as v0.3 did: for tests that build an older home. */
   writeVersion: 1 | 2 = 2;
 
@@ -188,6 +212,7 @@ export class Replica {
   /** Take a v1 event, a v2 wire item `{e, b?}`, or a record of either. */
   /** Take an event from a peer (or our own). Never throws on what a peer sends: whatever can't be read is rejected as malformed. */
   ingest(input: unknown): IngestResult {
+    this.#kept = undefined;
     let result: IngestResult;
     try {
       const item = isRecord(input) ? input.wire : input;
@@ -206,6 +231,11 @@ export class Replica {
    * for it, under the same id.
    */
   events(filter: (record: WeaveRecord) => boolean = () => true): WeaveRecord[] {
+    if (this.#keeps) return (this.#kept ??= this.#read(() => true)).filter(filter);
+    return this.#read(filter);
+  }
+
+  #read(filter: (record: WeaveRecord) => boolean): WeaveRecord[] {
     const all: WeaveRecord[] = [];
     for (const stored of this.store.all2()) {
       const record = this.#recordOf(stored);
