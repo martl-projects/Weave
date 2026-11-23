@@ -1462,6 +1462,12 @@ button.session-title:hover { text-decoration: underline; }
 /* The view alone on the screen: its lines about hosts and place stay in the pane (they come back on leaving). */
 .lens-box:fullscreen .lens-net, .lens-box.lens-full .lens-net { display: none; }
 html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
+/* Wider than a phone it fills Weave's window, not the screen (windowfill.ts): inside its border, below its title bar. */
+.lens-box.lens-full.lens-window, .website-frame.lens-window { top: var(--fill-top); left: var(--fill-left); right: auto; bottom: auto; width: var(--fill-width); height: var(--fill-height); max-width: none; padding: 0; }
+.lens-box.lens-window .lens-full-exit, .website-frame.lens-window .website-frame-handle { top: 6px; right: 6px; }
+.website-frame.lens-window .website-frame-menu { top: 50px; right: 8px; }
+/* Focus (windowfill.ts): around the place a link led to, the toolbar and the status bar step aside. */
+.app-window.focus > .toolbar, .app-window.focus > .status-bar { display: none; }
 /* Its ✕, in the corner the view keeps free (corner: 40): a round dark button, in Windows 95 the title bar's close box. */
 :root[data-skin] .lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; display: grid; place-items: center; box-sizing: border-box; width: 30px; min-width: 0; height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 50%; background: #000a; box-shadow: 0 1px 4px #0006; color: #fff; text-shadow: none; font: 16px/1 system-ui, sans-serif; opacity: 0.75; cursor: pointer; transition: opacity 0.2s; }
 :root[data-skin='win95'] .lens-full-exit { width: 26px; height: 24px; border-radius: 0; background: var(--face, silver); color: #000; font: bold 14px/1 'Pixelated MS Sans Serif', Arial, sans-serif; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 0 2px 6px #0005; opacity: 0.9; }

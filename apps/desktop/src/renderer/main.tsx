@@ -20,6 +20,7 @@ import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './we
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
 import { BoardAgentsSwitch, LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { endFocus, focusedSpace, onFocus, takeLensFull } from './windowfill.ts';
 import { MentionsPanel } from './overlay.tsx';
 import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
@@ -69,7 +70,9 @@ function useFolded(pane: 'places' | 'members'): [boolean, () => void] {
       return false;
     }
   };
-  const [folded, setFolded] = useState(stored);
+  // In focus (windowfill.ts) both fold, for now; afterwards they are as they were.
+  const [folded, setFolded] = useState(() => !!focusedSpace() || stored());
+  useEffect(() => onFocus(() => setFolded(!!focusedSpace() || stored())), [key]);
   useEffect(() => {
     const changed = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; folded: boolean }>).detail;
@@ -551,8 +554,9 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
   const lensBoard = view === 'b' && arg ? boards?.find((b) => b.name === arg) : undefined;
   const [lensOn, chooseLens] = useLensChoice(space, lensBoard);
   // The lens's view filling the screen (lens.tsx): left again when the board changes.
+  // A newcomer's link to it (windowfill.ts) starts it filling Weave's window.
   const [lensFull, setLensFull] = useState(false);
-  useEffect(() => setLensFull(false), [lensBoard?.name, space.id]);
+  useEffect(() => setLensFull(!!lensBoard && takeLensFull(space.id, lensBoard.name)), [lensBoard?.name, space.id]);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
   // A space's own Invite buttons make a Weave link, in share mode (share.tsx); the toolbar's Invite has the plain invite link.
   const invite = startShare;
@@ -1039,6 +1043,13 @@ function Shell() {
   useEffect(() => {
     if (!inPlace) rememberOutside(location.hash);
   }, [routeKey]);
+  // Focus (windowfill.ts): on the place a link led to, while one stays there (its posts too); elsewhere it ends.
+  const [focus, setFocus] = useState(focusedSpace);
+  useEffect(() => onFocus(() => setFocus(focusedSpace())), []);
+  useEffect(() => {
+    const on = focusedSpace();
+    if (on && route[0] !== 'play' && route[0] !== 'post' && route[1] !== on) endFocus();
+  }, [routeKey]);
   // Back: out of a place to where it was opened from; from Places, Inbox, People or a hub to Home.
   const back = () => (inPlace ? backFrom(route) : navigate('#/'));
   useSwipeBack(phone && route.length > 0, back);
@@ -1102,7 +1113,7 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${sharing ? ' sharing' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${sharing ? ' sharing' : ''}${focus ? ' focus' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       {phone && !inPlace && titlePlay.away && (
         <div className="space-float home-float mobile-only">
           {route.length > 0 && (
