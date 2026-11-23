@@ -99,7 +99,7 @@ import {
   boardName,
   lensNotify,
 } from '@weave/core';
-import { WeaveError, type AppAsset } from '@weave/core';
+import { WeaveError, timed, type AppAsset } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type SpaceAccess } from '@weave/net';
 import { Onboarding } from './onboard.ts';
@@ -1005,20 +1005,21 @@ export class WeaveNode implements Backend {
       const kept = scoped ? this.#managed.rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#kernel.directs.get(scoped)?.space) : undefined;
       // A company half or setting arriving changes which key opens what: decode again.
-      if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#kernel.invalidateDecoded();
-      if (isKeys(event)) this.#kernel.takeKeys(event);
-      this.#kernel.decodedAdd(event);
+      if (kept && space && timed('company keys', () => this.#managed.takeRaw(space, kept, event))) this.#kernel.invalidateDecoded();
+      // Where the time goes while events arrive (a browser's node says so when it was busy for seconds).
+      if (isKeys(event)) timed('taking keys', () => this.#kernel.takeKeys(event));
+      timed('decoding it', () => this.#kernel.decodedAdd(event));
       // Someone may have come in with one of our friendly onboarding links: follow them back, after the batch.
       if (scoped && this.#onboarding.watched().has(scoped)) this.#scheduleFollowBack();
       // A new encryption key (mine or a peer's) adds an epoch to direct chats.
-      if (event.kind === KIND_ROTATE) this.#forgetDirects();
+      if (event.kind === KIND_ROTATE) timed('direct chats again', () => this.#forgetDirects());
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#kernel.personEvents.clear();
       // A place, its managers or a rule may have changed: this browser's push addresses follow (a moment later).
       if (this.#push.on) this.#push.changed();
       if (event.kind === KIND_ORG_FREEZE) this.#kernel.invalidateDecoded();
       if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
-      else this.#personEventsAdd(event);
+      else timed('its author\'s list', () => this.#personEventsAdd(event));
     });
   }
 

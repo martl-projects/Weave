@@ -1,5 +1,5 @@
 import './host/globals.ts';
-import { b64u, errorToWire } from '@weave/core';
+import { b64u, errorToWire, takeSpent } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
 import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from './host/net.ts';
@@ -273,7 +273,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
 };
 
 // From the Worker's start: what holds it up before the account is open is said too.
-watchBusy();
+watchBusy(takeSpent);
 
 self.onmessage = async ({ data: { id, method, args } }) => {
   try {

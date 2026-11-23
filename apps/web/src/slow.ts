@@ -88,17 +88,19 @@ const rounded = (spent: Map<string, { ms: number; n: number }>): string =>
 let beating = false;
 
 /** Start the heartbeat: once, for as long as the Worker lives. */
-export function watchBusy(): void {
+export function watchBusy(more?: () => Map<string, { ms: number; n: number }>): void {
   if (beating) return;
   beating = true;
   let last = now();
   setInterval(() => {
     const at = now();
     const late = at - last - BEAT_MS;
+    const taken = more?.() ?? new Map<string, { ms: number; n: number }>();
     last = at;
     if (late >= BUSY_MS) {
       const calls = [...open.values()].map((c) => `${c.method} (${Math.round((at - c.since) / 1000)} s)`).join(', ');
-      const where = rounded(sections);
+      // What the node counted itself (its steps while events arrive) goes with what is measured here.
+      const where = [rounded(sections), rounded(taken)].filter(Boolean).join('; of that ');
       console.warn(`weave: the node was busy for ${Math.round(late)} ms${where ? `: ${where}` : ', in nothing measured'}${calls ? `; open: ${calls}` : ''}`);
     }
     sections.clear();

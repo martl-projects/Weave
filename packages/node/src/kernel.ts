@@ -15,7 +15,7 @@ import type { Services } from './services.ts';
 import type { Decoded, WeaveNode } from './node.ts';
 import { replicaOrder, photoOrderOf, photoPosesOf, DEFAULT_PAGE, carriedItem, meetTopic, summary, KIND_PAGE, KIND_SPACE_PHOTO } from './shared.ts';
 import { newSpace, directSpace } from '@weave/core';
-import { channelsOf } from '@weave/core';
+import { channelsOf, timed } from '@weave/core';
 /*
  * The kernel: the spaces this node holds and their keys, epochs, rekeys and
  * carries, decoding what it can read (once, cached), each space's state, the
@@ -1390,6 +1390,10 @@ export class Kernel {
   }
 
   decodeAll(): Decoded[] {
+    return this.decoded && this.node.clock() < this.core.managed.decodedValidUntil ? this.decoded : timed('decoding everything', () => this.#decodeAll());
+  }
+
+  #decodeAll(): Decoded[] {
     // A managed key used for these views ran out: decode again without it.
     if (this.decoded && this.node.clock() >= this.core.managed.decodedValidUntil) this.decoded = undefined;
     if (!this.decoded) this.core.managed.decodedValidUntil = Infinity;

@@ -5,6 +5,7 @@ import { bodyHash, bodyMatches, canonicalIdV2, classOf, eventIdV2, isWellFormedV
 import type { Did } from './keys.ts';
 import { isRecord, recordOfV1, recordOfV2, recordOrder, type WeaveRecord } from './records.ts';
 import { MemoryStore, type LogStore, type StoredV2 } from './store.ts';
+import { timed } from './spent.ts';
 
 /**
  * Does a v2 event restate this v1 event, as a key re-signing its own history
@@ -194,7 +195,7 @@ export class Replica {
     } catch {
       return { status: 'rejected', reason: 'malformed' };
     }
-    if (result.status === 'accepted') this.#drainPending(this.#about(isRecord(input) ? input.wire : input));
+    if (result.status === 'accepted') timed('events that waited', () => this.#drainPending(this.#about(isRecord(input) ? input.wire : input)));
     return result;
   }
 
@@ -307,7 +308,7 @@ export class Replica {
     const record = recordOfV2(id, event, goodBody);
     const check = this.authority.check(record);
     if (!check.ok) return check.retry ? this.#park(`v2 ${ownId}`, wireItem(event, goodBody), check.reason, 'auth') : { status: 'rejected', reason: check.reason };
-    const refused = this.admit?.(event, goodBody);
+    const refused = timed('admitting', () => this.admit?.(event, goodBody));
     if (refused) return { status: 'rejected', reason: refused };
 
     this.store.add2({ id, event });
@@ -319,7 +320,9 @@ export class Replica {
   }
 
   #notify(record: WeaveRecord): void {
-    for (const listener of this.#listeners) listener(record);
+    timed('telling of it', () => {
+      for (const listener of this.#listeners) listener(record);
+    });
   }
 
   #fork(signer: Did): IngestResult {
