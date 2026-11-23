@@ -13,6 +13,7 @@ export interface Preferences {
   language?: Language;
 }
 import type { Theme } from './theme.ts';
+import type { AgentScope } from './agentscope.ts';
 export { TEXT_LIMITS } from '@weave/core/limits';
 
 /** An event as shown to people and agents: decrypted where possible, with resolved names. */
@@ -85,6 +86,16 @@ export interface HarnessInfo {
   restartText?: TextRecord;
   /** Its entry pointed to a Weave no longer there; this one put itself in (until dismissed). */
   repaired?: boolean;
+}
+
+/** One agent's tokens on one machine (the token itself is never shown again). */
+export interface AgentTokenInfo {
+  agent: string;
+  did: Did;
+  /** The machine it was made for; "" for tokens from before machines. */
+  machine: string;
+  tokens: number;
+  created: string;
 }
 
 export interface AgentInfo {
@@ -2442,7 +2453,19 @@ export interface Backend {
    * A token for one of the agents this node holds, for a harness that reaches this node through its agent API (weave
    * daemon --agent-api): it acts as that agent only. `revoke`: all of that agent's tokens stop working.
    */
-  agentToken(input: { name: string; revoke?: boolean }): Promise<{ agent: string; token?: string; revoked?: number }>;
+  agentToken(input: { name: string; revoke?: boolean; machine?: string }): Promise<{ agent: string; token?: string; revoked?: number }>;
+  /** Where your agents' tokens are in use: one line per agent and machine (never a token). The Sessions view draws a frame for each. */
+  agentTokens(): Promise<AgentTokenInfo[]>;
+  /** End one machine's tokens for an agent (its frame's Disconnect); the agent and its other machines stay. */
+  revokeAgentMachine(input: { name: string; machine: string }): Promise<{ revoked: number }>;
+  /** The spaces an agent key may use through its tokens, with what it may read and write there; undefined: every space. */
+  agentScope(name: string): Promise<AgentScope | undefined>;
+  /**
+   * Give an agent key a space (a project, a group, a person's direct chat) with these rights, change them, or take it
+   * away (access null). The first space given scopes the key: from then on its tokens reach only the spaces listed.
+   * `all: true` lifts the scope again.
+   */
+  setAgentScope(input: { name: string; space?: string; access?: { read: string[]; write: string[] } | null; all?: true }): Promise<AgentScope | undefined>;
   /** Change what one of your agents may sign (e.g. add weave.post.coauthor to let it confirm co-authorships); for one on an always-on node, also whether it reads your direct chats. */
   updateAgent(input: { name: string; permissions: string[]; directChats?: boolean }): Promise<AgentInfo>;
   /** An agent asks its person to let it sign more kinds; the request waits in their Inbox (or is already answered). */
@@ -2881,7 +2904,7 @@ export type RpcMethod = Exclude<keyof Backend, 'watch'>;
 export { LENS_CSP, lensCsp } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
-  'whoami', 'publish', 'feed', 'addAgent', 'addNodeAgent', 'agentToken', 'updateAgent', 'join', 'status',
+  'whoami', 'publish', 'feed', 'addAgent', 'addNodeAgent', 'agentToken', 'agentTokens', 'revokeAgentMachine', 'agentScope', 'setAgentScope', 'updateAgent', 'join', 'status',
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'setServing', 'setQuiet', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',

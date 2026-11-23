@@ -106,6 +106,7 @@ import { Onboarding } from './onboard.ts';
 import {
   noAgentError,
   type AgentInfo,
+  type AgentTokenInfo,
   type Backend,
   type BoardInfo,
   type BoardViewInfo,
@@ -138,6 +139,7 @@ import { FileStore } from './filestore.ts';
 import { openStore, type SqliteStore } from './sqlitestore.ts';
 import { readJson, resolveHome, writeJson, type Home } from './home.ts';
 import type { AgentGrant } from './agentapi.ts';
+import { cleanAccess, type AgentScope } from './agentscope.ts';
 import { moveHomeKey, readSecretJson, writeSecretJson } from './vault.ts';
 import { type Fetch } from './github.ts';
 import { createHash } from 'node:crypto';
@@ -2203,7 +2205,7 @@ export class WeaveNode implements Backend {
    * A token for one of the agents this node holds (agentapi.ts): it acts as that agent through the agent API, and as
    * nothing else. Only its hash is kept here. `revoke`: every token of that agent stops working.
    */
-  async agentToken(input: { name: string; revoke?: boolean }): Promise<{ agent: string; token?: string; revoked?: number }> {
+  async agentToken(input: { name: string; revoke?: boolean; machine?: string }): Promise<{ agent: string; token?: string; revoked?: number }> {
     const file = joinPath(this.home.dir, 'agent-tokens.json');
     const kept = readJson<AgentTokenRecord[]>(file) ?? [];
     if (input.revoke) {
@@ -2213,9 +2215,66 @@ export class WeaveNode implements Backend {
     }
     const agent = this.#agents.find((a) => a.name === input.name);
     if (!agent) throw noAgentError(input.name, this.#agents.map((a) => a.name));
+    const machine = machineName(input.machine);
     const token = `wat_${b64u.encode(new Uint8Array(randomBytes(32)))}`;
-    writeJson(file, [...kept, { hash: createHash('sha256').update(token).digest('hex'), agent: agent.name, did: agent.did, created: new Date(this.clock()).toISOString() }]);
+    writeJson(file, [...kept, { hash: createHash('sha256').update(token).digest('hex'), agent: agent.name, did: agent.did, created: new Date(this.clock()).toISOString(), ...(machine ? { machine } : {}) }]);
     return { agent: agent.name, token };
+  }
+
+  async agentTokens(): Promise<AgentTokenInfo[]> {
+    const kept = readJson<AgentTokenRecord[]>(joinPath(this.home.dir, 'agent-tokens.json')) ?? [];
+    const lines = new Map<string, AgentTokenInfo>();
+    for (const t of kept) {
+      if (!this.#agents.some((a) => a.name === t.agent && a.did === t.did)) continue;
+      const key = `${t.agent}\n${t.machine ?? ''}`;
+      const was = lines.get(key);
+      lines.set(key, { agent: t.agent, did: t.did, machine: t.machine ?? '', tokens: (was?.tokens ?? 0) + 1, created: was && was.created < t.created ? was.created : t.created });
+    }
+    return [...lines.values()].sort((a, b) => a.agent.localeCompare(b.agent) || a.machine.localeCompare(b.machine));
+  }
+
+  async revokeAgentMachine(input: { name: string; machine: string }): Promise<{ revoked: number }> {
+    const file = joinPath(this.home.dir, 'agent-tokens.json');
+    const kept = readJson<AgentTokenRecord[]>(file) ?? [];
+    const machine = machineName(input.machine) ?? '';
+    const left = kept.filter((t) => !(t.agent === input.name && (t.machine ?? '') === machine));
+    writeJson(file, left);
+    return { revoked: kept.length - left.length };
+  }
+
+  async agentScope(name: string): Promise<AgentScope | undefined> {
+    return (readJson<Record<string, AgentScope>>(joinPath(this.home.dir, 'agent-scopes.json')) ?? {})[name];
+  }
+
+  async setAgentScope(input: { name: string; space?: string; access?: { read: string[]; write: string[] } | null; all?: true }): Promise<AgentScope | undefined> {
+    if (!this.#agents.some((a) => a.name === input.name)) throw noAgentError(input.name, this.#agents.map((a) => a.name));
+    const file = joinPath(this.home.dir, 'agent-scopes.json');
+    const scopes = readJson<Record<string, AgentScope>>(file) ?? {};
+    if (input.all) {
+      delete scopes[input.name];
+      writeJson(file, scopes);
+      return undefined;
+    }
+    if (!input.space) throw new Error('name the space: a project, a group or a person');
+    const space = await this.#scopeSpace(input.space);
+    const scope: AgentScope = scopes[input.name] ?? { spaces: {} };
+    if (input.access === null || input.access === undefined) delete scope.spaces[space];
+    else scope.spaces[space] = cleanAccess(input.access);
+    scopes[input.name] = scope;
+    writeJson(file, scopes);
+    return scope;
+  }
+
+  /** A space an agent key may be given: one of your groups, projects or communities by id or name, or a person (their direct chat). */
+  async #scopeSpace(ref: string): Promise<string> {
+    const spaces = await this.spaces();
+    const r = ref.toLowerCase();
+    const space = spaces.find((s) => s.id === ref) ?? spaces.find((s) => s.name.toLowerCase() === r);
+    if (space) return space.id;
+    const chats = await this.chats();
+    const chat = chats.find((c) => c.space.id === ref || c.peer.did === ref || c.peer.name?.toLowerCase() === r || ref.includes(c.peer.did.slice('did:key:'.length, 'did:key:'.length + 12)));
+    if (chat) return chat.space.id;
+    throw new Error(`no group, project or friend "${ref}" here`);
   }
 
   /** Who an agent token speaks for, while that agent's key is still here and not revoked. */
@@ -2225,7 +2284,8 @@ export class WeaveNode implements Backend {
     const found = (readJson<AgentTokenRecord[]>(joinPath(this.home.dir, 'agent-tokens.json')) ?? []).find((t) => t.hash === hash);
     const agent = found && this.#agents.find((a) => a.name === found.agent && a.did === found.did);
     if (!agent || this.replica.authority.grant(agent.did)?.revokedAfter !== undefined) return undefined;
-    return { name: agent.name, did: agent.did, directChats: this.#isLinkedNode ? this.#nodeAgents.readsDirectChats(agent.name) : false };
+    const scope = (readJson<Record<string, AgentScope>>(joinPath(this.home.dir, 'agent-scopes.json')) ?? {})[agent.name];
+    return { name: agent.name, did: agent.did, directChats: this.#isLinkedNode ? this.#nodeAgents.readsDirectChats(agent.name) : false, ...(scope ? { scope } : {}), ...(found.machine ? { machine: found.machine } : {}) };
   }
 
   async addNodeAgent(input: { name: string; permissions: string[]; node: string; directChats?: boolean }): Promise<AgentInfo> {
@@ -4394,7 +4454,12 @@ interface AgentTokenRecord {
   agent: string;
   did: Did;
   created: string;
+  /** The machine it was made for (a VM's name, as the person called it). */
+  machine?: string;
 }
+
+/** A machine's name as given: trimmed, one line, at most 80 characters; undefined when empty. */
+const machineName = (name: unknown): string | undefined => (typeof name === 'string' && name.trim() ? name.trim().replace(/\s+/g, ' ').slice(0, 80) : undefined);
 
 export const agentInfo = (agent: AgentKey): AgentInfo => ({ name: agent.name, did: agent.did, permissions: agent.permissions });
 
