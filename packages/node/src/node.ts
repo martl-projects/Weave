@@ -2232,19 +2232,37 @@ export class WeaveNode implements Backend {
     if (generation && !this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author && (e.body as { generation?: unknown } | null)?.generation === generation).length) {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
+    // Where the time goes, said when it was long (a page's node has one thread: nothing else moves meanwhile).
+    const spent: Array<[string, number]> = [];
+    const began = performance.now();
+    let last = began;
+    const mark = (what: string): void => {
+      const now = performance.now();
+      spent.push([what, now - last]);
+      last = now;
+    };
     this.#content.prefetchBlobs();
     let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts() + (await this.#onboarding.collectHellos().catch(() => 0));
+    mark('payments and contacts');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.settleEpochKeys(space);
+    mark('epoch keys');
     changed += await this.#content.closeProposals();
+    mark('proposals');
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
+    mark('invites');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateAfterLeaving(space, this.#kernel.state(space));
+    mark('keys after leaving');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space));
+    mark('missed keys');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.recarry(space, this.#kernel.state(space));
+    mark('carried state');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateMonthly(space);
+    mark('monthly keys');
     changed += this.#retention.applyShreds();
     changed += this.#retention.forget();
     changed += this.#holding.release();
     this.#holding.purgeKept();
+    mark('retention and holding');
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#kernel.state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
@@ -2259,6 +2277,7 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#companies.streamAudit();
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
+    mark('companies');
     // Bookkeeping for our own devices, not a change to anyone's spaces. What the lists name comes here first, so the list
     // this device writes after has it too, rather than hiding it. A node writes none of its person's.
     this.#holding.recoverSpaces();
@@ -2270,6 +2289,7 @@ export class WeaveNode implements Backend {
     changed += await this.#services.takeHandovers();
     // And agents handed to it: their keys, rights, or that they're gone.
     changed += this.#nodeAgents.take();
+    mark('own devices, handovers');
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#kernel.state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -2288,6 +2308,9 @@ export class WeaveNode implements Backend {
         changed += dids.length;
       }
     }
+    mark('boards and groups');
+    const took = performance.now() - began;
+    if (took >= 2000) console.warn(`weave: duties took ${Math.round(took)} ms: ${spent.filter(([, ms]) => ms >= 100).sort((a, b) => b[1] - a[1]).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
     return changed;
   }
 

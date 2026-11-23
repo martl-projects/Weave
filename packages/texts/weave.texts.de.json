@@ -536,6 +536,7 @@
     "browser.revoke.ask": "Den Browser {name} widerrufen? Was er ab jetzt signiert, zählt nirgends.",
     "web.unlock.title": "Weave ist gesperrt",
     "web.unlock.intro": "Dein Konto in diesem Browser ist versiegelt. Öffne es mit deinem Passkey oder deinen Wiederherstellungswörtern.",
+    "web.unlock.opening": "Dein Konto wird geöffnet… Mit viel Inhalt dauert das bis zu einer halben Minute.",
     "web.unlock.passkey": "Mit meinem Passkey öffnen",
     "web.unlock.words": "Deine Wiederherstellungswörter",
     "web.unlock.open": "Öffnen",

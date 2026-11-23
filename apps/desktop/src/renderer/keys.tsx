@@ -655,6 +655,8 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               </button>
             </div>
           )}
+          {/* Opening takes a while with much in the account: say that something happens. */}
+          {busy && <p className="muted" role="status">{t('web.unlock.opening')}</p>}
           {said && <p className="notice alarm">{said}</p>}
           {other && <p className="notice">{t('web.unlock.other')}</p>}
           <details className="first-more" open={!withPasskey || !!said}>
