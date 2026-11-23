@@ -1501,3 +1501,4 @@ table.rights label { display: inline-block; position: relative; vertical-align: 
 .map-gear { display: inline-flex; align-items: center; }
 .map-gear:focus-visible { outline: 1px dotted currentColor; opacity: 1; }
 .map-project .map-icon { flex: none; }
+.machine-howto { margin: 6px 0 0; padding-left: 18px; }

@@ -296,7 +296,21 @@ function ConnectDialog({ onClose }: { onClose(): void }) {
             </label>
           )}
           <pre className="machine-steps">{steps}</pre>
-          <p className="small">{t(way === 'ssh' ? 'machine.connect.api.ssh' : 'machine.connect.api.direct')}</p>
+          <ul className="small machine-howto">
+            {way === 'ssh' ? (
+              <>
+                <li>{t('machine.connect.ssh.step1')}</li>
+                <li>{t('machine.connect.ssh.step2')}</li>
+                <li>{t('machine.connect.ssh.step3')}</li>
+              </>
+            ) : (
+              <>
+                <li>{t('machine.connect.direct.step1')}</li>
+                <li>{t('machine.connect.direct.step2')}</li>
+                <li>{t('machine.connect.direct.step3')}</li>
+              </>
+            )}
+          </ul>
         </>
       )}
       <div className="buttons">
