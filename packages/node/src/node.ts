@@ -2252,7 +2252,8 @@ export class WeaveNode implements Backend {
     mark('invites');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateAfterLeaving(space, this.#kernel.state(space));
     mark('keys after leaving');
-    for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space));
+    const rekeys = this.#kernel.rekeysByScope();
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space), rekeys);
     mark('missed keys');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.recarry(space, this.#kernel.state(space));
     mark('carried state');

@@ -409,17 +409,31 @@ export class Kernel {
   }
 
   /**
+   * Every rekey this node holds, by the space it is in: read once for all spaces (handMissedKeys), since reading the
+   * whole log once per space took a page's node, whose database is slower, seconds per round.
+   */
+  rekeysByScope(): Map<string, ReturnType<Kernel['node']['replica']['events']>> {
+    const by = new Map<string, ReturnType<Kernel['node']['replica']['events']>>();
+    for (const e of this.node.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY)) {
+      const list = by.get(e.scope);
+      if (list) list.push(e);
+      else by.set(e.scope, [e]);
+    }
+    return by;
+  }
+
+  /**
    * Keys someone missed because their join came in after them: made after their invite, while their join was still
    * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
    * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite, unless the
    * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
    */
-  handMissedKeys(space: StoredSpace, state: SpaceState): number {
+  handMissedKeys(space: StoredSpace, state: SpaceState, rekeys: ReturnType<Kernel['rekeysByScope']> = this.rekeysByScope()): number {
     if (space.kind === 'direct' || !mayDo(state, this.node.identity.author, 'manage').ok) return 0;
     const scope = spaceScope(space);
     // Who each epoch's key was boxed to, by rekeys that count.
     const boxed = new Map<number, Set<Did>>();
-    for (const e of this.node.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+    for (const e of rekeys.get(scope) ?? []) {
       const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
       if (!Number.isSafeInteger(body?.epoch) || !mayDoAt(state, e, 'manage').ok) continue;
       const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
