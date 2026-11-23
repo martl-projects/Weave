@@ -2326,6 +2326,8 @@
     "new.encrypted": "End-to-end encrypted: only the people inside can read it.",
     "new.join": "Join",
     "new.create": "Create",
+    "new.creating": "Creating…",
+    "new.joining": "Joining…",
     "invite.title": "Invite someone to {space}",
     "invite.made.accept": "Whoever has this link can ask to join. You decide in your Inbox, and only then do they get the keys.",
     "invite.made.open": "Send this link privately. Whoever has it can join and read {space}, so treat it like a key.",

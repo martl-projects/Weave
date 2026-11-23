@@ -2326,6 +2326,8 @@
     "new.encrypted": "Ende-zu-Ende verschlüsselt: nur die Leute darin können es lesen.",
     "new.join": "Beitreten",
     "new.create": "Erstellen",
+    "new.creating": "Erstelle …",
+    "new.joining": "Trete bei …",
     "invite.title": "Jemanden in {space} einladen",
     "invite.made.accept": "Wer diesen Link hat, kann um Aufnahme bitten. Du entscheidest in deinem Posteingang, und erst dann bekommt die Person die Schlüssel.",
     "invite.made.open": "Schick diesen Link privat. Wer ihn hat, kann {space} beitreten und lesen, also behandle ihn wie einen Schlüssel.",
