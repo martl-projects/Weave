@@ -665,10 +665,29 @@ menu[role='tablist'] { margin-bottom: 0; }
 .notify-settings .marks-row > div { min-width: 0; flex: 1 1 200px; }
 .notify-settings .notice-rule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .welcome { width: min(420px, calc(100vw - 32px)); }
-.unlock .first-ways button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+/* Weave Web's lock screen: the first screen's layout (logo, name, tagline, one big way in) inside the chosen look's window. */
+.welcome.unlock { width: min(400px, calc(100vw - 32px)); }
+.unlock-stage { display: flex; flex-direction: column; align-items: stretch; text-align: center; padding: 18px 18px 12px; font-family: var(--content-font); }
+.unlock-logo { align-self: center; width: 88px; height: 88px; border-radius: 20px; box-shadow: 0 6px 22px rgb(0 0 0 / 0.18); }
+:root[data-skin='win95'] .unlock-logo { border-radius: 0; box-shadow: none; image-rendering: auto; }
+:root[data-skin] .unlock-title { margin: 12px 0 0; font-size: 30px; line-height: 1.1; font-weight: 800; letter-spacing: -0.01em; }
+:root[data-skin='win95'] .unlock-title { font-weight: bold; letter-spacing: 0; }
+/* The logo's colors, deep enough to read on a light window (a dark one takes them as they are). */
+.unlock-tagline { margin: 4px 0 12px; font-size: 13px; font-weight: 600; }
+.unlock-tagline .coral { color: #d8433b; }
+.unlock-tagline .yellow { color: #b38a00; }
+.unlock-tagline .mint { color: #12936a; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .coral { color: #ff6b62; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .yellow { color: #f5e471; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .mint { color: #5ae0a4; }
+.unlock-intro { margin: 0 0 4px; font-size: 12px; opacity: 0.85; }
+.unlock .first-ways { margin: 12px 0 6px; }
+.unlock .first-ways button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; }
 .unlock .first-ways button.default { font-weight: bold; }
-.unlock .first-more { margin-top: 2px; font-family: var(--content-font); font-size: 12px; }
+.unlock .notice { text-align: left; }
+.unlock .first-more { margin-top: 2px; font-size: 12px; }
 .unlock .first-more[open] > summary { margin-bottom: 8px; }
+.unlock form, .unlock .first-more p { text-align: left; }
 .welcome-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-family: var(--content-font); font-size: 12px; }
 .first-ways { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .first-ways button { width: 100%; padding: 10px; }

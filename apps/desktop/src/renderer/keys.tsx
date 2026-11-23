@@ -629,11 +629,14 @@ export function Unlock({ onDone }: { onDone: () => void }) {
         <div className="title-bar">
           <div className="title-bar-text">{t('web.unlock.title')}</div>
         </div>
-        <div className="window-body">
-          <div className="welcome-head">
-            <WeaveMark size={48} />
-            <p>{t('web.unlock.intro')}</p>
-          </div>
+        <div className="window-body unlock-stage">
+          {/* The first screen's layout, in this look's colors: the logo, its name, what Weave is for. */}
+          <img className="unlock-logo" src={weaveLogo} alt="" />
+          <h1 className="unlock-title">Weave</h1>
+          <p className="unlock-tagline">
+            <span className="coral">{t('brand.build')}</span> · <span className="yellow">{t('brand.share')}</span> · <span className="mint">{t('brand.belong')}</span>
+          </p>
+          <p className="unlock-intro">{t('web.unlock.intro')}</p>
           {linkWaiting && (
             <div className="notice">
               <p>{t('web.unlock.link')}</p>
