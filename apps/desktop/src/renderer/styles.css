@@ -1484,7 +1484,7 @@ html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavio
 .machine-frame.connect:hover { opacity: 1; }
 .machine-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
 .machine-head .grow { flex: 1; }
-.map-foot { margin-top: 4px; padding-left: 12px; }
+.map-foot { margin-top: 0; padding-left: 0; }
 .machine-spaces { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .machine-space { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 8px; font: inherit; font-size: 13px; color: inherit; background: none; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); cursor: pointer; width: 100%; text-align: left; }
 .machine-space.add { border-style: dashed; opacity: .75; white-space: nowrap; }
