@@ -699,6 +699,15 @@ menu[role='tablist'] { margin-bottom: 0; }
 .first-stage .muted { color: inherit; opacity: 0.6; }
 .first-stage .first-other a { color: #f5e471; }
 
+/* Weave Web's progress (WebSyncBar): a thin bar under the toolbar while it connects or content comes in. */
+.web-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 5px 12px; font-size: 12px; background: color-mix(in srgb, #2563eb 12%, transparent); border-bottom: 1px solid color-mix(in srgb, #2563eb 30%, transparent); }
+.web-sync.offline { background: color-mix(in srgb, #d97706 14%, transparent); border-bottom-color: color-mix(in srgb, #d97706 35%, transparent); }
+.web-sync-dot { width: 8px; height: 8px; border-radius: 50%; background: #2563eb; animation: web-sync-pulse 1.2s ease-in-out infinite; }
+.web-sync.offline .web-sync-dot { background: #d97706; animation: none; }
+@keyframes web-sync-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .web-sync-dot { animation: none; } }
+.web-sync-hint { opacity: 0.75; }
+
 /* The start's quieter ways: folded under Other ways, and the line under Join. */
 .first-more { margin: 4px 0 0; text-align: center; }
 .first-more > summary { display: inline-block; cursor: pointer; opacity: 0.75; font-size: 12px; }

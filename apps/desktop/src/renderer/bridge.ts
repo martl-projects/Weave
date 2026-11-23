@@ -20,6 +20,17 @@ export interface AppState {
   elsewhere?: boolean;
 }
 
+/** Weave Web's progress (bridge.web.progress): its storage node's connection, and how many events came in since it opened. */
+export interface WebProgress {
+  state: 'start' | 'connecting' | 'connected' | 'offline';
+  detail?: string;
+  received: number;
+  /** When the last one came (ms). */
+  at: number;
+  /** Just linked to one of the person's computers: what's missing comes from there. */
+  linked: boolean;
+}
+
 export interface Bridge {
   state(): Promise<AppState>;
   /** Start the daemon again; restart also ends one that holds the home but doesn't answer. Not in the browser preview. */
@@ -152,6 +163,9 @@ export interface Bridge {
     laterWords(): Promise<string | undefined>;
     /** They're written down: this browser forgets them. */
     wordsWritten(): Promise<void>;
+    /** How far this browser is: its storage node's connection, and how much came in (the progress bar). */
+    progress(): WebProgress;
+    onProgress(listener: (progress: WebProgress) => void): () => void;
     /** The ways into this account: the passkeys' ids, and `words`. */
     ways(): Promise<string[]>;
     addPasskey(): Promise<void>;

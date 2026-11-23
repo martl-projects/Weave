@@ -18,6 +18,7 @@ export { api, bridge, type AppState } from './bridge.ts';
 let tick = 0;
 const listeners = new Set<() => void>();
 let pending: ReturnType<typeof setTimeout> | undefined;
+let due: ReturnType<typeof setTimeout> | undefined;
 
 export function bump(): void {
   tick++;
@@ -36,9 +37,19 @@ bridge.onEvent((item) => {
   if (item) for (const listener of itemListeners) listener(item);
   // Only marks or hints may have changed: their views ask again themselves (marks.tsx, notify.tsx), the rest stays as it is.
   if (item?.kind === 'weave.marks' || item?.kind === 'weave.hints') return;
+  // Once things go quiet for a moment; and while they keep coming (a first sync, thousands at once), at least every second,
+  // so what has arrived shows instead of waiting for the end.
   clearTimeout(pending);
-  pending = setTimeout(bump, 120);
+  pending = setTimeout(flush, 120);
+  if (!due) due = setTimeout(flush, 1000);
 });
+
+function flush(): void {
+  clearTimeout(pending);
+  clearTimeout(due);
+  due = undefined;
+  bump();
+}
 
 const subscribe = (listener: () => void) => {
   listeners.add(listener);

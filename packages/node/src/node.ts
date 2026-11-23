@@ -184,7 +184,12 @@ export interface BrowserHandover {
   encryption: Array<{ did: Did; publicKey: string; secretKey: string }>;
   events: unknown[];
   spaces: StoredSpace[];
+  /** The newest of those spaces' events (control, then content newest first), within LINK_RECENT_BYTES. */
+  recent?: unknown[];
 }
+
+/** How much of its spaces' content a computer puts in a browser's handover: the storage node takes 8 MB sealed. */
+const LINK_RECENT_BYTES = 4 * 1024 * 1024;
 import { Website } from './website.ts';
 import { Lenses } from './lenses.ts';
 import { Widgets } from './widgets.ts';
@@ -1282,6 +1287,9 @@ export class WeaveNode implements Backend {
         ...this.replica.events().filter((e) => e.author === me && e.scope === 'public'),
       ] as unknown as Json[],
       spaces: this.#nodeSpaces() as unknown as Json[],
+      // What's in them, newest first, as much as the handover carries: the browser shows it at once, and hands it on to
+      // its storage node itself, instead of waiting for the storage node to find this computer on the DHT.
+      recent: this.#recentForBrowser(),
     };
     const res = await fetch(`${storage.origin}/link/${linkToken(secret)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: sealLink(secret, handover as unknown as Json) });
     if (!res.ok) {
@@ -1290,6 +1298,33 @@ export class WeaveNode implements Backend {
       throw new Error(res.status === 429 ? 'too many browser links from here this hour: try again later' : `the storage node didn't take it (${res.status})`);
     }
     return { link: browserLinkUrl(url.origin, secret), name, key };
+  }
+
+  /**
+   * The newest of our spaces for a browser we link, sealed as they are, within LINK_RECENT_BYTES: every space's control
+   * events (who's in, its keys, its boards), then content newest first across all of them. Older content the browser
+   * takes from its storage node afterwards, which reconciles only what's missing.
+   */
+  #recentForBrowser(): Json[] {
+    const spaces = (this.#nodeSpaces() as Array<{ id: string; kind: string }>).map((s) => spaceScope(s as Parameters<typeof spaceScope>[0]));
+    const control: Json[] = [];
+    const content: Array<{ time: string; wire: Json }> = [];
+    for (const space of spaces)
+      for (const stored of this.replica.store.inSpace2(space)) {
+        const record = this.replica.record2(stored.id);
+        if (!record) continue;
+        if (stored.event.class === 'control') control.push(record.wire as unknown as Json);
+        else if (!record.missing) content.push({ time: stored.event.time, wire: record.wire as unknown as Json });
+      }
+    let bytes = JSON.stringify(control).length;
+    const recent = [...control];
+    for (const item of content.sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))) {
+      const size = JSON.stringify(item.wire).length + 1;
+      if (bytes + size > LINK_RECENT_BYTES) break;
+      bytes += size;
+      recent.push(item.wire);
+    }
+    return recent;
   }
 
   /** Set up a browser's home from a link's handover (linkBrowser): the person, with the key it was given. */
@@ -1306,6 +1341,8 @@ export class WeaveNode implements Backend {
       throw new Error("the link doesn't vouch for this browser's key: link it again");
     }
     for (const space of handover.spaces) if (space?.id && !node.#spaces.has(space.id)) await node.#kernel.addSpace({ ...space, entry: { topics: [handover.person], bootstrap: [] } });
+    // The newest of those spaces, from the computer that linked it: there to read at once.
+    if (handover.recent?.length) node.replica.batch(() => handover.recent!.forEach((item) => node.replica.ingest(item)));
     return node;
   }
 

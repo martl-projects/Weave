@@ -1,6 +1,6 @@
 import type { ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
-import type { AppState, Bridge } from '../../desktop/src/renderer/bridge.ts';
+import type { AppState, Bridge, WebProgress } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
@@ -153,6 +153,22 @@ interface FromWorker {
   port?: MessagePort;
 }
 
+/**
+ * How far this browser is (the app's progress bar): its storage node's connection, and how much came in since the page
+ * opened. `linked`: this browser was just linked to a computer, whose content comes from there.
+ */
+const progress: WebProgress = { state: 'start', received: 0, at: 0, linked: false };
+const progressListeners: Array<(p: WebProgress) => void> = [];
+let progressSoon: ReturnType<typeof setTimeout> | undefined;
+const progressed = (now = false) => {
+  // At most a few times a second: a first sync brings thousands of events.
+  if (progressSoon && !now) return;
+  progressSoon = setTimeout(() => {
+    progressSoon = undefined;
+    for (const listen of progressListeners) listen({ ...progress });
+  }, now ? 0 : 250);
+};
+
 worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   if (data.event === 'service') {
     const service = new Worker('/service.js', { type: 'module' });
@@ -165,8 +181,18 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   }
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
   if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
-  if (data.event === 'status') return console.info('storage node:', data.state, data.detail ?? '');
-  if (typeof data.event === 'object') return listeners.forEach((listen) => listen(data.event as FeedItem));
+  if (data.event === 'status') {
+    progress.state = data.state as WebProgress['state'];
+    progress.detail = data.detail;
+    progressed(true);
+    return console.info('storage node:', data.state, data.detail ?? '');
+  }
+  if (typeof data.event === 'object') {
+    progress.received++;
+    progress.at = Date.now();
+    progressed();
+    return listeners.forEach((listen) => listen(data.event as FeedItem));
+  }
   waiting.get(data.id)?.(data.answer);
   waiting.delete(data.id);
 };
@@ -487,6 +513,7 @@ const web: Bridge['web'] = {
     await own('link', STORAGE_AT, sessionStorage.getItem(LINK_KEY), made);
     sessionStorage.removeItem(LINK_KEY);
     passkey = true;
+    progress.linked = true;
     await goOnline(invite);
   },
   needsInvite: () => !invitation() && !onboardPlan.plan,
@@ -503,6 +530,11 @@ const web: Bridge['web'] = {
         ? { problem: onboardPlan.problem }
         : undefined,
   invite: (text) => void (given = /[?&]invite=([\w-]+)/.exec(text)?.[1] ?? text.trim()),
+  progress: () => ({ ...progress }),
+  onProgress: (listener) => {
+    progressListeners.push(listener);
+    return () => void progressListeners.splice(progressListeners.indexOf(listener), 1);
+  },
   ways: () => own<string[]>('ways'),
   laterWords: () => own<string | undefined>('laterWords'),
   wordsWritten: () => own<void>('wordsWritten'),

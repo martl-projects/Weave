@@ -195,6 +195,38 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   );
 }
 
+/**
+ * Weave Web: how far this browser is, in a thin bar over everything: connecting to its storage node, content coming in
+ * (with how much), or no connection. Just linked to a computer: where the content comes from, and to leave Weave open
+ * there. Gone a few seconds after things go quiet.
+ */
+function WebSyncBar() {
+  const { t } = useTexts();
+  const [progress, setProgress] = useState(() => bridge.web!.progress());
+  const [, setNow] = useState(0);
+  useEffect(() => bridge.web!.onProgress(setProgress), []);
+  // While it shows, look again each second: it goes when nothing new came for a while.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const recent = Date.now() - progress.at < 4000;
+  const waitingForComputer = progress.linked && progress.state === 'connected' && progress.received === 0;
+  let text: string | undefined;
+  if (progress.state === 'start' || progress.state === 'connecting') text = t('websync.connecting');
+  else if (progress.state === 'offline') text = t('websync.offline');
+  else if (recent) text = t('websync.receiving', { n: progress.received.toLocaleString() });
+  else if (waitingForComputer) text = t('websync.waiting');
+  if (!text) return null;
+  return (
+    <div className={`web-sync${progress.state === 'offline' ? ' offline' : ''}`} role="status" title={progress.detail}>
+      <span className="web-sync-dot" aria-hidden="true" />
+      <span>{text}</span>
+      {progress.linked && progress.state !== 'offline' && <span className="web-sync-hint">{t('websync.computer')}</span>}
+    </div>
+  );
+}
+
 /** In the places tree's head: share mode on, or off again. */
 function ShareToggle() {
   const { t } = useTexts();
@@ -1192,6 +1224,7 @@ function Shell() {
           </small>
         </div>
       </div>
+      {bridge.web && <WebSyncBar />}
       <div className="panes">
         <Places spaces={spaces} chats={chats ?? []} route={route} waiting={waiting ?? []} inbox={inbox} onNew={() => setDialog({ kind: 'new' })} />
         {body}

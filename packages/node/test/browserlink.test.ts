@@ -70,6 +70,9 @@ describe('a linked browser', () => {
     expect(web.identity.author).toBe(martl.identity.author);
     expect(web.identity.did).toBe(linked.key);
     expect(martl.replica.authority.grant(linked.key)).toMatchObject({ role: 'agent', permissions: ['*'], name: 'browser:my-phone' });
+    // The newest of martl's spaces came with the link: readable before it has synced with anyone.
+    expect(handover.recent?.length).toBeGreaterThan(0);
+    expect((await web.messages('Party')).map((m) => m.text)).toContain('see you saturday');
 
     // It reads martl's spaces, and what it says is martl's, not an agent's.
     sync(martl, web);
