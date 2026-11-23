@@ -50,6 +50,7 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.space.handover',
   'weave.space.close',
   'weave.space.history',
+  'weave.space.serving',
   'weave.space.carry',
   'weave.space.settle',
   'weave.space.shred',

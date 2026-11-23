@@ -351,7 +351,7 @@ export class Holding {
     // A device that just came (a restore, a browser from the words) has none yet: its empty list would be the latest, and
     // hide the list it is to take its spaces from. It writes once it has some.
     if (!spaces.length && !this.#keeping.index && this.core.selfBodies(KIND_KEEP_INDEX).length) return 0;
-    const body = { spaces: spaces.map((s) => ({ ...this.core.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}), ...(s.devicesOnly ? { devicesOnly: true as const } : {}) })) };
+    const body = { spaces: spaces.map((s) => ({ ...this.core.keysOnly(s), ...(s.boards ? { boards: s.boards } : {}), ...(s.shredded ? { shredded: s.shredded } : {}), ...(s.devicesOnly ? { devicesOnly: true as const } : {}) })), by: this.node.identity.did };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (hash === this.#keeping.index) return 0;
     this.node.replica.write(this.node.identity, this.core.sealForSelf({ kind: KIND_KEEP_INDEX, body: body as unknown as Json }));
@@ -363,8 +363,21 @@ export class Holding {
   /** Spaces our latest keep index and node index list that this node doesn't have. */
   recoverSpaces(): void {
     // Every device of ours takes every space of ours: the keep index has the small ones, the node index all.
-    const lists = [this.core.selfBodies(KIND_KEEP_INDEX).at(-1), this.core.selfBodies(KIND_NODE_INDEX).at(-1)] as Array<{ spaces?: unknown } | undefined>;
+    const lists = [this.#latestIndex(KIND_KEEP_INDEX), this.#latestIndex(KIND_NODE_INDEX)];
     for (const index of lists) if (Array.isArray(index?.spaces)) this.#adoptSpaces(index.spaces as StoredSpace[]);
+  }
+
+  /**
+   * The latest index of a kind, except an empty one this very device wrote before it ever had a space: a device that
+   * just came (a browser from the words) may write one before the list it is to take its spaces from reaches it (sync
+   * protocol 4 gives its own space to its new key only once the others know that key), and that mustn't hide it.
+   */
+  #latestIndex(kind: string): { spaces?: unknown } | undefined {
+    const all = this.core.selfBodies(kind) as Array<{ spaces?: unknown; by?: unknown }>;
+    const mine = (b: { by?: unknown }) => b.by === this.node.identity.did;
+    const filled = (b: { spaces?: unknown }) => Array.isArray(b.spaces) && b.spaces.length > 0;
+    const everFilled = all.some((b) => mine(b) && filled(b));
+    return all.filter((b) => everFilled || !mine(b) || filled(b)).at(-1);
   }
 
   #adoptSpaces(spaces: StoredSpace[]): void {

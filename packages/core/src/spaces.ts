@@ -67,6 +67,13 @@ export const KIND_HANDOVER = 'weave.space.handover';
 export const KIND_CLOSE = 'weave.space.close';
 /** What newcomers get to read: `all` (the default), `30d` or `joining` (from their invite on). */
 export const KIND_HISTORY = 'weave.space.history';
+/**
+ * `{who}`: who holds the space for others (sync protocol 4), by those who manage it: `everyone` (the default) or
+ * `maintainers`, when only they (and their own devices and holders) are found on its meeting points and hand it out,
+ * and the members never meet one another.
+ */
+export const KIND_SERVING = 'weave.space.serving';
+export type ServingSetting = 'everyone' | 'maintainers';
 
 export type HistorySetting = 'all' | '30d' | 'joining';
 /**
@@ -511,6 +518,8 @@ export interface SpaceState {
   closed?: { by: Did; time: string };
   /** What newcomers get to read, and who set it when (absent: everything). */
   history?: { value: HistorySetting; by: Did; time: string };
+  /** Who holds the space for others (KIND_SERVING): only its maintainers, if they said so; everyone otherwise. */
+  serving?: 'maintainers';
   /** A company's key service holds half of the keys (stage 6). */
   managed?: ManagedSetting;
   /** A legal hold: nothing is shredded or forgotten until `until`. */
@@ -909,6 +918,12 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
         break;
       case KIND_HISTORY:
         if (mayDo(state, author, 'manage').ok && HISTORIES.includes(body.history as HistorySetting)) state.history = { value: body.history as HistorySetting, by: author, time: at };
+        break;
+      case KIND_SERVING:
+        if (mayDo(state, author, 'manage').ok && (body.who === 'everyone' || body.who === 'maintainers')) {
+          if (body.who === 'maintainers') state.serving = 'maintainers';
+          else delete state.serving;
+        }
         break;
       case KIND_DECLINE:
         if (mayDo(state, author, 'group').ok && isDid(body.member) && typeof body.via === 'string' && !state.members.has(body.member)) {

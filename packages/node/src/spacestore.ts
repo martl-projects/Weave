@@ -18,6 +18,8 @@ export interface StoredSpace extends SpaceKeys {
    * of it. Theirs alone, set on any of their computers; the others take it with their node index.
    */
   devicesOnly?: true;
+  /** This node doesn't hold it for others: it only looks up its meeting points (config.quiet for every space). Its own. */
+  quiet?: true;
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {

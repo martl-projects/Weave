@@ -1,5 +1,6 @@
 export { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 export { didFromPublicKey, generateKeyPair, isDid, publicKeyFromDid, sign, verify, type Did, type KeyPair } from './keys.ts';
+export { deliverTag, holdMessage, idMessage, type SyncRole } from './syncid.ts';
 export {
   createIdentity,
   createSubKey,
@@ -71,6 +72,8 @@ export {
   KIND_HANDOVER,
   KIND_CLOSE,
   KIND_HISTORY,
+  KIND_SERVING,
+  type ServingSetting,
   KIND_CARRY,
   KIND_SHRED,
   KIND_MANAGED,
@@ -228,6 +231,8 @@ export {
   scoresOf,
   type Board,
   type BoardType,
+  type CarriedFile,
+  parseCarriedFiles,
   type Post,
   type PostSort,
   type Ranked,

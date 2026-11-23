@@ -239,6 +239,10 @@ export interface SpaceInfo extends SpaceRef {
   visitors?: { agents: VisitorRule; services: VisitorRule; approved: string[] };
   /** Only on your computers (setDevicesOnly): your browsers and always-on nodes don't get it. */
   devicesOnly?: true;
+  /** Held for others by its maintainers alone (setServing): its members meet only them. Absent: by everyone. */
+  serving?: 'maintainers';
+  /** This node doesn't hold it for others (setQuiet): it only looks up its meeting points. */
+  quiet?: true;
 }
 
 export interface GumroadInfo {
@@ -2228,6 +2232,10 @@ export interface Backend {
   setHold(input: { space: string; until: string; reason?: string }): Promise<SpaceInfo>;
   /** Keep a place only on your computers: no browser of yours or always-on node gets it, so no storage node learns of it. */
   setDevicesOnly(input: { space: string; on: boolean }): Promise<SpaceInfo>;
+  /** Who holds a space for others: everyone, or its maintainers alone (those who manage it decide; everyone sees it). */
+  setServing(input: { space: string; who: 'everyone' | 'maintainers' }): Promise<SpaceInfo>;
+  /** Whether this node holds a space (or, without one, every space) for others, or only looks up its meeting points. */
+  setQuiet(input: { space?: string; on: boolean }): Promise<SpaceInfo | undefined>;
   /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
   signIn(input: { space: string; idToken: string }): Promise<void>;
   /** Unlock a managed space's keys with its key service now (they unlock by themselves too). */
@@ -2848,7 +2856,7 @@ export { LENS_CSP, lensCsp } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'addNodeAgent', 'agentToken', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'setServing', 'setQuiet', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile', 'lensKinds', 'lensSite', 'lensNet', 'allowLensNet', 'allowLensLocation', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget',

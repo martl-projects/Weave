@@ -68,7 +68,7 @@ export const PHONE_METHODS: readonly RpcMethod[] = [
   // You and your node
   'whoami', 'status', 'identityInfo', 'keys', 'profile', 'setProfile', 'social', 'setEdge', 'directory', 'find', 'contactLink', 'addContact', 'links', 'company', 'signInStatus', 'agentBlocked', 'harnesses', 'dismissHarnesses', 'permissionRequests', 'updateCheck',
   // Spaces and their members
-  'spaces', 'createGroup', 'createProject', 'createCommunity', 'community', 'setCommunity', 'setModerator', 'project', 'setProjectPage', 'setMaintainer', 'invite', 'inviteGroup', 'uninviteGroup', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setRule', 'members', 'removeMember', 'admissions', 'admit', 'decline', 'knocks', 'answerKnock', 'audit',
+  'spaces', 'createGroup', 'createProject', 'createCommunity', 'community', 'setCommunity', 'setModerator', 'project', 'setProjectPage', 'setMaintainer', 'invite', 'inviteGroup', 'uninviteGroup', 'joinSpace', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setServing', 'setQuiet', 'setRule', 'members', 'removeMember', 'admissions', 'admit', 'decline', 'knocks', 'answerKnock', 'audit',
   'createTier', 'setTier', 'tiers', 'requestMembership', 'membershipRequests', 'grantMembership', 'declineMembership', 'memberships',
   // Home, boards and posts
   'feed', 'publish', 'setHomeVisibility', 'followBoard', 'boards', 'setBoard', 'setBoardRule', 'setBoardAccess', 'curate', 'boardView', 'boardAction', 'lensFile', 'lensNet', 'allowLensNet', 'allowLensLocation', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget', 'servicePanels', 'serviceActions', 'posts', 'post', 'submit', 'editPost', 'deletePost', 'confirmCoauthor', 'coauthorRequests', 'upvote', 'save', 'share', 'putBlob', 'blob',

@@ -1,20 +1,30 @@
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { b64u, canonicalIdV2, compact, expand, isWireItemV2, openRanges, reconcileStep, reconKey, utf8, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
+import { b64u, canonicalIdV2, compact, expand, holdMessage, idMessage, isDid, isWireItemV2, openRanges, publicKeyFromDid, reconcileStep, reconKey, utf8, verify, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
 import type { BlobSource } from './session.ts';
 
 /*
  * Sync protocol v2 (docs/v2-stage1.md): a space's events go only to peers that
- * prove, on this very connection, that they hold its key.
+ * prove, on this very connection, that they hold its key, and (protocol 4) that
+ * they are someone who may have it: a member (SpaceAccess.mayReceive). The key
+ * alone, from a link passed on or taken, gets nothing.
  *
  * Messages, one JSON object per line:
- * - `hello {v, tags}`: `v` is the protocol this node speaks (WIRE_VERSION), and
+ * - `hello {v, tags, id?}`: `v` is the protocol this node speaks (WIRE_VERSION), and
  *   per space it holds, HMAC(authKey, role ‖ handshake hash) for its current
  *   and previous key. The handshake hash is known only to the two ends of this
  *   connection, so a tag can't be replayed on another one and tells nobody
  *   else anything. The role (initiator or responder) makes each end's tags its
  *   own: a peer echoing ours back proves nothing, it must show the other
- *   role's tag. Sent again when this node's spaces change.
+ *   role's tag. Sent again when this node's spaces change. `id {key, sig, by?}`:
+ *   the key this node signs with, and its signature over its role and the
+ *   handshake hash (idMessage), so it, too, holds for this connection only;
+ *   `by {key, sig}` for a holder (a storage node) that holds for someone: one
+ *   of that person's keys says so (holdMessage).
+ * - A peer that shows a space's key but may not have it (not a member yet) gets
+ *   nothing of it; it is asked for its chains, and of what it sends only a join
+ *   the node accepts is taken (as from a peer behind). Once the join is in, the
+ *   next look (recheck, after control events) lets it have the space.
  * - `chains {space, heads}`: per signer, the last seq of its control chain in
  *   the space; the other side sends what comes after.
  * - `sync {space, since, until?, bare?}`: content from `since` on, please
@@ -62,7 +72,7 @@ import type { BlobSource } from './session.ts';
  * taken as any, and the node can tell its person to update (`peerStanding`).
  */
 export type Message2 =
-  | { t: 'hello'; v: number; tags: string[]; features?: string[] }
+  | { t: 'hello'; v: number; tags: string[]; features?: string[]; id?: { key: string; sig: string; by?: { key: string; sig: string } } }
   | { t: 'neg'; space: string; since: string; until?: string; bare?: true; init?: true; ranges: Array<Partial<ReconRange>> }
   | { t: 'chains'; space: string; heads: Record<string, number> }
   | { t: 'sync'; space: string; since: string; until?: string; bare?: true }
@@ -77,6 +87,7 @@ export type Message2 =
   | { t: 'kept?'; id: string }
   | { t: 'kept'; id: string; items: Array<{ tag: string; data: string }> }
   | { t: 'drop'; id: string }
+  | { t: 'open'; spaces: string[] }
   | { t: 'want'; hashes: string[] }
   | { t: 'blob'; hash: string; data: string };
 
@@ -96,6 +107,15 @@ export interface HeldSpace {
   /** Behind the firewall, sharing this lets a peer in. False for what anyone could hold with us (a stranger's direct chat). */
   admits?: boolean;
 }
+
+/** Who a peer proved to be on a connection: the key it signs with, and (a holder for someone) whose key vouched for it. */
+export interface PeerIdentity {
+  key: Did;
+  /** One of a person's keys says `key` holds for them (holdMessage), unchecked: whoever decides knows whose key that is. */
+  by?: { key: Did; sig: string };
+}
+
+export { holdMessage, idMessage };
 
 /** What a session needs of its connection: Hyperswarm's secret stream, a Duplex in tests, a WebSocket (wspeer.ts). It also carries handshakeHash and isInitiator, unless they're passed. */
 export interface PeerStream {
@@ -132,6 +152,18 @@ export interface SpaceAccess {
    * them. A peer let in only by a contact link learns the person it reached, not who else that person knows.
    */
   publicFor?(shared: ReadonlySet<string>): ((author: Did) => boolean) | undefined;
+  /** Who this node is on a connection: the key it signs with (and its signature), and for a holder whose key vouches for it. */
+  identity?(): { key: Did; sign(message: Uint8Array): Uint8Array; by?: { key: Did; sig: string } } | undefined;
+  /**
+   * May the peer get this space from us, and send it to us? `peer`: who it proved to be on this connection (undefined:
+   * nobody). Without it, everyone who shows a space's key does (a person's own storage node, tests).
+   */
+  mayReceive?(space: string, peer: PeerIdentity | undefined): boolean;
+  /**
+   * Every key that may get this space now, for a holder that can't read its members (a person's storage node, which
+   * this node tells): undefined for anyone who shows its key.
+   */
+  deliverTo?(space: string): Did[] | undefined;
 }
 
 /** How many control events one connection takes from a peer behind in a space: a join or two, never a flood. */
@@ -173,9 +205,11 @@ export type Role = 'initiator' | 'responder';
  * the first public release: tags carry the role, sealed events sign their inner
  * hash (ih), content is numbered in its space (cs), joins prove their link.
  * Nodes before it drop such events as malformed, so the two sides don't sync:
- * the older one gets the farewell and nothing else.
+ * the older one gets the farewell and nothing else. 4: a peer says who it is
+ * (`id`), and a space goes only to those who may have it (mayReceive); a peer
+ * on 3 gets nothing and hears that we're newer.
  */
-export const WIRE_VERSION = 3;
+export const WIRE_VERSION = 4;
 
 /** A space's tag on one connection, made by one end: the other end's tag for the same key differs, so a reflected tag never matches. */
 export const spaceTag = (key: Uint8Array, handshakeHash: Uint8Array, role: Role): string => authTag(authKey(key), handshakeHash, role);
@@ -213,6 +247,12 @@ export class PeerSession2 {
   }
   /** Spaces the peer proved only the previous key of: it gets their rekey events and nothing else. */
   #behind = new Set<string>();
+  /** Spaces the peer showed the key of but may not have (not a member yet): only its join is taken. */
+  #pending = new Set<string>();
+  /** Who the peer proved to be on this connection, by its last hello. */
+  #peerId?: PeerIdentity;
+  /** A look again at what the peer may have is due (control events came in). */
+  #recheckSoon?: ReturnType<typeof setTimeout>;
   /** Per space whose sync has started, the tag of the key it started with: a new key starts it again. */
   #started = new Map<string, string>();
   /** The tags of the peer's last hello. */
@@ -260,6 +300,8 @@ export class PeerSession2 {
     this.#role = initiator ? 'initiator' : 'responder';
     this.#peerRole = initiator ? 'responder' : 'initiator';
     this.#unsubscribe = replica.onAppend((record) => {
+      // Who may have what follows control events (joins, admissions, removals, keys): looked at again soon.
+      if (this.#access.mayReceive && (!isWireItemV2(record.wire) || record.wire.e.class === 'control')) this.#recheckLater();
       if (!this.#admitted) return;
       if (isWireItemV2(record.wire)) this.#offer([record.wire]);
       else this.#offerV1(record.wire);
@@ -281,6 +323,52 @@ export class PeerSession2 {
   /** Spaces this connection shares, public included (nothing, with a peer on an older protocol). */
   get shared(): ReadonlySet<string> {
     return this.#shared;
+  }
+
+  /** Spaces the peer showed the key of but may not have yet. */
+  get pending(): ReadonlySet<string> {
+    return this.#pending;
+  }
+
+  /** Who the peer proved to be on this connection, if it did. */
+  get peerId(): PeerIdentity | undefined {
+    return this.#peerId;
+  }
+
+  /** Look again at what the peer may have (someone joined, was let in or removed): what it may no longer have stops at once. */
+  recheck(): void {
+    if (this.#closed || !this.#peerTags || !this.#admitted || !this.#speaks()) return;
+    this.#hello(this.#peerTags);
+  }
+
+  #recheckLater(): void {
+    if (this.#recheckSoon || this.#closed) return;
+    this.#recheckSoon = setTimeout(() => {
+      this.#recheckSoon = undefined;
+      this.recheck();
+    }, 150);
+    this.#recheckSoon.unref?.();
+  }
+
+  /** Our `id` for a hello: who we are on this connection. */
+  #ourId(): { key: string; sig: string; by?: { key: string; sig: string } } | undefined {
+    const me = this.#access.identity?.();
+    if (!me) return undefined;
+    return { key: me.key, sig: b64u.encode(me.sign(idMessage(this.#role, this.#handshakeHash))), ...(me.by ? { by: me.by } : {}) };
+  }
+
+  /** The peer's `id`, if its signature over its role and this connection's handshake holds. */
+  #theirId(id: unknown): PeerIdentity | undefined {
+    if (!id || typeof id !== 'object') return undefined;
+    const { key, sig, by } = id as { key?: unknown; sig?: unknown; by?: unknown };
+    if (!isDid(key) || typeof sig !== 'string' || sig.length > 200) return undefined;
+    try {
+      if (!verify(b64u.decode(sig), idMessage(this.#peerRole, this.#handshakeHash), publicKeyFromDid(key))) return undefined;
+    } catch {
+      return undefined;
+    }
+    const b = by && typeof by === 'object' ? (by as { key?: unknown; sig?: unknown }) : undefined;
+    return { key, ...(b && isDid(b.key) && typeof b.sig === 'string' && b.sig.length <= 200 ? { by: { key: b.key, sig: b.sig } } : {}) };
   }
 
   /** The protocol the peer speaks, once its first message said: 1 for v0.3, else its hello's `v`. */
@@ -307,7 +395,8 @@ export class PeerSession2 {
   announce(): void {
     if (this.#peerVersion !== null && !this.#speaks()) return;
     const tags = this.#access.spaces().flatMap((held) => held.keys.map((key) => this.#tag(held, key, this.#role)));
-    this.#send({ t: 'hello', v: WIRE_VERSION, tags, ...(this.neg ? { features: ['neg'] } : {}) });
+    const id = this.#ourId();
+    this.#send({ t: 'hello', v: WIRE_VERSION, tags, ...(this.neg ? { features: ['neg'] } : {}), ...(id ? { id } : {}) });
     // Spaces new here may be ones the peer already said it holds.
     if (this.#peerTags) this.#hello(this.#peerTags);
   }
@@ -337,6 +426,7 @@ export class PeerSession2 {
     if (this.#closed) return;
     this.#closed = true;
     if (this.#keepSoon) clearTimeout(this.#keepSoon);
+    if (this.#recheckSoon) clearTimeout(this.#recheckSoon);
     this.#unsubscribe();
     this.stream.destroy();
   }
@@ -381,13 +471,14 @@ export class PeerSession2 {
         if (this.#peerVersion === 1) break;
         const v = Number.isSafeInteger(message.v) && message.v >= 2 ? message.v : 2;
         if (v < WIRE_VERSION) {
-          this.#tellOlder(Array.isArray(message.tags) ? message.tags : []);
+          this.#tellOlder(Array.isArray(message.tags) ? message.tags : [], v);
           break;
         }
         // A newer peer's first hello is in its own protocol (its tags match nothing here); it then says hello in ours, as we do for older peers.
         if (v > WIRE_VERSION) this.#peerNewer = true;
         if (v2 && Array.isArray(message.tags)) {
           this.#peerNeg = this.neg && Array.isArray(message.features) && message.features.includes('neg');
+          this.#peerId = this.#theirId(message.id);
           this.#hello(message.tags, v === WIRE_VERSION);
         }
         break;
@@ -439,6 +530,8 @@ export class PeerSession2 {
             // Only what belongs to the space asked about, which both hold.
             if (record && record.scope === message.space && isWireItemV2(record.wire) && this.#mayShow(message.space, record.wire.e.author)) items.push(message.bare ? { e: record.wire.e } : record.wire);
           }
+          // Asked for, so lacked: sent again even if it was before (turned away while the peer couldn't take it yet).
+          if (!message.bare) for (const item of items) this.#peerHas.delete(`${canonicalIdV2(item.e)}+body`);
           this.#sendItems(items);
         }
         break;
@@ -457,8 +550,9 @@ export class PeerSession2 {
               if (!isWireItemV2(item)) continue;
               if (!this.#shared.has(item.e.space)) {
                 // From a peer behind in a space, only a join the node accepts (one that came in before our newer key was
-                // made), and only a few: someone behind may be someone removed.
-                if (!this.#behind.has(item.e.space) || item.e.class !== 'control' || this.#takenFromBehind >= MAX_FROM_BEHIND || !this.#access.fromBehind?.(item)) continue;
+                // made), and only a few: someone behind may be someone removed. The same from a peer that holds the key
+                // but isn't a member yet: its join is what makes it one.
+                if ((!this.#behind.has(item.e.space) && !this.#pending.has(item.e.space)) || item.e.class !== 'control' || this.#takenFromBehind >= MAX_FROM_BEHIND || !this.#access.fromBehind?.(item)) continue;
                 this.#takenFromBehind++;
               }
               // Marked as held by the peer before taking it, so accepting it doesn't echo it back.
@@ -542,6 +636,15 @@ export class PeerSession2 {
           if (this.#access.keep.take(message.id, message.items.filter((i) => i && typeof i.tag === 'string' && typeof i.data === 'string')) > 0) this.#askKeepingSoon();
         }
         break;
+      case 'open':
+        // The peer let us have these spaces just now: what we asked of them before got nothing, so we ask again.
+        if (v2 && Array.isArray(message.spaces)) {
+          for (const space of message.spaces.slice(0, 1000)) {
+            if (typeof space !== 'string' || !this.#shared.has(space)) continue;
+            this.#startSpace(space);
+          }
+        }
+        break;
       case 'want':
         if (serves && Array.isArray(message.hashes) && this.blobs) {
           for (const hash of message.hashes.slice(0, 256)) {
@@ -563,10 +666,12 @@ export class PeerSession2 {
    * reads it: a hello of its version with role-less tags (so it takes the spaces
    * as shared), then the farewell events, signed without the fields it rejects.
    */
-  #tellOlder(tags: unknown[]): void {
+  #tellOlder(tags: unknown[], v = 2): void {
     this.#shared = new Set();
+    this.#pending = new Set();
     this.#started.clear();
-    if (this.#toldOlder) return;
+    // Protocol 3 reads our hello as a newer peer's: its person hears to update. Nothing else goes to it.
+    if (this.#toldOlder || v >= 3) return;
     this.#toldOlder = true;
     const held = this.#access.spaces().filter((h) => !h.blind); // the older tags need the key itself
     this.#send({ t: 'hello', v: 2, tags: held.flatMap(({ keys }) => keys.map((key) => legacyTag(key, this.#handshakeHash))) });
@@ -586,8 +691,10 @@ export class PeerSession2 {
     const theirs = new Set(tags.filter((t): t is string => typeof t === 'string'));
     const shared = new Set(['public']);
     const behind = new Set<string>();
+    const pending = new Set<string>();
     const startedWith = new Map<string, string>([['public', '']]);
     let admits = false;
+    const may = this.#access.mayReceive;
     for (const held of this.#access.spaces()) {
       const { space, keys, proof, admits: lets } = held;
       // The peer's tags are made as the other end: our own tags, echoed back, match nothing here.
@@ -599,7 +706,9 @@ export class PeerSession2 {
       // A proof is only that: nothing of it is synced.
       if (proof) continue;
       if (keys[0]) startedWith.set(space, theirTag(keys[0]));
-      if (now) shared.add(space);
+      // The key alone isn't enough: a peer that may not have the space (not a member, yet) gets nothing of it.
+      if ((now || before) && may && !may(space, this.#peerId)) pending.add(space);
+      else if (now) shared.add(space);
       else if (before) behind.add(space);
     }
     if (!this.#admitted) {
@@ -625,6 +734,15 @@ export class PeerSession2 {
       this.#askChains(space);
     }
     this.#behind = behind;
+    // A newcomer's join is in its chains: asked for, so it can become a member here. Asked again at every look: a join
+    // that came before the key that signed it was known here was turned away, and only asking brings it again.
+    for (const space of pending) this.#askChains(space);
+    // Let in since: what it asked for while it wasn't came to nothing, so it asks again; and we ask again too, as what
+    // it sent us meanwhile was turned away.
+    const opened = [...this.#pending].filter((space) => shared.has(space));
+    if (opened.length) this.#send({ t: 'open', spaces: opened });
+    for (const space of opened) this.#started.delete(space);
+    this.#pending = pending;
     for (const space of shared) {
       const key = startedWith.get(space) ?? '';
       if (this.#started.get(space) === key) continue;
@@ -744,7 +862,10 @@ export class PeerSession2 {
     control.sort((a, b) => (a.event.signer === b.event.signer ? (a.event as { seq: number }).seq - (b.event as { seq: number }).seq : a.event.signer.localeCompare(b.event.signer)));
     for (const { event } of control) {
       const peerSeq = Number.isSafeInteger(theirs[event.signer]) ? (theirs[event.signer] as number) : 0;
-      if (event.class === 'control' && event.seq > peerSeq) items.push({ e: event });
+      if (event.class !== 'control' || event.seq <= peerSeq) continue;
+      // Asked for, so lacked: sent again even if it was before (a peer turns away a join whose key it didn't know yet).
+      this.#peerHas.delete(`${canonicalIdV2(event)}+body`);
+      items.push({ e: event });
     }
     this.#sendItems(items);
   }

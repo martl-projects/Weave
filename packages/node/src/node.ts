@@ -1404,7 +1404,8 @@ export class WeaveNode implements Backend {
     if (this.#isLinkedNode || this.#isLinkedBrowser) return 0;
     const spaces = this.#nodeSpaces();
     if (!spaces.length && this.#nodeIndexHash === undefined && this.#selfBodies(KIND_NODE_INDEX).length) return 0;
-    const body = { spaces };
+    // Which device wrote it: its own empty list doesn't hide another's that reached it later (Holding.recoverSpaces).
+    const body = { spaces, by: this.identity.did };
     const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
     if (!force && hash === this.#nodeIndexHash) return 0;
     this.replica.write(this.identity, this.#kernel.sealForSelf({ kind: KIND_NODE_INDEX, body: body as unknown as Json }));
@@ -1486,7 +1487,40 @@ export class WeaveNode implements Backend {
    * points, their DID). Announcing there would tell whoever looks where we are, and that we know them.
    */
   #looksOnly(topic: string): boolean {
-    return (topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret()) && !(this.#frontDoor() && topic === meetTopic(this.#doorSecret()));
+    if ((topic.startsWith('meet:') || topic.startsWith('did:')) && topic !== meetTopic(this.#meetSecret()) && !(this.#frontDoor() && topic === meetTopic(this.#doorSecret()))) return true;
+    // A space this node doesn't hold for others (its maintainers keep that to themselves, or this node is quiet): looked up only.
+    if (!topic.startsWith('space/')) return false;
+    for (const space of this.#spaces.values()) if (!this.#kernel.serves(space) && this.#meetingTopics(space).includes(topic)) return true;
+    return false;
+  }
+
+  /** Who holds which space for others may have changed: announce on, or only look up, each space's meeting points. */
+  #applyServing(): void {
+    if (!this.#swarm) return;
+    for (const space of this.#spaces.values()) {
+      const announce = this.#kernel.serves(space);
+      for (const topic of this.#meetingTopics(space)) this.#swarm.setAnnounce(topic, announce);
+    }
+  }
+
+  setServing(...args: Parameters<Membership['setServing']>): ReturnType<Membership['setServing']> {
+    return this.#membership.setServing(...args).then((info) => (this.#applyServing(), info));
+  }
+
+  /** Whether this node holds a space (or, without one, every space) for others, or only looks up its meeting points. */
+  async setQuiet(input: { space?: string; on: boolean }): Promise<SpaceInfo | undefined> {
+    if (input.space) {
+      const space = this.#kernel.space(input.space);
+      if (input.on) space.quiet = true;
+      else delete space.quiet;
+      saveSpace(this.home, space);
+    } else {
+      const { quiet: _quiet, ...rest } = this.config;
+      this.config = { ...rest, ...(input.on ? { quiet: true as const } : {}) };
+      saveConfig(this.home, this.config);
+    }
+    this.#applyServing();
+    return input.space ? this.#kernel.spaceInfo(this.#kernel.space(input.space)) : undefined;
   }
 
   /** Connect to peers and join all topics. */
@@ -2222,6 +2256,8 @@ export class WeaveNode implements Backend {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
     this.#content.prefetchBlobs();
+    // Who holds which space for others follows its maintainers' setting (and our own choice): found there, or not.
+    this.#applyServing();
     let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts() + (await this.#onboarding.collectHellos().catch(() => 0));
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.settleEpochKeys(space);
     changed += await this.#content.closeProposals();

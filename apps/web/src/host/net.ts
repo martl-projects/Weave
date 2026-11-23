@@ -1,4 +1,4 @@
-import { b64u, blobHash, createIdentity, type Did, type Replica, type SigningIdentity } from '@weave/core';
+import { b64u, blobHash, createIdentity, deliverTag, holdMessage, isWireItemV2, type Did, type Replica, type SigningIdentity } from '@weave/core';
 import { authKey, StorageClient, type BlobSource, type HeldByNode, type PeerSession2, type SpaceAccess, type TextSocket } from '@weave/net/browser';
 
 export * from '@weave/net/browser';
@@ -97,6 +97,10 @@ export class SwarmNode {
   constructor(replica: Replica, _options: unknown, blobs?: Blobs, access: SpaceAccess = { spaces: () => [] }) {
     this.replica = replica;
     this.#access = access;
+    // Who gets a space from the storage node follows its members: a join, an admission, a removal, a new device.
+    replica.onAppend((record) => {
+      if (!isWireItemV2(record.wire) || record.wire.e.class === 'control') this.#changed();
+    });
     this.#blobs = blobs;
     current = this;
     if (blobs) {
@@ -121,7 +125,12 @@ export class SwarmNode {
    * one list, so they travel on the first entry. Someone else's meeting point it only looks up, as this node would.
    */
   #held(): HeldByNode[] {
-    const held: HeldByNode[] = this.#access.spaces().map((s) => ({ space: s.space, auths: s.keys.map((key) => (s.blind ? key : authKey(key))), topics: [], ...(s.proof ? { proof: true as const } : {}) }));
+    const held: HeldByNode[] = this.#access.spaces().map((s) => {
+      const auths = s.keys.map((key) => (s.blind ? key : authKey(key)));
+      // Who may have it from the storage node (sync protocol 4): every key of its members, as hashes it can't read.
+      const to = s.proof || !auths[0] ? undefined : this.#access.deliverTo?.(s.space);
+      return { space: s.space, auths, topics: [], ...(s.proof ? { proof: true as const } : {}), ...(to ? { deliver: to.map((key) => deliverTag(auths[0], key)) } : {}) };
+    });
     if (held.length) {
       held[0].topics = [...this.#topics].filter(([, announce]) => announce).map(([topic]) => topic);
       held[0].looks = [...this.#topics].filter(([, announce]) => !announce).map(([topic]) => topic);
@@ -160,10 +169,12 @@ export class SwarmNode {
       socket.onClose(dropped);
       const client = await this.#signedIn(socket);
       const held = this.#held();
-      await client.hold(held);
+      await client.hold(held, this.#vouch(client));
       await link.afterHold?.(client);
       this.#sent = JSON.stringify(held);
-      const session = await client.sync(this.replica, this.#access, this.#blobs);
+      // Our own storage node, signed in as our account: it may have everything we hold (it can't read it).
+      const own: SpaceAccess = Object.create(this.#access, { mayReceive: { value: undefined } });
+      const session = await client.sync(this.replica, own, this.#blobs);
       this.sessions.add(session);
       for (const [hash, data] of this.#toSend) session.pushBlob(hash, data);
       this.#toSend.clear();
@@ -191,6 +202,13 @@ export class SwarmNode {
     else this.#toSend.set(hash, data);
   }
 
+  /** Our word that the storage node's holder key holds for us: signed with this node's key, which the others know as ours. */
+  #vouch(client: StorageClient): { key: Did; sig: string } | undefined {
+    const me = this.#access.identity?.();
+    if (!client.holder || !me) return undefined;
+    return { key: me.key, sig: b64u.encode(me.sign(holdMessage(client.holder))) };
+  }
+
   again(): void {
     this.#sent = '';
     this.#changed();
@@ -210,7 +228,7 @@ export class SwarmNode {
     try {
       const socket = await socketTo(link.url);
       const client = await this.#signedIn(socket);
-      await client.hold(held);
+      await client.hold(held, this.#vouch(client));
       await link.afterHold?.(client);
       this.#sent = text;
       client.close();
@@ -221,6 +239,13 @@ export class SwarmNode {
 
   async join(name: string, options: { announce?: boolean } = {}): Promise<void> {
     this.#topics.set(name, options.announce !== false);
+    this.#changed();
+  }
+
+  /** Announce on a topic, or only look it up (who holds a space for others changed): the storage node does it. */
+  setAnnounce(name: string, announce: boolean): void {
+    if (!this.#topics.has(name) || this.#topics.get(name) === announce) return;
+    this.#topics.set(name, announce);
     this.#changed();
   }
 

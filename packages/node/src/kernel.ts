@@ -1,5 +1,5 @@
-import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_WIDGET, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts } from '@weave/core';
-import type { HeldSpace, SpaceAccess, SwarmNode } from '@weave/net';
+import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_WIDGET, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts, holdMessage, publicKeyFromDid, sign, verify } from '@weave/core';
+import type { HeldSpace, PeerIdentity, SpaceAccess, SwarmNode } from '@weave/net';
 import { type Actor, type Admission, type BoardInfo, type FeedItem, type HomeSource, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type ProjectPage, type ProjectStatus, type ProposalInfo, type ReactionInfo, type ReplyInfo, type SpaceInfo, type SpaceRef, type ThreadInfo } from './backend.ts';
 import type { People } from './people.ts';
 import { BROWSER_PREFIX, CARRIED_STATE, NODE_PREFIX, RECENT_HOLD_MS, SELF_SCOPE } from './shared.ts';
@@ -105,7 +105,7 @@ export class Kernel {
   #boardKeysSeen = new Set<string>();
   /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
   keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, devicesOnly: _devicesOnly, ...keys } = space;
+    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, devicesOnly: _devicesOnly, quiet: _quiet, ...keys } = space;
     return keys;
   }
 
@@ -601,7 +601,90 @@ export class Kernel {
       // Behind the firewall, a peer learns the public side of us and of those it shares something with here, never
       // of everyone we know (a newcomer through a contact link would otherwise get our family's names and faces).
       publicFor: (shared: ReadonlySet<string>) => (this.node.config.firewall !== false ? this.#publicFor(shared) : undefined),
+      // Who we are on a connection: the key this node signs with.
+      identity: () => ({ key: this.node.identity.did, sign: (message) => sign(message, this.node.identity.keys.secretKey) }),
+      // A space goes only to those who may have it: its members (any live key of theirs), not whoever shows its key.
+      mayReceive: (scope, peer) => this.mayReceive(scope, peer),
+      deliverTo: (scope) => this.deliverTo(scope),
     };
+  }
+
+  /**
+   * The people who may get this space now, for a holder that can't read who its members are (a storage node, which
+   * tells a peer's person from the public keys it holds): its members, the two people of a direct chat, ourselves for
+   * our own space. Undefined: anyone who shows the key (a space we don't know yet).
+   */
+  deliverTo(scope: string): Did[] | undefined {
+    const me = this.node.identity.author;
+    if (scope === SELF_SCOPE) return [me];
+    const parsed = parseScope(scope);
+    if (!parsed) return [];
+    const direct = this.directs.get(parsed.id);
+    if (direct) return [me, direct.peer];
+    const space = this.core.spaces.get(parsed.id);
+    if (!space) return [];
+    const state = this.state(space);
+    if (!state.members.size) return undefined;
+    // Held for others by its maintainers alone: a member's holder gives it only to them.
+    if (state.serving === 'maintainers' && !state.maintainers.has(me)) return [...new Set([me, ...[...state.maintainers].filter((did) => state.members.has(did))])];
+    return [...state.members.keys()];
+  }
+
+  /**
+   * The person a peer on a connection acts for: the person of the key it proved, if that key may act for them now;
+   * for a holder (a storage node's key for an account), the person whose live key says it holds for them.
+   */
+  peerPerson(peer: PeerIdentity | undefined): Did | undefined {
+    if (!peer) return undefined;
+    const authority = this.node.replica.authority;
+    if (peer.by) {
+      if (!authority.isLive(peer.by.key)) return undefined;
+      const person = authority.personOf(peer.by.key);
+      try {
+        return verify(b64u.decode(peer.by.sig), holdMessage(peer.key), publicKeyFromDid(peer.by.key)) ? person : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    return authority.isLive(peer.key) ? authority.personOf(peer.key) : undefined;
+  }
+
+  /**
+   * May this peer have this space (sync protocol 4): our own person's keys have all of ours; a direct chat goes to its
+   * two people; any other space to its members. Who holds the key and isn't one (a link passed on, a key taken, someone
+   * removed) gets nothing: only their join is taken, which makes them one (SpaceAccess.fromBehind).
+   */
+  mayReceive(scope: string, peer: PeerIdentity | undefined): boolean {
+    const person = this.peerPerson(peer);
+    if (!person) return false;
+    if (person === this.node.identity.author) return true;
+    if (scope === SELF_SCOPE) return false;
+    const parsed = parseScope(scope);
+    if (!parsed) return false;
+    const direct = this.directs.get(parsed.id);
+    if (direct) return direct.peer === person;
+    const space = this.core.spaces.get(parsed.id);
+    if (!space) return false;
+    const state = this.state(space);
+    // A space we don't know yet (we just came in with its key: not even its creation is here) has nothing of others to
+    // give, only our join: we can't tell its members yet, and they can't let us in without it. Whoever shows its key may
+    // exchange with us until its history is here; from then on only its members.
+    if (!state.members.size) return true;
+    if (!state.members.has(person)) return false;
+    // Held for others by its maintainers alone: members meet only them, never one another.
+    if (state.serving === 'maintainers' && !state.maintainers.has(this.node.identity.author) && !state.maintainers.has(person)) return false;
+    return true;
+  }
+
+  /**
+   * Does this node hold this space for others: is it found on its meeting points? Not where its maintainers keep that
+   * to themselves and we aren't one; not where its person said this node doesn't (quiet). It still looks them up.
+   */
+  serves(space: StoredSpace): boolean {
+    if (space.kind === 'direct' || this.directs.has(space.id)) return true;
+    if (space.quiet || this.node.config.quiet) return false;
+    const state = this.state(space);
+    return state.serving !== 'maintainers' || state.maintainers.has(this.node.identity.author);
   }
 
   /** Whose public events a peer gets that shares these spaces with us (see SpaceAccess.publicFor). */
@@ -965,6 +1048,8 @@ export class Kernel {
       ...(this.core.homeHidden().has(space.id) ? { hiddenFromHome: true as const } : {}),
       ...(this.#mayInvite(space, state) ? { mayInvite: true as const } : {}),
       ...(space.devicesOnly ? { devicesOnly: true as const } : {}),
+      ...(state.serving ? { serving: state.serving } : {}),
+      ...(space.quiet ? { quiet: true as const } : {}),
     };
   }
 

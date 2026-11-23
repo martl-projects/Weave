@@ -1081,6 +1081,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
           <PeopleSettings project={project} info={info} spaces={spaces} members={members} meDid={meDid} admissions={info.maintainer ? (admissions ?? []) : []} />
           <SpacePhotoSettings space={project} members={members} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
+          <WhoHolds space={project} canSet={info.maintainer} />
           <OnlyOnComputers space={project} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
@@ -1228,6 +1229,43 @@ export function OnlyOnComputers({ space }: { space: SpaceInfo }) {
   );
 }
 
+// ---------------------------------------------------------------- who holds a space for others
+
+/**
+ * Who holds a space for others (sync protocol 4): everyone, or its maintainers alone, as those who manage it decide
+ * (everyone sees it); and this device's own choice to hand nothing out, only to look its meeting points up.
+ */
+export function WhoHolds({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
+  const { t } = useTexts();
+  const set = (who: 'everyone' | 'maintainers') => attempt(() => api('setServing', { space: space.id, who }).then(bump), t(`serving.set.${who}`, { space: space.name }));
+  const quiet = (on: boolean) => attempt(() => api('setQuiet', { space: space.id, on }).then(bump), t(on ? 'serving.quiet.on' : 'serving.quiet.off', { space: space.name }));
+  const current = space.serving ?? 'everyone';
+  return (
+    <fieldset>
+      <legend>{t('serving.legend')}</legend>
+      {(['everyone', 'maintainers'] as const).map((who) => (
+        <div key={who} className="field-row">
+          <input id={`serving-${space.id}-${who}`} type="radio" name={`serving-${space.id}`} checked={current === who} disabled={!canSet} onChange={() => void set(who)} />
+          <label htmlFor={`serving-${space.id}-${who}`}>
+            <span>
+              <b>{t(`serving.${who}`)}</b>
+              <span className="small"> · {t(`serving.${who}.detail`)}</span>
+            </span>
+          </label>
+        </div>
+      ))}
+      {current === 'maintainers' && <p className="small muted">{t('serving.maintainers.price')}</p>}
+      <div className="field-row">
+        <input id={`quiet-${space.id}`} type="checkbox" checked={!!space.quiet} onChange={(e) => void quiet(e.target.checked)} />
+        <label htmlFor={`quiet-${space.id}`}>
+          <b>{t('serving.quiet')}</b>
+        </label>
+        <Info>{t('serving.quiet.more')}</Info>
+      </div>
+    </fieldset>
+  );
+}
+
 // ---------------------------------------------------------------- what newcomers read
 
 const HISTORY_CHOICES: Array<NonNullable<SpaceInfo['history']>> = ['all', '30d', 'joining'];
@@ -1338,6 +1376,7 @@ export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; mem
     <Page title={<><Icon name="gear" /> {t('nav.settings')} · g/{group.name}</>}>
       <SpacePhotoSettings space={group} members={members} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
+      <WhoHolds space={group} canSet={group.founder === meDid} />
       <OnlyOnComputers space={group} />
       <VisitorsSettings space={group} canSet={group.founder === meDid} />
       <SpaceOwnership space={group} members={members} meDid={meDid} canClose={group.founder === meDid} />
@@ -1455,6 +1494,7 @@ export function CommunityAbout({ community, members, meDid }: { community: Space
       <CommunityRule community={community} canSet={info.moderator} />
       <SpacePhotoSettings space={community} members={members} canSet={info.moderator} />
       <NewcomerHistory space={community} canSet={info.moderator} />
+      <WhoHolds space={community} canSet={info.moderator} />
       <OnlyOnComputers space={community} />
       <VisitorsSettings space={community} canSet={info.moderator} />
       <SpaceOwnership space={community} members={members} meDid={meDid} canClose={info.moderator} />

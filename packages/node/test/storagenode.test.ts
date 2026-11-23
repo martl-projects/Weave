@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
-import { b64u, createIdentity, Replica, spaceTopics } from '@weave/core';
+import { b64u, createIdentity, deliverTag, holdMessage, Replica, sign, spaceTopics, type Did } from '@weave/core';
 import { authKey, duplexPair, PeerSession2, StorageClient, type HeldByNode, type SpaceAccess } from '@weave/net';
 import type { WeaveNode } from '../src/index.ts';
 import { StorageNode, type StorageNetwork } from '../src/storagenode.ts';
@@ -66,12 +66,21 @@ async function start(dir = mkdtempSync(join(tmpdir(), 'weave-storage-')), quota?
   return { node, dir, places, connect };
 }
 
-/** What a person hands their storage node of one group: hashes of its keys, never the keys. */
+/** What a person hands their storage node of one group: hashes of its keys, never the keys; and who gets it from there. */
 function heldOf(node: WeaveNode, name: string): HeldByNode {
   const space = stored(node, name);
   const epochs = Object.keys(space.keys).map(Number).sort((a, b) => b - a);
-  return { space: `group:${space.id}`, auths: epochs.map((e) => authKey(b64u.decode(space.keys[String(e)]))), topics: spaceTopics(space) };
+  const auths = epochs.map((e) => authKey(b64u.decode(space.keys[String(e)])));
+  const scope = `group:${space.id}`;
+  const to = node.sessionAccess().deliverTo?.(scope);
+  return { space: scope, auths, topics: spaceTopics(space), ...(to ? { deliver: to.map((key) => deliverTag(auths[0], key)) } : {}) };
 }
+
+/** The person's word that the storage node's holder key holds for them (sync protocol 4). */
+const vouchOf = (node: WeaveNode, holder: Did | undefined) => (holder ? { key: node.identity.did, sig: b64u.encode(sign(holdMessage(holder), node.identity.keys.secretKey)) } : undefined);
+
+/** Syncing with one's own storage node: it may have all (it can't read it). */
+const own = (node: WeaveNode): SpaceAccess => Object.create(node.sessionAccess(), { mayReceive: { value: undefined } });
 
 /** A peer on the network meets the account's place. */
 function meet(place: Place, peer: WeaveNode): () => void {
@@ -154,7 +163,7 @@ describe('a storage node', { timeout: 60_000 }, () => {
     const account = createIdentity();
     const client = await connect();
     await client.register(account, node.invite());
-    await client.hold([heldOf(lena, 'Climb')]);
+    await client.hold([heldOf(lena, 'Climb')], vouchOf(lena, client.holder));
     expect(places[0].joined.size).toBeGreaterThan(0);
     client.close();
 
@@ -166,7 +175,7 @@ describe('a storage node', { timeout: 60_000 }, () => {
 
     const back = await connect();
     await back.signIn(account);
-    const session = await back.sync(lena.replica, lena.sessionAccess());
+    const session = await back.sync(lena.replica, own(lena));
     await settle();
     session.close();
     expect((await lena.messages('Climb')).map((m) => m.text)).toContain('the rope is in the van');
@@ -178,7 +187,7 @@ describe('a storage node', { timeout: 60_000 }, () => {
     const account = createIdentity();
     const client = await first.connect();
     await client.register(account, first.node.invite());
-    await client.hold([heldOf(lena, 'Climb')]);
+    await client.hold([heldOf(lena, 'Climb')], vouchOf(lena, client.holder));
     await client.putBox(TOKEN, 'sealed keys');
     client.close();
     await first.node.close();
@@ -194,7 +203,7 @@ describe('a storage node', { timeout: 60_000 }, () => {
     const { node, connect, places } = await start(undefined, 1);
     const client = await connect();
     await client.register(createIdentity(), node.invite());
-    await client.hold([heldOf(lena, 'Climb')]);
+    await client.hold([heldOf(lena, 'Climb')], vouchOf(lena, client.holder));
     expect(await client.usage()).toMatchObject({ quota: 1, over: true });
     expect(places[0].access.spaces()).toEqual([]);
     expect(places[0].joined.size).toBe(0);

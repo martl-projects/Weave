@@ -78,6 +78,15 @@ export class SwarmNode {
     this.#timers.push(setTimeout(() => discovery.refresh({ client: true, server }).catch(() => {}), 1500).unref());
   }
 
+  /** Announce on a topic joined, or only look it up from now on (who holds a space for others changed). */
+  setAnnounce(name: string, announce: boolean): void {
+    const discovery = this.#discoveries.get(name);
+    if (!discovery || this.#lookOnly.has(name) === !announce) return;
+    if (announce) this.#lookOnly.delete(name);
+    else this.#lookOnly.add(name);
+    discovery.refresh({ client: true, server: announce }).catch(() => {});
+  }
+
   /** Stop announcing on and looking up a topic. */
   async leave(name: string): Promise<void> {
     if (!this.#discoveries.delete(name)) return;

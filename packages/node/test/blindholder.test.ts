@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { b64u, Replica } from '@weave/core';
+import { b64u, didFromPublicKey, generateKeyPair, holdMessage, Replica, sign } from '@weave/core';
 import { authKey, duplexPair, PeerSession2, type HeldSpace, type SpaceAccess } from '@weave/net';
 import type { WeaveNode } from '../src/index.ts';
 import { people, stored } from './helpers/people.ts';
@@ -18,6 +18,17 @@ const blindly = (node: WeaveNode, name: string): HeldSpace => {
   const space = stored(node, name);
   const keys = Object.keys(space.keys).map(Number).sort((a, b) => b - a).map((epoch) => authKey(b64u.decode(space.keys[String(epoch)])));
   return { space: `group:${space.id}`, keys, blind: true };
+};
+
+/**
+ * A holder's word for who it is (sync protocol 4): a key of its own, which `person` vouches for, as a storage node
+ * shows itself holding for an account. Without it, the people it carries a space between give it nothing.
+ */
+const holderFor = (person: WeaveNode): Pick<SpaceAccess, 'identity'> => {
+  const keys = generateKeyPair();
+  const key = didFromPublicKey(keys.publicKey);
+  const by = { key: person.identity.did, sig: b64u.encode(sign(holdMessage(key), person.identity.keys.secretKey)) };
+  return { identity: () => ({ key, sign: (message: Uint8Array) => sign(message, keys.secretKey), by }) };
 };
 
 function link(a: { replica: Replica; access: SpaceAccess }, b: WeaveNode): { sessions: [PeerSession2, PeerSession2]; close: () => void } {
@@ -43,7 +54,7 @@ describe('a blind holder', { timeout: 60_000 }, () => {
     await settle();
     c();
 
-    const holder = { replica: new Replica(), access: { spaces: () => [blindly(lena, 'Climb')] } };
+    const holder = { replica: new Replica(), access: { spaces: () => [blindly(lena, 'Climb')], ...holderFor(lena) } };
     await martl.say({ space: 'Climb', text: 'the rope is in the van' });
     const fromMartl = link(holder, martl);
     await settle();
@@ -70,7 +81,7 @@ describe('a blind holder', { timeout: 60_000 }, () => {
       r.close();
     }
     let held = blindly(lena, 'Climb');
-    const holder = { replica: new Replica(), access: { spaces: () => [held] } };
+    const holder = { replica: new Replica(), access: { spaces: () => [held], ...holderFor(lena) } };
     const scoped = () => holder.replica.events((r) => r.scope === held.space).length;
 
     // Bea is removed while Lena's tab is closed: the holder only knows the old key.
@@ -106,7 +117,7 @@ describe('a blind holder', { timeout: 60_000 }, () => {
     const [martl, lena] = [person('martl'), person('Lena')];
     await martl.createGroup('Climb');
     await lena.createGroup('Other');
-    const holder = { replica: new Replica(), access: { spaces: () => [{ ...blindly(lena, 'Other'), space: `group:${stored(martl, 'Climb').id}` }] } };
+    const holder = { replica: new Replica(), access: { spaces: () => [{ ...blindly(lena, 'Other'), space: `group:${stored(martl, 'Climb').id}` }], ...holderFor(lena) } };
     await martl.say({ space: 'Climb', text: 'not for you' });
     const l = link(holder, martl);
     await settle();

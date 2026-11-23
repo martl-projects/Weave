@@ -1,8 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { b64u, blobHash, MAX_BLOB, publicKeyFromDid, Replica, verify, type Did } from '@weave/core';
-import { LineChannel, PeerSession2, planMessage, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type SpaceAccess, type TextSocket } from '@weave/net';
+import { b64u, blobHash, deliverTag, didFromPublicKey, generateKeyPair, holdMessage, isDid, MAX_BLOB, publicKeyFromDid, Replica, sign, verify, type Did } from '@weave/core';
+import { LineChannel, PeerSession2, planMessage, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type PeerIdentity, type SpaceAccess, type TextSocket } from '@weave/net';
 import { BlobStore } from './blobstore.ts';
 import { SqliteStore } from './sqlitestore.ts';
 import { PlanStore } from './storageplans.ts';
@@ -16,6 +16,11 @@ import type { PushSubscriptionData, VapidKeys } from './webpush.ts';
  *
  * Accounts come by invitation. An account's id is a key of its own, not the person's identity.
  *
+ * Sync protocol 4: peers prove who they are, and a space goes only to who may have it. The node shows peers a key it
+ * holds for each account (`holder`), which one of the person's keys vouches for; and it gives a space only to the keys
+ * the person's browser listed for it (`deliver`: hashes, so the list names nobody to whoever reads it). Someone with a
+ * space's key and nothing else gets nothing here.
+ *
  * Blobs go by hash alone. What a blob is for lies in sealed events, so a node can't look for them itself: it keeps what
  * its person's browser hands it, and when the browser asks for one it hasn't got, it asks the peers and keeps that too.
  */
@@ -28,6 +33,8 @@ const MAX_BOX = 256 * 1024;
 const MAX_BOXES = 8;
 const MAX_SPACES = 5000;
 const MAX_KEYS = 64;
+/** Keys a space may be given to from here (members times their devices and agents). */
+const MAX_DELIVER = 20_000;
 /** Wrong tokens, proofs or invitations on one connection before it's closed. */
 const MAX_TRIES = 5;
 /** A ticket for the relay (relayTicket) is good this long, once. */
@@ -83,6 +90,8 @@ interface HeldRecord {
   topics: string[];
   looks?: string[];
   proof?: true;
+  /** Who gets the space from this node: deliverTag of each person who may (undefined: whoever shows its key). */
+  deliver?: string[];
 }
 
 /** Every topic of a list, and whether to be found there: where it's announced on anywhere, it is. */
@@ -96,6 +105,10 @@ function topicsOf(spaces: HeldRecord[]): Map<string, boolean> {
 interface AccountFile {
   id: Did;
   created: string;
+  /** The key this node shows peers as, holding for this account (made once). */
+  holder?: { did: Did; secret: string };
+  /** One of the person's keys saying the holder holds for them (holdMessage). */
+  vouch?: { key: Did; sig: string };
   quota?: number;
   spaces: HeldRecord[];
   /** Sealed boxes by the hash of their token. */
@@ -147,9 +160,10 @@ function validHold(spaces: unknown): HeldRecord[] | undefined {
     if (!s || !isText(s.space, 200) || !Array.isArray(s.auths) || !Array.isArray(s.topics)) return undefined;
     const looks = s.looks === undefined ? [] : s.looks;
     if (!Array.isArray(looks) || (s.proof !== undefined && s.proof !== true)) return undefined;
+    if (s.deliver !== undefined && (!Array.isArray(s.deliver) || s.deliver.length > MAX_DELIVER || !s.deliver.every((t) => isText(t, 64)))) return undefined;
     if (s.space === 'public' || !s.auths.length || s.auths.length > MAX_KEYS || s.topics.length > MAX_KEYS || looks.length > MAX_KEYS) return undefined;
     if (!s.auths.every((a) => isText(a, 64)) || !s.topics.every((t) => isText(t, 200)) || !looks.every((t) => isText(t, 200))) return undefined;
-    held.push({ space: s.space, auths: s.auths as string[], topics: s.topics as string[], ...(looks.length ? { looks: looks as string[] } : {}), ...(s.proof ? { proof: true as const } : {}) });
+    held.push({ space: s.space, auths: s.auths as string[], topics: s.topics as string[], ...(looks.length ? { looks: looks as string[] } : {}), ...(s.proof ? { proof: true as const } : {}), ...(s.deliver ? { deliver: s.deliver as string[] } : {}) });
   }
   return held;
 }
@@ -228,8 +242,27 @@ export class StorageNode {
       refresh = setTimeout(() => !this.#closing && this.#accounts.get(file.id) === account && account.network.refreshPublic?.(), 100);
       refresh.unref?.();
     });
-    // Strangers are turned away: only who shows one of these spaces gets anything.
-    account.network = this.#options.network(replica, { firewall: true, spaces: () => (account.over ? [] : this.#held(account)), publicFor: (shared) => this.#publicFor(account, shared) }, this.#fromPeers(account));
+    // The key this node shows peers as, for this account: made once.
+    if (!file.holder) {
+      const keys = generateKeyPair();
+      file.holder = { did: didFromPublicKey(keys.publicKey), secret: b64u.encode(keys.secretKey) };
+      if (existsSync(join(dir, 'account.json'))) writeJson(join(dir, 'account.json'), file);
+    }
+    // Strangers are turned away: only who shows one of these spaces gets anything, and of a space only who may have it.
+    account.network = this.#options.network(
+      replica,
+      {
+        firewall: true,
+        spaces: () => (account.over ? [] : this.#held(account)),
+        publicFor: (shared) => this.#publicFor(account, shared),
+        identity: () => this.#identity(account),
+        mayReceive: (space, peer) => this.#mayReceive(account, space, peer),
+        // From someone who shows a space's key but isn't on its list yet: a few control events (their join), taken
+        // unread. The node can't tell a join from anything else; the person's browser can, and lets them in or not.
+        fromBehind: () => true,
+      },
+      this.#fromPeers(account),
+    );
     this.#accounts.set(file.id, account);
     for (const hash of Object.keys(file.boxes)) this.#boxes.set(hash, file.id);
     for (const address of Object.keys(file.push ?? {})) this.#pushes.set(address, file.id);
@@ -247,7 +280,44 @@ export class StorageNode {
   #publicFor(account: Account, shared: ReadonlySet<string>): (author: Did) => boolean {
     // Public is shared with everyone: who wrote there says nothing of whom the peer may see.
     const seen = [...shared, SELF_SCOPE].filter((scope) => scope !== 'public');
-    return (author) => seen.some((scope) => account.authors.get(scope)?.has(author));
+    // And the person it holds for, as the key that vouched for it says: a browser just come with the words has written
+    // nothing in its own space yet, and its new key must reach the person's other devices for them to let it in.
+    const vouch = account.file.vouch?.key;
+    const owner = vouch ? account.replica.authority.personOf(vouch) : undefined;
+    return (author) => author === owner || seen.some((scope) => account.authors.get(scope)?.has(author));
+  }
+
+  /** Who this node is to peers, for an account: its holder key, and the person's word that it holds for them. */
+  #identity(account: Account): ReturnType<NonNullable<SpaceAccess['identity']>> | undefined {
+    const holder = account.file.holder;
+    if (!holder) return undefined;
+    const secret = b64u.decode(holder.secret);
+    return { key: holder.did, sign: (message) => sign(message, secret), ...(account.file.vouch ? { by: account.file.vouch } : {}) };
+  }
+
+  /**
+   * May a peer get a space from this node: only someone the person's browser listed for it. Who a key acts for, the
+   * node reads from the public keys it holds (identity, delegations: signed, and readable without any space); a holder
+   * for someone acts for the person whose key vouched for it. A space listed without a list (one the browser doesn't
+   * know yet) goes to who shows its key.
+   */
+  #mayReceive(account: Account, space: string, peer: PeerIdentity | undefined): boolean {
+    const held = account.file.spaces.find((s) => s.space === space);
+    if (!held) return false;
+    if (!held.deliver) return true;
+    if (!peer) return false;
+    const authority = account.replica.authority;
+    let key = peer.key;
+    if (peer.by) {
+      try {
+        if (!verify(b64u.decode(peer.by.sig), holdMessage(peer.key), publicKeyFromDid(peer.by.key))) return false;
+      } catch {
+        return false;
+      }
+      key = peer.by.key;
+    }
+    if (!authority.isLive(key)) return false;
+    return held.deliver.includes(deliverTag(b64u.decode(held.auths[0]), authority.personOf(key)));
   }
 
   /** Keep a blob, if it is what it says and there's room. */
@@ -491,12 +561,12 @@ export class StorageNode {
           if (!isText(m.invite, 200) || !this.#takeInvite(m.invite)) return no('that invitation is not valid');
           account = await this.#start({ id: m.id, created: new Date().toISOString(), spaces: [], boxes: {} });
           this.#save(account);
-          return channel.send({ t: 'ok' });
+          return channel.send({ t: 'ok', holder: account.file.holder!.did });
         }
         case 'signin': {
           if (!proved(m.id, m.sig) || !this.#accounts.has(m.id)) return no('no such account, or the wrong key');
           account = this.#accounts.get(m.id);
-          return channel.send({ t: 'ok' });
+          return channel.send({ t: 'ok', ...(account?.file.holder ? { holder: account.file.holder.did } : {}) });
         }
         // Onboarding links: anyone with a code may look and take; only a planner, as themselves, puts and revokes.
         case 'plan.get': {
@@ -539,6 +609,22 @@ export class StorageNode {
         case 'hold': {
           const spaces = validHold(m.spaces);
           if (!spaces) return no('that is not a list of spaces');
+          // The person's word that this node's holder key holds for them: kept if it is what it says.
+          if (m.vouch !== undefined) {
+            const vouch = fieldsOf(m.vouch);
+            if (!isDid(vouch.key) || !isText(vouch.sig, 200) || !mine.file.holder) return no('that is not a word for the holder');
+            let good = false;
+            try {
+              good = verify(b64u.decode(vouch.sig), holdMessage(mine.file.holder.did), publicKeyFromDid(vouch.key));
+            } catch {
+              good = false;
+            }
+            if (!good) return no('that is not a word for the holder');
+            const changed = mine.file.vouch?.key !== vouch.key;
+            mine.file.vouch = { key: vouch.key, sig: vouch.sig };
+            // Whose public side peers get includes the person it holds for: told again.
+            if (changed) mine.network.refreshPublic?.();
+          }
           await this.#hold(mine, spaces);
           return channel.send({ t: 'ok' });
         }

@@ -1,4 +1,4 @@
-import { b64u, sign, utf8, type Did, type Replica, type SigningIdentity } from '@weave/core';
+import { b64u, isDid, sign, utf8, type Did, type Replica, type SigningIdentity } from '@weave/core';
 import type { BlobSource } from './session.ts';
 import { PeerSession2, type PeerStream, type SpaceAccess } from './session2.ts';
 import { wsPeerStream, type TextSocket } from './wspeer.ts';
@@ -9,8 +9,11 @@ import { wsPeerStream, type TextSocket } from './wspeer.ts';
  *
  *   open {token}                 the sealed box a token opens (a new device: nothing else is needed for this)
  *   register {id, sig, invite}   a new account; `id` is a key of its own, not the person's identity
- *   signin {id, sig}             sig: the account key over "weave/storage/signin/v1" ‖ this connection's handshake hash
- *   hold {spaces}                what to hold: per space its auth keys and topics, the whole list each time
+ *   signin {id, sig}             sig: the account key over "weave/storage/signin/v1" ‖ this connection's handshake hash;
+ *                                both answer with `holder`, the key the node shows peers as, holding for this account
+ *   hold {spaces, vouch?}        what to hold: per space its auth keys and topics, the whole list each time, and who
+ *                                gets it from the node (`deliver`: deliverTag of each key); `vouch {key, sig}`: one of
+ *                                the person's keys says the holder holds for them (holdMessage)
  *   box {token, data}            keep a sealed box under a token; unbox {token} lets it go
  *   usage                        bytes used and allowed
  *   delete                       the account and everything in it go, now
@@ -29,6 +32,8 @@ export interface HeldByNode {
   looks?: string[];
   /** Not a space: a contact link's meeting point, which only lets the peer in. Nothing of it is synced. */
   proof?: true;
+  /** Who gets it from the node: deliverTag of every person who may (undefined: whoever shows its key). */
+  deliver?: string[];
 }
 
 export interface StorageUsage {
@@ -222,16 +227,21 @@ export class StorageClient {
     return (await this.#ask({ t: 'open', token: b64u.encode(token) })).data as string | undefined;
   }
 
+  /** The key the node shows peers as, holding for this account (a node before protocol 4 has none). */
+  holder?: Did;
+
   async register(account: SigningIdentity, invite: string): Promise<void> {
-    await this.#ask({ t: 'register', ...this.#proof(account), invite });
+    const { holder } = await this.#ask({ t: 'register', ...this.#proof(account), invite });
+    if (isDid(holder)) this.holder = holder;
   }
 
   async signIn(account: SigningIdentity): Promise<void> {
-    await this.#ask({ t: 'signin', ...this.#proof(account) });
+    const { holder } = await this.#ask({ t: 'signin', ...this.#proof(account) });
+    if (isDid(holder)) this.holder = holder;
   }
 
-  async hold(spaces: HeldByNode[]): Promise<void> {
-    await this.#ask({ t: 'hold', spaces: spaces.map((s) => ({ space: s.space, auths: s.auths.map((a) => b64u.encode(a)), topics: s.topics, ...(s.looks?.length ? { looks: s.looks } : {}), ...(s.proof ? { proof: true } : {}) })) });
+  async hold(spaces: HeldByNode[], vouch?: { key: Did; sig: string }): Promise<void> {
+    await this.#ask({ t: 'hold', spaces: spaces.map((s) => ({ space: s.space, auths: s.auths.map((a) => b64u.encode(a)), topics: s.topics, ...(s.looks?.length ? { looks: s.looks } : {}), ...(s.proof ? { proof: true } : {}), ...(s.deliver ? { deliver: s.deliver } : {}) })), ...(vouch ? { vouch } : {}) });
   }
 
   async putBox(token: Uint8Array, data: string): Promise<void> {

@@ -220,6 +220,21 @@ export class Authority {
     return this.#rootOf.get(key) ?? (this.#people.has(key) ? key : this.grant(key)?.author) ?? key;
   }
 
+  /**
+   * May this key act for its person now: a root not retired (a person's own identifier, if they never published
+   * identity events), or a device or agent key neither revoked nor cut off where it came from. For who a peer is on
+   * a connection (sync), not for events: those are judged by what they say (check).
+   */
+  isLive(key: Did): boolean {
+    const person = this.personOf(key);
+    if (person === key || this.#rootOf.has(key)) {
+      const state = this.keys(person);
+      return key === state.root || !state.retired.has(key);
+    }
+    const grant = this.grant(key);
+    return !!grant && grant.revokedAfter === undefined && this.#sourceValid(grant);
+  }
+
   /** Every encryption key a person named, oldest first. */
   encryptionKeys(person: Did): Did[] {
     return this.keys(person).encs;

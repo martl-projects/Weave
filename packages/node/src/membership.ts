@@ -1,4 +1,4 @@
-import { type BoardRight, type Did, HISTORIES, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_INVITE_CLOSE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, parseBlobRef, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
+import { type BoardRight, type Did, HISTORIES, KIND_SERVING, type HistorySetting, type Json, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_CLOSE, KIND_DECLINE, KIND_HANDOVER, KIND_HISTORY, KIND_INVITE, KIND_INVITE_CLOSE, KIND_JOIN, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_PROJECT_GROUP, KIND_REMOVE, KIND_RULE, KIND_SPACE_CREATE, KIND_VISITORS, SERVICE_PREFIX, type SpaceKind, type VisitorRule, WeaveError, type WeaveRecord, decodeInvite, decodeKnock, encodeInvite, encodeKnock, gift, inviteKeys, inviteRightsOf, isDid, isInviteLink, isKnockLink, joinProof, knockFor, mayDo, open, openKnock, parseVisitorRule, parseBlobRef, peekInvite, peekKnock, rekey, sealFor, spaceScope, spaceTopics } from '@weave/core';
 import { type Admission, type CommunityInfo, type InviteLook, type InviteOptions, type KnockInfo, type MemberInfo, type ProjectInfo, type SpaceInfo, noAgentError } from './backend.ts';
 import type { StoredSpace } from './spacestore.ts';
 import type { Recipient } from '@weave/core';
@@ -355,6 +355,17 @@ export class Membership {
     if (!mayDo(state, this.node.identity.author, 'manage').ok)
       throw new WeaveError('daemon.history.manage.only', { space: space.name, kind: space.kind }, space.kind === 'group' ? `only the owner of ${space.name} decides what newcomers read` : `only the ${space.kind === 'community' ? 'moderators' : 'maintainers'} of ${space.name} decide what newcomers read`);
     if ((state.history?.value ?? 'all') !== input.history) this.node.replica.write(this.node.identity, sealFor(this.core.managed.cipher(space), { kind: KIND_HISTORY, body: { history: input.history } }));
+    return this.core.kernel.spaceInfo(space);
+  }
+
+  /** Who holds a space for others: everyone (the default), or its maintainers alone. Those who manage it decide. */
+  async setServing(input: { space: string; who: 'everyone' | 'maintainers' }): Promise<SpaceInfo> {
+    const space = this.core.kernel.space(input.space);
+    const state = this.core.kernel.state(space);
+    if (space.kind === 'direct') throw new WeaveError('daemon.serving.direct', undefined, 'a direct chat is between two people: both hold it');
+    if (input.who !== 'everyone' && input.who !== 'maintainers') throw new WeaveError('daemon.serving.values', undefined, 'who holds it for others: everyone or maintainers');
+    if (!mayDo(state, this.node.identity.author, 'manage').ok) throw new WeaveError('daemon.serving.manage.only', { space: space.name }, `only those who manage ${space.name} decide who holds it for others`);
+    if ((state.serving ?? 'everyone') !== input.who) this.node.replica.write(this.node.identity, sealFor(this.core.managed.cipher(space), { kind: KIND_SERVING, body: { who: input.who } }));
     return this.core.kernel.spaceInfo(space);
   }
 

@@ -40,6 +40,11 @@ export interface Config {
   /** false: peers that share nothing with this node and hold none of its links get in all the same (as before 0.27). */
   firewall?: false;
   /**
+   * This node hands out to nobody it doesn't seek out itself: it only looks up its spaces' meeting points, never
+   * announces on them (a phone, a slow line, someone who'd rather not show where they are). Per space: StoredSpace.quiet.
+   */
+  quiet?: true;
+  /**
    * This node is its person's front door: it's found at the public meeting point (the one `weave contact --door` links
    * give out) and lets in whoever comes through it. Unset: an always-on node is one, a person's computer isn't.
    */
@@ -53,7 +58,7 @@ export interface Config {
 
 /** What this build reads of the config; anything else in the file is kept as it is (see loadConfig). */
 const KNOWN: ReadonlySet<string> = new Set<keyof Config>([
-  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language', 'firewall', 'frontDoor', 'agentApi',
+  'topics', 'bootstrap', 'pendingMemberships', 'agentsOffered', 'attestor', 'archive', 'updates', 'scim', 'standby', 'generation', 'console', 'followClaudeCode', 'spaceFolders', 'desk', 'language', 'firewall', 'quiet', 'frontDoor', 'agentApi',
 ]);
 
 export function loadConfig(home: Home): Config {
@@ -92,6 +97,7 @@ export function loadConfig(home: Home): Config {
     ...(stored.desk ? { desk: stored.desk } : {}),
     ...(isLanguage(stored.language) ? { language: stored.language } : {}),
     ...(stored.firewall === false ? { firewall: false as const } : {}),
+    ...(stored.quiet === true ? { quiet: true as const } : {}),
     ...(typeof stored.frontDoor === 'boolean' ? { frontDoor: stored.frontDoor } : {}),
   };
 }
