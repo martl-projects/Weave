@@ -74,6 +74,28 @@ describe('an agent key with a scope', () => {
     expect((await remote.spaces()).length).toBe(2);
   });
 
+  it('can be given boards one by one: then a board not named is out, whatever its area', async () => {
+    const { martl, url } = await setup();
+    const remote = remoteAgent(url, (await martl.agentToken({ name: 'vm-coder', machine: 'build-vm-1' })).token!);
+    const idea = await martl.submit({ space: 'Studio', board: 'ideas', title: 'An idea' });
+    const issue = await martl.openIssue({ project: 'Studio', title: 'A bug' });
+
+    // Issues readable and writable, ideas not at all, chat read only.
+    await martl.setAgentScope({ name: 'vm-coder', space: 'Studio', access: { read: ['board:issues', 'chat'], write: ['board:issues'] } });
+    expect((await martl.agentScope('vm-coder'))!.spaces[(await martl.spaces()).find((s) => s.name === 'Studio')!.id]).toEqual({ read: ['chat', 'board:issues'], write: ['board:issues'] });
+    await expect(remote.post(issue.id)).resolves.toMatchObject({ title: 'A bug' });
+    await expect(remote.post(idea.id)).rejects.toThrow(/doesn't reach/);
+    expect((await remote.posts({ space: 'Studio' })).map((p) => p.title)).toEqual(['A bug']);
+    await expect(remote.openIssue({ project: 'Studio', title: 'Found another' })).resolves.toMatchObject({ title: 'Found another' });
+    await expect(remote.submit({ space: 'Studio', board: 'ideas', title: 'Sneaky idea' })).rejects.toThrow(/doesn't reach/);
+    await expect(remote.messages('Studio')).resolves.toBeDefined();
+    await expect(remote.say({ space: 'Studio', text: 'hi' })).rejects.toThrow(/doesn't reach/);
+
+    // Ideas given too: now it may post there.
+    await martl.setAgentScope({ name: 'vm-coder', space: 'Studio', access: { read: ['board:issues', 'chat'], write: ['board:issues', 'board:ideas'] } });
+    await expect(remote.submit({ space: 'Studio', board: 'ideas', title: 'Allowed idea' })).resolves.toMatchObject({ title: 'Allowed idea' });
+  });
+
   it('makes tokens per machine, lists them without the token, and ends one machine alone', async () => {
     const { martl, url } = await setup();
     const vm1 = (await martl.agentToken({ name: 'vm-coder', machine: '  build-vm-1 ' })).token!;

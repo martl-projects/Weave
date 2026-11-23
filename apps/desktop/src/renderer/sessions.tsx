@@ -5,7 +5,7 @@ import type { ClaudeCodeFollow, Profile, SessionInfo, SpaceInfo } from '@weave/n
 import { Icon } from './icons.tsx';
 import { Page } from './views.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
-import { attempt, BlobImage, Modal } from './ui.tsx';
+import { attempt, Modal, ProjectIcon, Sprite } from './ui.tsx';
 import { t, useTexts } from './texts.tsx';
 import { MachineFrames } from './machines.tsx';
 
@@ -340,13 +340,22 @@ export function SessionMap({ sessions, projects, onNew, head, foot, onProject, p
           return (
             <div key={id} className={`map-project${p.id === ANY ? ' any' : ''}`} data-row={p.id} style={push[p.id] ? { marginTop: push[p.id] } : undefined} {...ends(id)}>
               {port(id)}
-              {p.icon ? <BlobImage className="map-icon" src={p.icon} /> : null}
+              {p.id !== ANY && (p.icon ? <ProjectIcon className="map-icon" id={p.id} icon={p.icon} size={16} /> : <Sprite className="map-icon" seed={p.id} size={16} />)}
               <span className="grow">{p.name}</span>
               {n > 0 && <span className="small">{n}</span>}
               {onProject && p.id !== ANY && (
-                <button className="map-gear" title={projectTitle?.(p.name)} aria-label={projectTitle?.(p.name)} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => (e.stopPropagation(), onProject(p.id))}>
+                <span
+                  className="map-gear"
+                  role="button"
+                  tabIndex={0}
+                  title={projectTitle?.(p.name)}
+                  aria-label={projectTitle?.(p.name)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => (e.stopPropagation(), onProject(p.id))}
+                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onProject(p.id))}
+                >
                   <Icon name="gear" />
-                </button>
+                </span>
               )}
             </div>
           );

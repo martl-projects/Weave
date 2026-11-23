@@ -1,9 +1,11 @@
-import { useState } from 'react';
-import type { AgentScope, AgentTokenInfo, ChatInfo, SessionInfo, SpaceInfo, Whoami } from '@weave/node/client';
+import { useEffect, useState } from 'react';
+import { allows, areaOfPost } from '@weave/core';
+import type { AgentScope, AgentTokenInfo, BoardInfo, ChatInfo, SessionInfo, SpaceInfo, Whoami } from '@weave/node/client';
+import { GroupIcon } from './avatar-editor.tsx';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
 import { SessionMap } from './sessions.tsx';
-import { attempt, Modal } from './ui.tsx';
+import { attempt, Avatar, Modal, ProjectIcon, Sprite } from './ui.tsx';
 import { useTexts } from './texts.tsx';
 
 /*
@@ -12,9 +14,6 @@ import { useTexts } from './texts.tsx';
  * may use everything; a machine connected with an agent key uses only the spaces given to that key, each with what it
  * may read and write there (Add a space). A key with no space given yet may use every space, as before.
  */
-
-const AREAS = ['posts', 'issues', 'chat', 'releases', 'votes'] as const;
-type Area = (typeof AREAS)[number];
 
 interface Frame {
   key: string;
@@ -56,7 +55,6 @@ export function MachineFrames({ sessions, spaces, onNew }: { sessions: SessionIn
 
   /** A space of a scope by id: a group or project, or a friend's direct chat. */
   const spaceName = (id: string) => spaces.find((s) => s.id === id)?.name ?? chats?.find((c) => c.space.id === id)?.peer.name ?? id.slice(0, 8);
-  const spaceIcon = (id: string) => (spaces.find((s) => s.id === id)?.kind === 'group' ? 'users' : chats?.some((c) => c.space.id === id) ? 'user' : 'home');
 
   return (
     <div className="machine-frames">
@@ -91,7 +89,7 @@ export function MachineFrames({ sessions, spaces, onNew }: { sessions: SessionIn
                     {!scope && <div className="small muted">{t('machine.all.spaces')}</div>}
                     {others.map((id) => (
                       <button key={id} className="machine-space" onClick={() => setEditing({ agent: frame.agent!, space: id })}>
-                        <Icon name={spaceIcon(id)} /> {spaceName(id)}
+                        <SpaceIcon id={id} spaces={spaces} chats={chats ?? []} /> {spaceName(id)}
                       </button>
                     ))}
                     <button className="machine-space add" onClick={() => setEditing({ agent: frame.agent! })}>
@@ -115,7 +113,20 @@ export function MachineFrames({ sessions, spaces, onNew }: { sessions: SessionIn
   );
 }
 
-/** What a key may read and write in one space: pick the space (when adding), then the areas. */
+/** A space's picture: a friend's avatar, a group's photo, a project's icon, or the sprite its id makes. */
+function SpaceIcon({ id, spaces, chats, size = 16 }: { id: string; spaces: SpaceInfo[]; chats: ChatInfo[]; size?: number }) {
+  const chat = chats.find((c) => c.space.id === id);
+  const space = spaces.find((s) => s.id === id);
+  if (chat) return <Avatar did={chat.peer.did} size={size} />;
+  if (space?.kind === 'group') return <GroupIcon space={space} size={size} />;
+  if (space?.icon) return <ProjectIcon id={space.id} icon={space.icon} size={size} />;
+  return <Sprite seed={id} size={size} />;
+}
+
+/** A row of the rights dialog: the chat, or one board by name. */
+type Row = 'chat' | `board:${string}`;
+
+/** What a key may read and write in one space: pick the space (when adding), then board by board, and the chat. */
 function SpaceRightsDialog({ agent, space, scope, spaces, chats, onClose }: { agent: string; space?: string; scope?: AgentScope; spaces: SpaceInfo[]; chats: ChatInfo[]; onClose(): void }) {
   const { t } = useTexts();
   const choices = [
@@ -123,21 +134,31 @@ function SpaceRightsDialog({ agent, space, scope, spaces, chats, onClose }: { ag
     ...chats.filter((c) => c.friend).map((c) => ({ id: c.space.id, name: c.peer.name ?? c.peer.did.slice(8, 20), kind: 'person' })),
   ].filter((c) => c.id === space || !scope?.spaces[c.id]);
   const [chosen, setChosen] = useState(space ?? '');
-  const was = space ? scope?.spaces[space] : undefined;
   const isChat = chats.some((c) => c.space.id === chosen);
-  const areas: readonly Area[] = isChat ? ['chat'] : AREAS;
-  const [read, setRead] = useState<Set<Area>>(new Set(was?.read ?? (isChat ? ['chat'] : ['posts', 'issues'])));
-  const [write, setWrite] = useState<Set<Area>>(new Set(was?.write ?? (isChat ? [] : ['posts'])));
-  const flip = (set: Set<Area>, setter: (s: Set<Area>) => void, area: Area) => {
+  const { data: boards } = useApi(() => (chosen && !isChat ? api<BoardInfo[]>('boards', chosen) : Promise.resolve([] as BoardInfo[])), [chosen, isChat]);
+  const rows: Array<{ row: Row; label: string; board?: BoardInfo }> = [...(boards ?? []).map((b) => ({ row: `board:${b.name}` as Row, label: b.title || b.name, board: b })), { row: 'chat' as Row, label: t('machine.area.chat') }];
+  const [read, setRead] = useState<Set<Row>>(new Set());
+  const [write, setWrite] = useState<Set<Row>>(new Set());
+  // What it may do now, row by row (a key given areas before boards counts by area); a new space: read everything, write ideas.
+  useEffect(() => {
+    if (!chosen || (!isChat && !boards)) return;
+    const was = scope?.spaces[chosen];
+    const may = (r: (typeof rows)[number], how: 'read' | 'write') =>
+      was ? (r.row === 'chat' ? allows(scope, chosen, 'chat', how) : allows(scope, chosen, areaOfPost({ type: r.board?.type === 'issues' ? 'issue' : r.board?.type === 'proposals' ? 'proposal' : 'post', board: r.board?.name }), how, r.board?.name)) : how === 'read' ? true : r.row === 'board:ideas';
+    setRead(new Set(rows.filter((r) => may(r, 'read')).map((r) => r.row)));
+    setWrite(new Set(rows.filter((r) => may(r, 'write')).map((r) => r.row)));
+  }, [chosen, isChat, boards]);
+  const flip = (set: Set<Row>, setter: (s: Set<Row>) => void, row: Row) => {
     const next = new Set(set);
-    if (next.has(area)) next.delete(area);
-    else next.add(area);
+    if (next.has(row)) next.delete(row);
+    else next.add(row);
     setter(next);
   };
   const name = choices.find((c) => c.id === chosen)?.name ?? '';
+  const shown = new Set(rows.map((r) => r.row));
   const save = () =>
     void attempt(
-      () => api('setAgentScope', { name: agent, space: chosen, access: { read: [...read].filter((a) => areas.includes(a)), write: [...write].filter((a) => areas.includes(a)) } }).then(() => (bump(), onClose())),
+      () => api('setAgentScope', { name: agent, space: chosen, access: { read: [...read, ...write].filter((r) => shown.has(r)), write: [...write].filter((r) => shown.has(r)) } }).then(() => (bump(), onClose())),
       t('machine.rights.saved', { agent, space: name }),
     );
   const remove = () => void attempt(() => api('setAgentScope', { name: agent, space: chosen, access: null }).then(() => (bump(), onClose())), t('machine.rights.removed', { agent, space: name }));
@@ -169,22 +190,27 @@ function SpaceRightsDialog({ agent, space, scope, spaces, chats, onClose }: { ag
         <table className="rights">
           <thead>
             <tr>
-              <th />
+              <th className="rights-space">
+                <SpaceIcon id={chosen} spaces={spaces} chats={chats} size={20} /> {name}
+              </th>
               <th>{t('machine.read')}</th>
               <th>{t('machine.write')}</th>
             </tr>
           </thead>
           <tbody>
-            {areas.map((area) => (
-              <tr key={area}>
-                <td>{t(`machine.area.${area}`)}</td>
+            {rows.map(({ row, label, board }) => (
+              <tr key={row}>
                 <td>
-                  <input type="checkbox" id={`read-${area}`} checked={read.has(area) || write.has(area)} disabled={write.has(area)} onChange={() => flip(read, setRead, area)} />
-                  <label htmlFor={`read-${area}`} title={`${t(`machine.area.${area}`)}: ${t('machine.read')}`} />
+                  {label}
+                  {board && board.type !== 'posts' && board.name !== board.type && <span className="small muted"> · {t(`machine.board.${board.type}`)}</span>}
                 </td>
                 <td>
-                  <input type="checkbox" id={`write-${area}`} checked={write.has(area)} onChange={() => flip(write, setWrite, area)} />
-                  <label htmlFor={`write-${area}`} title={`${t(`machine.area.${area}`)}: ${t('machine.write')}`} />
+                  <input type="checkbox" id={`read-${row}`} checked={read.has(row) || write.has(row)} disabled={write.has(row)} onChange={() => flip(read, setRead, row)} />
+                  <label htmlFor={`read-${row}`} title={`${label}: ${t('machine.read')}`} />
+                </td>
+                <td>
+                  <input type="checkbox" id={`write-${row}`} checked={write.has(row)} onChange={() => flip(write, setWrite, row)} />
+                  <label htmlFor={`write-${row}`} title={`${label}: ${t('machine.write')}`} />
                 </td>
               </tr>
             ))}
@@ -221,8 +247,13 @@ function ConnectDialog({ onClose }: { onClose(): void }) {
     setToken(answer.result.token);
     bump();
   };
+  // How the VM reaches this computer's agent API: directly (LAN, Tailscale, WireGuard; the usual way with Remote
+  // Control, where you start Claude Code on the VM yourself), or through an SSH tunnel from here.
+  const [way, setWay] = useState<'direct' | 'ssh'>('direct');
+  const [address, setAddress] = useState('');
   const host = machine.trim() || 'my-vm';
-  const steps = token ? `ssh -R 7712:127.0.0.1:7712 ${host}\nclaude mcp add weave -- weave mcp --api http://127.0.0.1:7712 --token ${token}` : '';
+  const api_ = way === 'ssh' ? 'http://127.0.0.1:7712' : `http://${address.trim() || '<this-computer>'}:7712`;
+  const steps = token ? `${way === 'ssh' ? `ssh -R 7712:127.0.0.1:7712 ${host}\n` : ''}claude mcp add weave -- weave mcp --api ${api_} --token ${token}` : '';
   return (
     <Modal title={t('machine.connect.title')} subtitle={token ? t('machine.connect.once') : t('machine.connect.about')} onClose={onClose} wide>
       {!token && (
@@ -247,8 +278,25 @@ function ConnectDialog({ onClose }: { onClose(): void }) {
       )}
       {token && (
         <>
+          <div className="field">
+            {t('machine.connect.way')}
+            <div>
+              <input type="radio" id="way-direct" name="way" checked={way === 'direct'} onChange={() => setWay('direct')} />
+              <label htmlFor="way-direct">{t('machine.connect.direct')}</label>
+            </div>
+            <div>
+              <input type="radio" id="way-ssh" name="way" checked={way === 'ssh'} onChange={() => setWay('ssh')} />
+              <label htmlFor="way-ssh">{t('machine.connect.ssh')}</label>
+            </div>
+          </div>
+          {way === 'direct' && (
+            <label className="field">
+              {t('machine.connect.address')}
+              <input value={address} maxLength={200} placeholder={t('machine.connect.address.example')} onChange={(e) => setAddress(e.target.value)} />
+            </label>
+          )}
           <pre className="machine-steps">{steps}</pre>
-          <p className="small">{t('machine.connect.api')}</p>
+          <p className="small">{t(way === 'ssh' ? 'machine.connect.api.ssh' : 'machine.connect.api.direct')}</p>
         </>
       )}
       <div className="buttons">

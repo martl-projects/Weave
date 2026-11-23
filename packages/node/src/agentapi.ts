@@ -1,6 +1,6 @@
 import type { Did } from '@weave/core';
 import type { Backend, ChatInfo, FeedItem, PostInfo, RpcMethod, SessionRef } from './backend.ts';
-import { allows, areaOfKind, areaOfPost, type AgentScope, type Area } from './agentscope.ts';
+import { allows, areaOfPost, itemAllowed, type AgentScope, type Area } from './agentscope.ts';
 
 /*
  * Agent tokens (`weave agent token <name>`): a bearer token bound to one agent key, for a harness that reaches a node
@@ -50,17 +50,17 @@ const outOfScope = (what: string) => new Error(`this agent's key doesn't reach $
 const chatVisible = (grant: AgentGrant, space: string | undefined): boolean => (grant.scope ? allows(grant.scope, space, 'chat', 'read') : grant.directChats);
 
 /** Is this feed or live item somewhere the agent doesn't read? */
-const itemHidden = (item: Pick<FeedItem, 'kind' | 'space' | 'private'>, grant: AgentGrant): boolean => {
+const itemHidden = (item: Pick<FeedItem, 'kind' | 'space' | 'private' | 'body'>, grant: AgentGrant): boolean => {
   if (item.private === true) return true;
   if (item.space?.kind === 'direct') return !chatVisible(grant, item.space.id);
-  return !!grant.scope && !!item.space && !allows(grant.scope, item.space.id, areaOfKind(item.kind), 'read');
+  return !!grant.scope && !!item.space && !itemAllowed(grant.scope, item);
 };
 
 /** Is this post somewhere the agent doesn't read? */
 const postHidden = (post: Pick<PostInfo, 'type' | 'board' | 'space'> & { private?: true }, grant: AgentGrant): boolean => {
   if (post.private === true) return true;
   if (post.space?.kind === 'direct') return !chatVisible(grant, post.space.id);
-  return !!grant.scope && !!post.space && !allows(grant.scope, post.space.id, areaOfPost(post), 'read');
+  return !!grant.scope && !!post.space && !allows(grant.scope, post.space.id, areaOfPost(post), 'read', post.board);
 };
 
 /** Which area each write is in; a post's own type decides for writes that name a post. */
@@ -90,7 +90,7 @@ export function agentCall(backend: Backend, grant: AgentGrant, method: string, a
     return (spaces.find((s) => s.id === ref) ?? spaces.find((s) => s.name.toLowerCase() === r))?.id;
   };
   /** Refuse unless the grant reaches this area of the space a reference names (a direct chat's too). */
-  const need = async (ref: unknown, area: Area | 'any', how: 'read' | 'write'): Promise<void> => {
+  const need = async (ref: unknown, area: Area | 'any', how: 'read' | 'write', board?: string): Promise<void> => {
     const chat = await chatOf(ref);
     if (chat) {
       if (!chatVisible(grant, chat.space.id) || (scope && how === 'write' && !allows(scope, chat.space.id, 'chat', 'write'))) throw scope ? outOfScope(`your chat with ${chat.peer.name ?? 'this person'}`) : directsOff();
@@ -98,13 +98,13 @@ export function agentCall(backend: Backend, grant: AgentGrant, method: string, a
     }
     if (!scope) return;
     const id = await spaceOf(ref);
-    if (!allows(scope, id, area, how)) throw outOfScope(typeof ref === 'string' ? ref : 'that space');
+    if (!allows(scope, id, area, how, board)) throw outOfScope(typeof ref === 'string' ? ref : 'that space');
   };
   /** Refuse unless the grant may write to the post a reference names, in its own area (or the one given). */
   const needPost = async (ref: unknown, area?: Area): Promise<void> => {
     if (!scope) return;
     const post = (await call('post', [ref])) as PostInfo;
-    if (post.space?.kind === 'direct' ? !allows(scope, post.space.id, 'chat', 'write') : !allows(scope, post.space?.id, area ?? areaOfPost(post), 'write')) throw outOfScope(`"${post.title ?? 'that post'}"`);
+    if (post.space?.kind === 'direct' ? !allows(scope, post.space.id, 'chat', 'write') : !allows(scope, post.space?.id, area ?? areaOfPost(post), 'write', post.board)) throw outOfScope(`"${post.title ?? 'that post'}"`);
   };
   /** A chat message's space, looked for in the spaces whose chat the scope may write. */
   const needMessage = async (ref: unknown): Promise<void> => {
@@ -130,7 +130,7 @@ export function agentCall(backend: Backend, grant: AgentGrant, method: string, a
       input.session = await ownSession(input.session);
       if (method === 'workOn' || method === 'doneWith') input.as = grant.name;
       if (method === 'workOn' && input.post && postHidden((await call('post', [input.post])) as PostInfo, grant)) throw outOfScope('that post');
-      if (method === 'workOn' && input.create) await need((input.create as { space?: unknown }).space, 'posts', 'write');
+      if (method === 'workOn' && input.create) await need((input.create as { space?: unknown }).space, 'posts', 'write', typeof (input.create as { board?: unknown }).board === 'string' ? ((input.create as { board: string }).board) : 'ideas');
       return call(method as RpcMethod, [input, ...args.slice(1)]);
     }
     if (isWrite(method)) {
@@ -138,14 +138,14 @@ export function agentCall(backend: Backend, grant: AgentGrant, method: string, a
       const w = method as (typeof WRITES)[number];
       switch (w) {
         case 'submit':
-          await need(input.space, input.board === 'issues' ? 'issues' : input.board === 'proposals' ? 'votes' : input.board === 'releases' ? 'releases' : 'posts', 'write');
+          await need(input.space, areaOfPost({ board: typeof input.board === 'string' ? input.board : 'ideas' }), 'write', typeof input.board === 'string' ? input.board : 'ideas');
           break;
         case 'publish':
         case 'say':
         case 'startThread':
         case 'openIssue':
           if (w === 'say' && input.post && scope) await needPost(input.post, 'posts');
-          else await need(input.space ?? input.project, WRITE_AREAS[w]!, 'write');
+          else await need(input.space ?? input.project, WRITE_AREAS[w]!, 'write', w === 'openIssue' && typeof input.board === 'string' ? input.board : undefined);
           break;
         case 'requestHand':
           await need(input.project, 'any', 'read');

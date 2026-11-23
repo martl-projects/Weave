@@ -1487,7 +1487,7 @@ html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavio
 .map-foot { margin-top: 4px; padding-left: 12px; }
 .machine-spaces { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .machine-space { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 8px; font: inherit; font-size: 13px; color: inherit; background: none; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); cursor: pointer; width: 100%; text-align: left; }
-.machine-space.add { border-style: dashed; opacity: .75; }
+.machine-space.add { border-style: dashed; opacity: .75; white-space: nowrap; }
 .machine-space.add:hover { opacity: 1; }
 table.rights { border-collapse: collapse; margin: 8px 0; }
 table.rights th, table.rights td { padding: 3px 10px; text-align: center; }
@@ -1498,3 +1498,6 @@ table.rights td:first-child, table.rights th:first-child { text-align: left; }
 .map-project .small + .map-gear { margin-left: 4px; }
 table.rights td { vertical-align: middle; height: 24px; }
 table.rights label { display: inline-block; position: relative; vertical-align: middle; width: 14px; height: 14px; padding: 0; margin: 0; }
+.map-gear { display: inline-flex; align-items: center; }
+.map-gear:focus-visible { outline: 1px dotted currentColor; opacity: 1; }
+.map-project .map-icon { flex: none; }
