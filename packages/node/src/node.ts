@@ -995,7 +995,7 @@ export class WeaveNode implements Backend {
     const keyEvents = this.replica.events(isKeys);
     mark('reading key events');
     for (const event of keyEvents) this.#kernel.takeKeys(event);
-    mark(`taking ${keyEvents.length} key events`);
+    mark(`taking ${keyEvents.length} key events, of that ${Math.round(this.#kernel.giftChecks.ms)} ms in ${this.#kernel.giftChecks.n} checks of gifted keys and ${Math.round(this.#kernel.decodes.ms)} ms decoding everything ${this.#kernel.decodes.n}×`);
     this.replica.admit = this.#holding.admit;
     this.replica.onAppend((event) => {
       if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#companies.seeGeneration(event);

@@ -861,9 +861,40 @@ export class Kernel {
 
   /** Does a key we're handed open something sealed with it in this space (an epoch's events, or a board's)? */
   #opensSomething(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
+    const began = performance.now();
+    try {
+      return this.#opens(space, epoch, key, board);
+    } finally {
+      this.giftChecks.ms += performance.now() - began;
+      this.giftChecks.n++;
+    }
+  }
+
+  /** How long checking gifted keys took, and how often: opening a node says so when it was long. */
+  readonly giftChecks = { ms: 0, n: 0 };
+
+  /**
+   * The sealed events this node holds whose bodies are here, by their space: read once for every gifted key checked
+   * (reading the whole log for each took a browser's node half a second a key, at every start). Dropped when an event
+   * arrives (decodedAdd).
+   */
+  #sealed?: Map<string, WeaveRecord[]>;
+  #sealedIn(scope: string): WeaveRecord[] {
+    if (!this.#sealed) {
+      this.#sealed = new Map();
+      for (const e of this.node.replica.events((r) => r.kind === KIND_SEALED && !r.missing)) {
+        const list = this.#sealed.get(e.scope);
+        if (list) list.push(e);
+        else this.#sealed.set(e.scope, [e]);
+      }
+    }
+    return this.#sealed.get(scope) ?? [];
+  }
+
+  #opens(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
     const scope = spaceScope(space);
     const withKey = { ...space, keys: { ...space.keys, [epoch]: key } };
-    for (const e of this.node.replica.events((r) => r.kind === KIND_SEALED && r.scope === scope && !r.missing)) {
+    for (const e of this.#sealedIn(scope)) {
       if (board === undefined) {
         if ((e.body as { epoch?: unknown } | null)?.epoch === Number(epoch) && openIn(withKey, e)) return true;
         continue;
@@ -1365,6 +1396,7 @@ export class Kernel {
     // Board keys arrive inside the project: taking one makes more events readable, so decode again. Keys of what is
     // decoded already were taken when it was (and decodedAdd takes those that arrive): a kept view isn't scanned again.
     for (let round = 0; round < 4 && !this.decoded; round++) {
+      const began = performance.now();
       {
         this.ensureDirects();
         const plain = this.node.replica.events().flatMap((event) => {
@@ -1388,10 +1420,15 @@ export class Kernel {
           else this.#bySpace.set(d.space.id, [d]);
         }
       }
+      this.decodes.ms += performance.now() - began;
+      this.decodes.n++;
       if (!this.#takeBoardKeys(this.decoded)) break;
     }
     return this.decoded!;
   }
+
+  /** How long decoding everything took, and how often it was done over: opening a node says so when it was long. */
+  readonly decodes = { ms: 0, n: 0 };
 
   /**
    * A new event: decode just it and put it in its place (replica order: time,
@@ -1401,6 +1438,7 @@ export class Kernel {
    * have already dropped the decoded events.
    */
   decodedAdd(event: WeaveRecord): void {
+    this.#sealed = undefined;
     const decoded = this.decoded;
     if (!decoded) return;
     // A v2 event standing for a v1 event already decoded (same id, re-signed): decode again, so it replaces it (rare).
