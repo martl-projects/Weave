@@ -1475,3 +1475,26 @@ html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavio
 :root[data-skin] .lens-full-exit:hover, :root[data-skin] .lens-full-exit:focus-visible { opacity: 1; }
 /* A mini-app filling the screen: its frame takes all of the box. */
 .lens-box.widget-full > .widget-frame { flex: 1; height: auto !important; min-height: 0; border-radius: 0; }
+
+/* Sessions by machine and agent key (issue 4Vxe): a frame per machine and key, its sessions inside, the spaces it may use beside them. */
+.machine-frames { display: flex; flex-direction: column; gap: 14px; }
+.machine-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: var(--radius, 6px); padding: 8px 10px 12px; }
+.machine-frame.token { border-color: color-mix(in srgb, var(--cl-accent, var(--accent)) 55%, transparent); }
+.machine-frame.connect { display: flex; align-items: center; justify-content: center; gap: 6px; border-style: dashed; background: none; color: inherit; font: inherit; cursor: pointer; opacity: .75; }
+.machine-frame.connect:hover { opacity: 1; }
+.machine-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
+.machine-head .grow { flex: 1; }
+.map-foot { margin-top: 4px; padding-left: 12px; }
+.machine-spaces { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.machine-space { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 8px; font: inherit; font-size: 13px; color: inherit; background: none; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); cursor: pointer; width: 100%; text-align: left; }
+.machine-space.add { border-style: dashed; opacity: .75; }
+.machine-space.add:hover { opacity: 1; }
+table.rights { border-collapse: collapse; margin: 8px 0; }
+table.rights th, table.rights td { padding: 3px 10px; text-align: center; }
+table.rights td:first-child, table.rights th:first-child { text-align: left; }
+.machine-steps { white-space: pre-wrap; word-break: break-all; font-size: 12px; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); user-select: text; }
+.map-gear, .map-gear:hover, .map-gear:active { margin-left: auto; padding: 0 2px; min-width: 0; min-height: 0; border: none; box-shadow: none; background: none; color: inherit; opacity: .55; cursor: pointer; line-height: 1; }
+.map-gear:hover { opacity: 1; }
+.map-project .small + .map-gear { margin-left: 4px; }
+table.rights td { vertical-align: middle; height: 24px; }
+table.rights label { display: inline-block; position: relative; vertical-align: middle; width: 14px; height: 14px; padding: 0; margin: 0; }

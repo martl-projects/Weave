@@ -1,6 +1,7 @@
 // Entry point without networking or native modules, for processes that only
 // talk to a daemon (e.g. the desktop app's main process).
 export type * from './backend.ts';
+export type { AgentScope, Area, SpaceAccess } from './agentscope.ts';
 export { ApiClient, connectDaemon, daemonInfo, followDaemon, stopDaemon, type DaemonInfo } from './client.ts';
 export { resolveHome, type Home } from './home.ts';
 export { lockHolder } from './lock.ts';

@@ -7,6 +7,7 @@ import { Page } from './views.tsx';
 import { ago, api, bridge, bump, useApi } from './lib.ts';
 import { attempt, BlobImage, Modal } from './ui.tsx';
 import { t, useTexts } from './texts.tsx';
+import { MachineFrames } from './machines.tsx';
 
 export const folderName = (folder?: string) => folder?.split(/[\\/]/).filter(Boolean).pop();
 
@@ -127,7 +128,7 @@ interface Link {
  * Sessions and projects side by side: your agents' sessions on the left (a section per harness: Claude Code, later others), your Weave projects on the right, and a line
  * for each project a session takes work from. Drag from one side's port to the other to link them; click a line to unlink.
  */
-function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; projects: SpaceInfo[]; onNew?(project?: string): void }) {
+export function SessionMap({ sessions, projects, onNew, head, foot, onProject, projectTitle }: { sessions: SessionInfo[]; projects: SpaceInfo[]; onNew?(project?: string): void; head?: string; foot?: ReactNode; onProject?(project: string): void; projectTitle?(name: string): string }) {
   const { t } = useTexts();
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<Record<string, { x: number; y: number }>>({});
@@ -331,7 +332,7 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
         })}
       </div>
       <div className="map-side">
-        <div className="map-head">{t('sessions.weave.projects')}</div>
+        <div className="map-head">{head ?? t('sessions.weave.projects')}</div>
         {rows.map((row) => {
           const p = row === ANY ? ({ id: ANY, name: t('session.any.project') } as SpaceInfo) : projects.find((x) => x.id === row)!;
           const id = `p:${p.id}`;
@@ -342,9 +343,15 @@ function SessionMap({ sessions, projects, onNew }: { sessions: SessionInfo[]; pr
               {p.icon ? <BlobImage className="map-icon" src={p.icon} /> : null}
               <span className="grow">{p.name}</span>
               {n > 0 && <span className="small">{n}</span>}
+              {onProject && p.id !== ANY && (
+                <button className="map-gear" title={projectTitle?.(p.name)} aria-label={projectTitle?.(p.name)} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => (e.stopPropagation(), onProject(p.id))}>
+                  <Icon name="gear" />
+                </button>
+              )}
             </div>
           );
         })}
+        {foot && <div className="map-foot">{foot}</div>}
       </div>
       <svg className="map-links" aria-hidden>
         {links.map((l) => {
@@ -424,7 +431,7 @@ export function SessionsView() {
       }
     >
       {sessions && !ordered.length && <p className="empty">{t('sessions.none')}</p>}
-      {(ordered.length > 0 || bridge.newSession) && <SessionMap sessions={ordered} projects={projects} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
+      {(ordered.length > 0 || bridge.newSession) && <MachineFrames sessions={ordered} spaces={spaces ?? []} onNew={bridge.newSession ? (project) => setStarting({ project }) : undefined} />}
       {gone.length > 0 && <AwaySessions sessions={gone} />}
       {starting && <NewSession project={starting.project} projects={projects} following={!!follow?.on} onClose={() => setStarting(undefined)} />}
     </Page>

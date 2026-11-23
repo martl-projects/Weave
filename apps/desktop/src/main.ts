@@ -181,6 +181,29 @@ function showWindow(): void {
 
 ipcMain.handle('weave:show', () => showWindow());
 
+// A token for one of your agents on a machine (Sessions, "Connect a machine"): never through weave:call, and only
+// after the person says yes in a dialog of this app's own, so a page or script in the window can't mint one quietly.
+ipcMain.handle('weave:connect-agent', async (_event, input: { agent?: unknown; machine?: unknown }) => {
+  const agent = typeof input?.agent === 'string' ? input.agent : '';
+  const machine = typeof input?.machine === 'string' ? input.machine.trim().slice(0, 80) : '';
+  if (!agent || !machine) return { error: 'name the agent and the machine' };
+  if (!daemon) return { error: 'not connected to a Weave daemon' };
+  const answer = await dialog.showMessageBox({
+    type: 'question',
+    buttons: [t('connect.agent.yes'), t('connect.agent.no')],
+    defaultId: 1,
+    cancelId: 1,
+    message: t('connect.agent.ask', { agent, machine }),
+    detail: t('connect.agent.detail'),
+  });
+  if (answer.response !== 0) return { cancelled: true };
+  try {
+    return { result: await daemon.client.agentToken({ name: agent, machine }) };
+  } catch (error) {
+    return errorToWire(error);
+  }
+});
+
 let mentions: BrowserWindow | undefined;
 /** The panel is open as far as you're concerned (until you close it), though hidden while another app is in front. */
 let mentionsWanted = false;
