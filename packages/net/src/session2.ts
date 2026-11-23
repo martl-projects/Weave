@@ -1,6 +1,6 @@
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { b64u, canonicalIdV2, compact, expand, isWireItemV2, openRanges, reconcileStep, reconKey, utf8, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
+import { b64u, canonicalIdV2, timed, compact, expand, isWireItemV2, openRanges, reconcileStep, reconKey, utf8, verifyEventV2, type Did, type ReconItem, type ReconRange, type Replica, type WeaveEvent, type WireItemV2 } from '@weave/core';
 import type { BlobSource } from './session.ts';
 
 /*
@@ -267,8 +267,10 @@ export class PeerSession2 {
     stream.on('data', (chunk: { toString(): string }) => this.#receive(chunk.toString()));
     stream.on('close', () => this.close());
     stream.on('error', () => this.close());
-    this.announce();
-    if (this.#admitted) this.#welcome();
+    timed('saying hello', () => {
+      this.announce();
+      if (this.#admitted) this.#welcome();
+    });
   }
 
   /** What a peer we let in gets first: our v1 heads (v0.3 peers start from them) and the blobs we're after. */
@@ -369,7 +371,8 @@ export class PeerSession2 {
       if (!message || typeof message !== 'object') return this.close();
       // One message a peer sends must never take the process down: what can't be handled is dropped.
       try {
-        this.#handle(message);
+        // Counted by what the peer said (spent.ts): a node that was busy for seconds can say on which kind of message.
+        timed(`a peer's ${typeof message.t === 'string' ? message.t.slice(0, 16) : 'message'}`, () => this.#handle(message));
       } catch {
         // ignore this message
       }
