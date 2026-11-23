@@ -58,6 +58,8 @@ export interface LogStore {
   /** A key's v2 events, by n. */
   range2(signer: Did): StoredV2[];
   body(hash: string): Json | undefined;
+  /** Is this body held? Where reading one costs something (a database: fetched and parsed), without reading it. */
+  hasBody?(hash: string): boolean;
   /** Keep a body; the caller checked it against its event's hash. Forgotten ones aren't kept again. */
   putBody(hash: string, body: Json): void;
   /** Let go of a body this node doesn't hold (stage 4): it may be fetched again later. */

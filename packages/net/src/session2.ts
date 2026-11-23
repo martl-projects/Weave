@@ -636,11 +636,14 @@ export class PeerSession2 {
       this.#askChains(space);
     }
     this.#behind = behind;
+    // What is held is listed once for all of them (listing may cost: a node derives its direct chats for it).
+    let pulled: Map<string, HeldSpace['pulled']> | undefined;
     for (const space of shared) {
       const key = startedWith.get(space) ?? '';
       if (this.#started.get(space) === key) continue;
       this.#started.set(space, key);
-      this.#startSpace(space);
+      pulled ??= new Map(this.#access.spaces().map((h) => [h.space, h.pulled]));
+      this.#startSpace(space, pulled.get(space) ?? false);
     }
     // A space the peer left starts again if it comes back.
     for (const space of this.#started.keys()) if (!shared.has(space)) this.#started.delete(space);
@@ -670,11 +673,14 @@ export class PeerSession2 {
     this.#keepSoon.unref?.();
   }
 
-  #startSpace(space: string): void {
+  #startSpace(space: string, pulledIn?: HeldSpace['pulled'] | false): void {
+    // The space is read once for its newest content and its chains' heads (a hello starts every shared space: a
+    // browser with 76 of them was held for three seconds reading each several times).
+    const stored = this.replica.store.inSpace2(space);
     let newest = '';
-    for (const { event } of this.replica.store.inSpace2(space)) if (event.class === 'content' && event.time > newest) newest = event.time;
-    this.#askChains(space);
-    const pulled = this.#access.spaces().find((h) => h.space === space)?.pulled;
+    for (const { event } of stored) if (event.class === 'content' && event.time > newest) newest = event.time;
+    this.#askChains(space, stored);
+    const pulled = pulledIn === undefined ? this.#access.spaces().find((h) => h.space === space)?.pulled : pulledIn;
     if (pulled) {
       // Bodies for the recent window; envelopes of the rest (with the bodies this node keeps).
       this.#syncRange(space, new Date(Date.now() - pulled.windowMs).toISOString(), undefined, false);
@@ -690,9 +696,9 @@ export class PeerSession2 {
    * Ask the peer for a space's control events we lack. Also of a peer behind in it: someone who joined just before we
    * made a newer key holds only the older one, and their join must reach us before they can get the newer one.
    */
-  #askChains(space: string): void {
+  #askChains(space: string, stored = this.replica.store.inSpace2(space)): void {
     const heads: Record<string, number> = {};
-    for (const { event } of this.replica.store.inSpace2(space)) if (event.class === 'control') heads[event.signer] = Math.max(heads[event.signer] ?? 0, event.seq);
+    for (const { event } of stored) if (event.class === 'control') heads[event.signer] = Math.max(heads[event.signer] ?? 0, event.seq);
     this.#send({ t: 'chains', space, heads });
   }
 
@@ -712,7 +718,7 @@ export class PeerSession2 {
   #reconItems(space: string, since: string, until: string | undefined, bare: boolean): ReconItem[] {
     return this.replica.store
       .inSpace2(space, since, until)
-      .filter(({ event }) => event.class === 'content' && this.#mayShow(space, event.author) && (bare || this.replica.store.body(event.body) !== undefined))
+      .filter(({ event }) => event.class === 'content' && this.#mayShow(space, event.author) && (bare || (this.replica.store.hasBody ? this.replica.store.hasBody(event.body) : this.replica.store.body(event.body) !== undefined)))
       .map(({ id, event }) => ({ key: reconKey(event.time, id), id }))
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   }
