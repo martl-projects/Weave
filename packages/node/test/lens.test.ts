@@ -384,6 +384,45 @@ describe('client services', { timeout: 120_000 }, () => {
     expect(await martl.boards('Friends')).toEqual([]);
   });
 
+  it('lets a member take a board’s lens along to a group of their own, without being in the project that released it', async () => {
+    const martl = person('martl');
+    const kati = person('Kati');
+    const papa = person('Papa');
+    for (const node of [martl, kati, papa]) node.containerSetup = { ...node.containerSetup, fetch: netImages };
+    await martl.createProject({ name: 'Tools' });
+    await martl.releaseService({ project: 'Tools', image: 'ghcr.io/martl/kanban:1.0' });
+    await martl.createGroup('Friends');
+    await kati.joinSpace(await martl.invite('Friends'));
+    await martl.setBoard({ project: 'Friends', name: 'album', title: 'Album' });
+    await martl.setBoardLens({ space: 'Friends', board: 'album', from: { project: 'Tools' }, mode: 'require' });
+    await martl.boardAction({ space: 'Friends', board: 'album', action: 'add', input: { title: 'Day one' } });
+    sync([martl, kati]);
+
+    // Not to a group that is someone else's, not without saying where, and only a board that has a lens.
+    await expect(kati.shareLens({ space: 'Friends', board: 'album', group: 'Friends' })).rejects.toThrow(/only the owner/);
+    await expect(kati.shareLens({ space: 'Friends', board: 'album' })).rejects.toThrow(/which group/);
+    await expect(martl.shareLens({ space: 'Tools', board: 'ideas', name: 'Else' })).rejects.toThrow(/no client service/);
+
+    // A new group of hers, with a board of its own through the same release: empty, and hers to invite to.
+    const shared = await kati.shareLens({ space: 'Friends', board: 'album', name: 'Family' });
+    expect(shared).toMatchObject({ space: { kind: 'group', name: 'Family' }, board: 'kanban', title: 'Kanban', lens: { name: 'Kanban', tag: '1.0' } });
+    const view = await kati.boardView({ space: shared.space.id, board: shared.board });
+    expect(view.lens).toMatchObject({ name: 'Kanban', tag: '1.0', mode: 'require' });
+    expect((await kati.boards(shared.space.id))[0].count).toBe(0);
+    await papa.joinSpace(await kati.invite(shared.space.id));
+    sync([kati, papa]);
+    const added = await papa.boardAction({ space: shared.space.id, board: shared.board, action: 'add', input: { title: 'From Papa' } });
+    expect(added.published).toMatchObject([{ kind: 'weave.post', body: { title: 'From Papa', board: 'kanban' } }]);
+    // What was on the board it came from stayed there.
+    expect((await martl.boards('Friends'))[0].count).toBe(1);
+
+    // Again into the same group: a second board beside the first, with the title she gives it.
+    const again = await kati.shareLens({ space: 'Friends', board: 'album', group: shared.space.id, title: 'Summer' });
+    expect(again).toMatchObject({ board: 'summer', title: 'Summer' });
+    expect(await kati.shareLens({ space: 'Friends', board: 'album', group: shared.space.id })).toMatchObject({ board: 'kanban-2' });
+    expect((await kati.boards(shared.space.id)).map((b) => b.name).sort()).toEqual(['kanban', 'kanban-2', 'summer']);
+  });
+
   it('refuses a release that isn’t a client service', async () => {
     const martl = person('martl');
     await martl.createProject({ name: 'Plain' });

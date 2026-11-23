@@ -14,6 +14,7 @@ export type {
   BoardInfo,
   BoardViewInfo,
   AgentBoardInfo,
+  LensShareInfo,
   WidgetViewInfo,
   WidgetReleaseInfo,
   LensKindInfo,

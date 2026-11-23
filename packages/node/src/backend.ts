@@ -951,6 +951,14 @@ export interface BoardViewInfo {
   actions?: Json[];
 }
 
+/** A lens taken along (shareLens): the group and the new board that shows through it. */
+export interface LensShareInfo {
+  space: SpaceInfo;
+  board: string;
+  title: string;
+  lens: { name: string; tag: string };
+}
+
 /** A kind the lenses of your boards write themselves (not one of Weave's), and which lenses: you may allow an agent it too. */
 export interface LensKindInfo {
   kind: string;
@@ -2536,6 +2544,11 @@ export interface Backend {
   curate(input: { space: string; board?: string; pinned: string[] }): Promise<BoardInfo[]>;
   /** Maintainers: show a board through a client service (a project's release, or a catalog's), suggested or required; off takes it away. */
   setBoardLens(input: { space: string; board: string; from?: { project: string; tag?: string } | { catalog: string; app: string }; mode?: 'suggest' | 'require'; off?: boolean; as?: string }): Promise<BoardViewInfo>;
+  /**
+   * Take the lens of a board you see along: a new, empty board in a group you own (`group`) or in a new group (`name`),
+   * shown through the same lens (required). The board it came from stays as it is. Invite people to the group afterwards.
+   */
+  shareLens(input: { space: string; board: string; group?: string; name?: string; title?: string }): Promise<LensShareInfo>;
   /** A board as its client service shows it (use: with a suggested one, too). */
   boardView(input: { space: string; board: string; use?: boolean }): Promise<BoardViewInfo>;
   /** Do one of the actions a board's client service offers: what it proposes is signed by you (or your agent), with your rights. */
@@ -2864,7 +2877,7 @@ export const RPC_METHODS: readonly RpcMethod[] = [
   'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
-  'agentBoards', 'closeBoardToAgents', 'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'boardView', 'boardAction', 'lensFile', 'lensKinds', 'lensSite', 'lensNet', 'allowLensNet', 'allowLensLocation', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget',
+  'agentBoards', 'closeBoardToAgents', 'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'shareLens', 'boardView', 'boardAction', 'lensFile', 'lensKinds', 'lensSite', 'lensNet', 'allowLensNet', 'allowLensLocation', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget',
   'project', 'setProjectPage', 'putBlob', 'putFile', 'blob', 'setMaintainer', 'inviteGroup', 'uninviteGroup', 'setRule', 'admissions', 'admit', 'decline',
   'setEdge', 'social', 'profile', 'setProfile', 'imprint', 'setImprint', 'avatars', 'setSpacePhoto', 'setSessionAvatar', 'directory', 'find', 'contactLink', 'addContact',
   'identityInfo', 'keys', 'revokeKey', 'rotateRoot', 'harnesses', 'connectHarness', 'dismissHarnesses', 'requestPermission', 'requestHand', 'permissionRequests', 'answerPermission', 'openInApp',

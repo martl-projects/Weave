@@ -6,6 +6,7 @@ import { api, bridge, bump, useApi } from './lib.ts';
 import { Modal, toast } from './ui.tsx';
 import { BuyTicket } from './shows.tsx';
 import { useTexts } from './texts.tsx';
+import { LensShare } from './lensshare.tsx';
 
 /*
  * A board shown through its client service: the service's own renderer (its site) in a sandboxed frame, which gets
@@ -217,15 +218,15 @@ if (typeof window !== 'undefined') {
   }
 }
 
-export function LensFrame({ title, release, base, net, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** What a view whose manifest says "tickets" learns about its project's shows (or one of them). */ tickets?(show?: string): Promise<Record<string, unknown>>; /** Its member wants a ticket to that show. */ onTicket?(show: string): void; /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
+export function LensFrame({ title, release, base, net, location, tilt, tickets, onTicket, onShare, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** Its member wants to take this lens along to a group of their own: Weave's dialog for it. */ onShare?(): void; /** What a view whose manifest says "tickets" learns about its project's shows (or one of them). */ tickets?(show?: string): Promise<Record<string, unknown>>; /** Its member wants a ticket to that show. */ onTicket?(show: string): void; /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
   const frame = useRef<HTMLIFrameElement>(null);
   // Weave Web's frame takes its CSP from its address (a Pages Function): the hosts this member allowed, or none. On a
   // computer or a phone the node's answer carries them (lensFile), so the address stays as it is.
   const hosts = net?.length ? net.join(',') : '';
   const src = bridge.web && hosts ? `${base}?net=${encodeURIComponent(hosts)}` : base;
-  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
-  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
+  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onShare, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
+  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onShare, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
   const tilting = useRef<(() => void) | null>(null);
   const tiltGo = useRef<(() => void) | null>(null);
   const attached = useRef(0);
@@ -347,6 +348,8 @@ export function LensFrame({ title, release, base, net, location, tilt, tickets, 
           );
       }
       if (m?.weave === 'ticket' && typeof (m as { show?: unknown }).show === 'string' && latest.current.tickets) latest.current.onTicket?.((m as unknown as { show: string }).show);
+      // Its member wants this lens for a group of their own (a button in the view): Weave's dialog, which asks them everything.
+      if (m?.weave === 'share') latest.current.onShare?.();
       // How the device is tilted: only for a view whose manifest says so, heard from the device here, never in the frame.
       if (m?.weave === 'tilt') {
         tilting.current?.();
@@ -468,9 +471,11 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
   // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
   const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
   const asksTickets = !!view?.lens?.tickets && space.kind === 'project';
-  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid }, can: ['picture', 'attach', 'save', ...(view.lens?.tilt ? ['tilt'] : []), ...(asksTickets ? ['tickets'] : [])] }, [view, meDid, asksTickets]);
+  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid }, can: ['picture', 'attach', 'save', 'share', ...(view.lens?.tilt ? ['tilt'] : []), ...(asksTickets ? ['tickets'] : [])] }, [view, meDid, asksTickets]);
   // The show its member wants a ticket to, while Weave shows how to pay it.
   const [buying, setBuying] = useState<ShowInfo | null>(null);
+  // Its member asked, in the view, to take this lens along.
+  const [sharing, setSharing] = useState(false);
   const showFor = (s: ShowInfo) => ({ id: s.id, name: s.name, starts: s.starts, ends: s.ends, price: { amount: String(s.price.amount), decimals: s.price.decimals, symbol: s.price.symbol }, open: s.open, cancelled: s.cancelled, mine: s.mine, ticket: !!s.ticket });
   const tickets = async (id?: string): Promise<Record<string, unknown>> => {
     const shows = await api<ShowInfo[]>('shows', space.id);
@@ -593,8 +598,9 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
           {buying.ticket ? <p>{t('lens.tickets.have')}</p> : <BuyTicket show={buying} />}
         </Modal>
       )}
+      {sharing && <LensShare space={space} board={board} meDid={meDid} onClose={() => setSharing(false)} />}
       {/* A new key when the hosts change: the frame loads again with the CSP that goes with them. */}
-      <LensFrame tickets={asksTickets ? tickets : undefined} onTicket={wantTicket} key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
+      <LensFrame tickets={asksTickets ? tickets : undefined} onTicket={wantTicket} onShare={() => (setFull(false), setSharing(true))} key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
     </div>
   );
 }

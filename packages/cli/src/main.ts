@@ -289,6 +289,7 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   board drop <name>          remove a board; its posts stay in the logs
   board follow <name>        bring a board's posts to your Home and notify you (releases and showcase by default); unfollow stops
   board access <name>        who may read and write (maintainers)  [--read <who,…>] [--write <who,…>]
+  board share <name>         take a board's lens along: a board of its own in a group of yours, and a link to invite to it  --to <group> | --new <group name>  [--title <t>]
   board agents <name> off|on close a board to your own agents: they neither read nor write there, nor get its files (on: open it again)
   board lens <name>          show a board through a client service (maintainers): --artifact <project>[@tag] | --from <space>/<app>
                              [--require: every member's node uses it; otherwise suggested]; --off takes it away
@@ -496,6 +497,7 @@ const { values, positionals } = parseArgs({
     pin: { type: 'boolean', default: false },
     link: { type: 'string' },
     to: { type: 'string' },
+    new: { type: 'string' },
     title: { type: 'string' },
     with: { type: 'string' },
     asset: { type: 'string', multiple: true },
@@ -2016,6 +2018,14 @@ ${postLine(p)}`);
         if (!from && !values.off) throw new Error('usage: weave board lens <name> -p <project> --artifact <project>[@tag] | --from <space>/<app>  [--require]  (--off takes it away)');
         const view = await (await backend()).setBoardLens({ space: boardSpace(), board: name, ...(from ? { from } : {}), mode: values.require ? 'require' : 'suggest', off: values.off, as: values.as });
         return out(view, () => lensLine(view));
+      }
+      if (sub === 'share' && name) {
+        // weave board share <name> -g <group> --new Family: the same lens on a new, empty board in a group of your own, and that group's invite link
+        if (!values.to && !values.new) throw new Error('usage: weave board share <name> -p <project> | -g <group>  --to <a group of yours> | --new <group name>  [--title <t>]');
+        const b = await backend();
+        const shared = await b.shareLens({ space: boardSpace(), board: name, ...(values.to ? { group: values.to } : { name: values.new }), title: values.title });
+        const invite = await b.invite(shared.space.id);
+        return out({ ...shared, invite }, () => `${shared.title} (${shared.lens.name} ${shared.lens.tag}) is board "${shared.board}" in g/${shared.space.name}\ninvite people with:\n${invite}`);
       }
       if (sub === 'agents' && name) {
         // weave board agents <name> off|on: close a board to your own agents (they neither read nor write there), or open it again

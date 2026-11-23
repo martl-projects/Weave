@@ -225,6 +225,25 @@ export class Lenses {
     return this.boardView({ space: space.id, board: board.name });
   }
 
+  /** The lens a board here is shown through, as it was released (shareLens pins the same one elsewhere). */
+  pinned(spaceRef: string, name: string): BoardLens {
+    const { space, board } = this.#board(spaceRef, name);
+    if (!board.lens) throw new Error(`${board.title} in ${this.h.spaceName(space)} is shown through no client service`);
+    return board.lens;
+  }
+
+  /**
+   * Pin the lens of a board you see to a board of yours, required: the same release, with the manifest it was pinned
+   * with there, so whoever sees a lens can take it along without being in the project that released it.
+   */
+  async copyBoardLens(input: { from: { space: string; board: string }; space: string; board: string }): Promise<BoardViewInfo> {
+    const lens = this.pinned(input.from.space, input.from.board);
+    const { space, board } = this.#board(input.space, input.board);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} choose how its boards are shown`);
+    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require' }, space: space.id });
+    return this.boardView({ space: space.id, board: board.name });
+  }
+
   /**
    * The board's items, as its lens folds them, oldest first: its posts, their edits, deletions and votes, their chats,
    * and the events of the lens's own kinds (its contract's) about them or the board.

@@ -96,6 +96,7 @@ import {
   LANGUAGES,
   type LanguageSetting,
   boardsOf,
+  boardName,
   lensNotify,
 } from '@weave/core';
 import { WeaveError, type AppAsset } from '@weave/core';
@@ -130,6 +131,7 @@ import {
   type WebsiteInfo,
   type KeyvaultInfo,
   type Preferences,
+  type LensShareInfo,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
@@ -3889,6 +3891,34 @@ export class WeaveNode implements Backend {
 
   setBoardLens(...args: Parameters<Lenses['setBoardLens']>): Promise<BoardViewInfo> {
     return this.#lenses.setBoardLens(...args);
+  }
+
+  /**
+   * Take a board's lens along: a board of its own in a group of yours (`group`), or in a new one (`name`), shown through
+   * the same lens. The board starts empty: what is on the board it came from stays there. Then invite people to the group.
+   */
+  async shareLens(input: { space: string; board: string; group?: string; name?: string; title?: string }): Promise<LensShareInfo> {
+    const lens = this.#lenses.pinned(input.space, input.board);
+    const me = this.identity.author;
+    let group: SpaceInfo;
+    if (input.group) {
+      const found = this.#kernel.space(input.group);
+      if (found.kind !== 'group') throw new Error(`${found.name} is a ${found.kind}: a lens is shared to a group`);
+      if (this.#kernel.state(found).founder !== me) throw new Error(`only the owner of ${found.name} makes its boards: share to a group of your own, or a new one`);
+      group = this.#kernel.spaceInfo(found);
+    } else {
+      const name = (input.name ?? '').trim();
+      if (!name) throw new Error('which group? one of yours, or a name for a new one');
+      group = await this.createGroup(name);
+    }
+    const title = (input.title ?? '').trim() || lens.name;
+    const taken = new Set((await this.boards(group.id)).map((b) => b.name));
+    const base = boardName(title) ?? boardName(lens.name) ?? 'board';
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+    await this.setBoard({ project: group.id, name, title });
+    await this.#lenses.copyBoardLens({ from: { space: input.space, board: input.board }, space: group.id, board: name });
+    return { space: group, board: name, title: title.slice(0, 40), lens: { name: lens.name, tag: lens.tag } };
   }
 
   boardView(...args: Parameters<Lenses['boardView']>): Promise<BoardViewInfo> {

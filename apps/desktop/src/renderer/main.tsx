@@ -20,6 +20,7 @@ import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './we
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
 import { BoardAgentsSwitch, LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { LensShareButton } from './lensshare.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
@@ -617,6 +618,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
               {prefix}{space.name} · {board.title}
             </b>
             <span className="pane-tools">
+              <LensShareButton space={space} board={board} meDid={me.did} />
               <BoardAgentsSwitch space={space} board={board} />
               <LensFullscreenButton full={lensFull} setFull={setLensFull} />
               <LensSwitch board={board} on={lensOn} choose={chooseLens} />
