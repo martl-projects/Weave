@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AppAsset, AppManifest, Json } from '@weave/core';
+import type { AppAsset, AppManifest, CarriedFile, Json } from '@weave/core';
 import type { Fetchers } from './fetchers.ts';
 import { platformKey, saveVerified, tagFolder, unpack } from './appinstall.ts';
 import { writeJson } from './home.ts';
@@ -38,6 +38,8 @@ export interface ArtifactRef {
   id: string;
   tag: string;
   manifest: AppManifest;
+  /** Its files as someone carried them along (a lens pinned outside its project): blobs to put them together from. */
+  carried?: Record<string, CarriedFile>;
 }
 
 /** How fetching one goes: its progress, or why it failed. */
@@ -68,7 +70,7 @@ export class Releases {
    * it as blobs and says so in its project (a mirror), so a page can put it together too (services.ts).
    */
   fetched?: (a: ArtifactRef, platform: string, asset: AppAsset, bytes: Uint8Array) => void;
-  /** A release file from a member's mirror (services.ts): where its provider's way fails. */
+  /** A release file from a member's mirror, or from the blobs it was carried in (services.ts): where its provider's way fails. */
   fromMirror?: (a: ArtifactRef, platform: string) => Promise<Located | undefined>;
 
   /**
@@ -87,7 +89,8 @@ export class Releases {
   /** The release file: fetched by the fetcher its provider names, with what it granted, or at the address it gave. */
   /**
    * The release file: from its provider, or (that failing: a page reaches no GitHub download, a provider is offline)
-   * from a member's mirror in its project. Either way checked against the release by whoever reads it.
+   * from a member's mirror in its project, or from the blobs it was carried along in (a lens on a board outside its
+   * project). Either way checked against the release by whoever reads it.
    */
   async #download(a: ArtifactRef, asset: AppAsset): Promise<{ body: ReadableStream<Uint8Array>; size?: number; from: string; mirrored?: boolean }> {
     try {

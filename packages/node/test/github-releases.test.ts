@@ -369,4 +369,59 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       server.close();
     }
   });
+
+  it("carries a lens's release along to a board outside its project: friends who aren't in it get it from the blobs", async () => {
+    const starter = join(import.meta.dirname, '..', '..', 'sdk', 'starters', 'js-board');
+    const dir = tempDir('weave-github-lens-');
+    mkdirSync(join(dir, 'Kanban'));
+    cpSync(await buildComponent(join(starter, 'src', 'board.js'), 'board'), join(dir, 'Kanban', 'board.wasm'));
+    cpSync(join(starter, 'site'), join(dir, 'Kanban', 'site'), { recursive: true });
+    const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+    if (spawnSync(tar, ['-czf', 'Kanban.tar.gz', 'Kanban'], { cwd: dir }).status !== 0) throw new Error('tar failed');
+    // A private repository: only the project's provider hands it out, and only to the project's members.
+    const github = new PrivateGitHub();
+    github.manifest = JSON.parse(readFileSync(join(starter, 'weave.app.json'), 'utf8'));
+    github.bytes = readFileSync(join(dir, 'Kanban.tar.gz'));
+    const server = await github.serve();
+    const martl = person('martl', github, shipped);
+    const kati = person('Kati', github, shipped);
+    kati.githubSetup = { fetch: (async () => new Response('', { status: 403 })) as unknown as Fetch };
+    // The lens's own project is martl's alone; the photo book is martl's and Kati's.
+    await martl.createProject({ name: 'Lens' });
+    await martl.createProject({ name: 'Book' });
+    await martl.setBoard({ project: 'Book', name: 'pages', title: 'Pages' });
+    await kati.joinSpace(await martl.invite('Book'));
+    martl.wasmSetup.testHosts = { 'api.github.com': server.port, 'objects.githubusercontent.com': server.port };
+    const api = await startApi(martl, 0, { service: (token) => martl.serviceGate(token) });
+    martl.runServices({ port: api.port });
+    kati.locateWait = 2_000;
+    const syncing = setInterval(() => {
+      sync([martl, kati]);
+      for (const hash of kati.blobs.wanted()) if (martl.blobs.has(hash)) kati.blobs.receive(hash, martl.blobs.get(hash)!);
+    }, 100);
+    try {
+      await martl.addService({ shipped: 'github-releases', spaces: ['Lens'], settingsIn: 'Lens', settings: { GITHUB_TOKEN: 'gho_martl' } });
+      await vi.waitFor(async () => expect((await martl.services())[0].running).toBe(true), { timeout: 30_000, interval: 200 });
+      await martl.releaseApp({ project: 'Lens', tag: 'v1.0', repo: 'martl/bot' });
+      await martl.addFetcher({ shipped: 'github-checkout', projects: ['Lens'] });
+
+      // Pinned to the book's board: martl's node fetches and checks it once, and the pin carries it as blobs.
+      await martl.setBoardLens({ space: 'Book', board: 'pages', from: { project: 'Lens' }, mode: 'require' });
+      const mine = await martl.boardView({ space: 'Book', board: 'pages' });
+      expect(mine.lens?.problem).toBeUndefined();
+      expect(mine.state).toBeDefined();
+
+      // Kati is in the book, not in the lens's project, and reaches no GitHub: she gets it from the blobs, checked.
+      expect((await kati.spaces('project')).map((s) => s.name)).toEqual(['Book']);
+      await vi.waitFor(() => expect(kati.replica.events().length).toBeGreaterThanOrEqual(martl.replica.events().length), { timeout: 10_000, interval: 100 });
+      const hers = await kati.boardView({ space: 'Book', board: 'pages' });
+      expect(hers.lens?.problem).toBeUndefined();
+      expect(hers.state).toEqual(mine.state);
+    } finally {
+      clearInterval(syncing);
+      await martl.removeService('github-releases').catch(() => {});
+      await api.close();
+      server.close();
+    }
+  });
 });

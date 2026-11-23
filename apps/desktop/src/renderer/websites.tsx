@@ -803,6 +803,7 @@ function AddArtifactDialog({ artifact, onClose }: { artifact: ArtifactInfo; onCl
             </select>
           </div>
           <p className="small muted">{t('art.board.through', { project: project.name })}</p>
+          {project.id !== artifact.project.id && <p className="small muted">{t('art.board.carried', { origin: artifact.project.name })}</p>}
           <div className="buttons">
             <AsyncButton
               className="default"

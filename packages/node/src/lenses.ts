@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
-import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
+import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type CarriedFile, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
 import type { BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
 import { readJson, writeJson } from './home.ts';
@@ -68,6 +68,8 @@ export interface PureComponent {
   origin: { project: string; release: string };
   manifest: AppManifest;
   part: { component: string; site?: string };
+  /** Its release files as carried along to where it's used (a lens pinned outside its project). */
+  carried?: Record<string, CarriedFile>;
 }
 
 /**
@@ -78,7 +80,7 @@ export function preparePure(h: ServicesHost, ready: Map<string, Promise<Ready>>,
   const before = ready.get(c.key);
   if (before && h.runtime.running(c.key)) return before;
   const making = (async (): Promise<Ready> => {
-    const root = await releaseFolder(h, c.dir, { origin: c.origin, tag: c.tag, manifest: c.manifest });
+    const root = await releaseFolder(h, c.dir, { origin: c.origin, tag: c.tag, manifest: c.manifest, ...(c.carried ? { carried: c.carried } : {}) });
     if (!existsSync(joinPath(root, c.part.component))) throw new Error(`${c.name} ${c.tag} has no ${c.part.component}`);
     const entry = await preparePureWasm(joinPath(root, c.part.component), joinPath(c.dir, 'wasm'));
     h.runtime.startWasm(
@@ -142,14 +144,14 @@ export function unpackPure(bytes: Uint8Array, file: string, into: string): void 
  * A pure component's release, fetched into `dir` once (its release file through the project's provider or GitHub,
  * checked against its SHA-256; or its image, each layer checked against its digest): the folder it unpacked into.
  */
-export async function releaseFolder(h: ServicesHost, dir: string, r: { origin: { project: string; release: string }; tag: string; manifest: AppManifest }): Promise<string> {
+export async function releaseFolder(h: ServicesHost, dir: string, r: { origin: { project: string; release: string }; tag: string; manifest: AppManifest; carried?: Record<string, CarriedFile> }): Promise<string> {
   const target = joinPath(dir, tagFolder(r.tag));
   if (!existsSync(target)) {
     const image = r.manifest.install?.image;
     const asset = r.manifest.install?.assets?.wasm;
     if (asset) {
       // Read here, without a tar program, as an image's layers are: so a page (apps/web) unpacks it the same way.
-      const bytes = await h.releases.bytes({ project: r.origin.project, id: r.origin.release, tag: r.tag, manifest: r.manifest }, asset, PURE_MAX);
+      const bytes = await h.releases.bytes({ project: r.origin.project, id: r.origin.release, tag: r.tag, manifest: r.manifest, ...(r.carried ? { carried: r.carried } : {}) }, asset, PURE_MAX);
       const staging = `${target}.unpacking`;
       rmSync(staging, { recursive: true, force: true });
       mkdirSync(staging, { recursive: true });
@@ -206,7 +208,9 @@ export class Lenses {
 
   /**
    * Its maintainers pin a client service to a board: a release of a project they're in, or one a catalog lists,
-   * suggested (each member chooses) or required (every member's node uses it). `off` takes it away.
+   * suggested (each member chooses) or required (every member's node uses it). `off` takes it away. Pinned outside
+   * its project, it carries its release file along as blobs (fetched and checked here first): the board's members
+   * needn't be in its project, which is the only place its provider (GitHub releases) hands it out.
    */
   async setBoardLens(input: { space: string; board: string; from?: { project: string; tag?: string } | { catalog: string; app: string }; mode?: 'suggest' | 'require'; off?: boolean; as?: string }): Promise<BoardViewInfo> {
     const { space, board } = this.#board(input.space, input.board);
@@ -220,7 +224,11 @@ export class Lenses {
     const manifest = found.artifact.manifest;
     if (!manifest.client) throw new Error(`${manifest.name} ${found.artifact.tag} isn't a client service: its manifest has no "client"`);
     if (!manifest.install?.image && !manifest.install?.assets?.wasm) throw new Error(`${manifest.name} ${found.artifact.tag} has nothing a node can fetch: release it as an image for wasi/wasm, or a release file for wasm`);
-    const body = { board: board.name, origin: { project: found.project.id, release: found.artifact.id }, manifest: manifest as unknown as Json, mode: input.mode === 'require' ? 'require' : 'suggest' };
+    const body: Record<string, Json> = { board: board.name, origin: { project: found.project.id, release: found.artifact.id }, manifest: manifest as unknown as Json, mode: input.mode === 'require' ? 'require' : 'suggest' };
+    if (found.project.id !== space.id && manifest.install?.assets?.wasm && !manifest.install.assets.wasm.parts?.length) {
+      const wasm = await this.#svc().carryRelease({ project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, 'wasm', PURE_MAX);
+      body.files = { wasm } as unknown as Json;
+    }
     await this.h.publish({ kind: KIND_BOARD_LENS, body, space: space.id, as: input.as });
     return this.boardView({ space: space.id, board: board.name });
   }
@@ -331,7 +339,7 @@ export class Lenses {
   /** Fetch a lens's package (once per release), transpile its component, and run it: ready to fold and act. */
   #prepare(lens: BoardLens): Promise<Ready> {
     const client = lens.manifest.client!;
-    return preparePure(this.h, this.#ready, { key: `lens:${lens.origin.release}`, dir: joinPath(this.h.home.dir, 'lenses', lens.origin.release.slice(0, 40)), name: lens.name, tag: lens.tag, origin: lens.origin, manifest: lens.manifest, part: client });
+    return preparePure(this.h, this.#ready, { key: `lens:${lens.origin.release}`, dir: joinPath(this.h.home.dir, 'lenses', lens.origin.release.slice(0, 40)), name: lens.name, tag: lens.tag, origin: lens.origin, manifest: lens.manifest, part: client, ...(lens.files ? { carried: lens.files } : {}) });
   }
 
   /**

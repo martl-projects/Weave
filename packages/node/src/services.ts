@@ -1520,22 +1520,41 @@ export class Services {
     await this.h.publish({ kind: KIND_ARTIFACT_MIRROR, body: { release: a.id, platform, file: kept.file, size: kept.size, sha256: kept.sha256, parts: kept.parts } as unknown as Json, space: project.id });
   }
 
-  /** A release file from a member's mirror in its project: its blobs, checked against what the release names. */
+  /**
+   * A release file from a member's mirror in its project, or from the blobs it was carried along in (a lens pinned to
+   * a board outside its project, for members who aren't in it): checked against what the release names.
+   */
   async fromMirror(a: StoredArtifact, platform: string): Promise<Located | undefined> {
     const project = this.h.spaces.get(a.project);
     const asset = a.manifest.install?.assets?.[platform];
-    if (!project || !asset) return undefined;
-    const members = this.h.state(project).members;
-    for (const m of mirrorsOf(this.h.entries(project), (did) => members.has(did), a.id, platform)) {
-      if (m.sha256 !== asset.sha256 || (asset.size && m.size !== asset.size)) continue;
+    if (!asset) return undefined;
+    const members = project ? this.h.state(project).members : new Set<string>();
+    const mirrors = project ? mirrorsOf(this.h.entries(project), (did) => members.has(did), a.id, platform).filter((m) => m.sha256 === asset.sha256) : [];
+    const carried = a.carried?.[platform];
+    const candidates = [...mirrors.map((m) => ({ size: m.size, parts: m.parts, by: 'Weave, from a member who fetched it' })), ...(carried ? [{ ...carried, by: 'Weave, from the board that shows it' }] : [])];
+    for (const c of candidates) {
+      if (asset.size && c.size !== asset.size) continue;
       try {
-        const body = await assembleFile(a.manifest, { ...asset, size: m.size, parts: m.parts }, (hash) => this.h.blobs.fetch(hash, (hashes) => this.h.wantBlobs(hashes), this.blobWait));
-        return { body, by: 'Weave, from a member who fetched it', mirrored: true };
+        const body = await assembleFile(a.manifest, { ...asset, size: c.size, parts: c.parts }, (hash) => this.h.blobs.fetch(hash, (hashes) => this.h.wantBlobs(hashes), this.blobWait));
+        return { body, by: c.by, mirrored: true };
       } catch {
         // Nobody holding it is online, or it doesn't match: the next one, or its provider.
       }
     }
     return undefined;
+  }
+
+  /**
+   * A release file this node has (fetched and checked once, as for any lens here), kept as encrypted blobs to carry
+   * along: its size and parts. For a lens pinned to a board outside its project (lenses.ts).
+   */
+  async carryRelease(a: StoredArtifact, platform: string, limit: number): Promise<{ size: number; parts: Array<{ hash: string; key: string }> }> {
+    const asset = a.manifest.install?.assets?.[platform];
+    if (!asset) throw new Error(`${a.manifest.name} ${a.tag} has no ${platform} file`);
+    if (asset.parts?.length && asset.size) return { size: asset.size, parts: asset.parts };
+    const bytes = await this.h.releases.bytes(a, asset, limit);
+    const kept = storeFiles({ [platform]: { file: asset.file, bytes } }, (data) => void this.h.blobs.put(data))[platform]!;
+    return { size: kept.size, parts: kept.parts };
   }
 
   /** Ask a provider in the release's project where to download its file for this computer; undefined when it has none. */

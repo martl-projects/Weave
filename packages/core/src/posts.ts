@@ -93,6 +93,37 @@ export interface BoardLens {
   mode: 'suggest' | 'require';
   by: Did;
   time: string;
+  /**
+   * Its release files, carried along as encrypted blobs by the maintainer who pinned it (by platform, "wasm"): so
+   * members outside its project, who can't ask its provider (GitHub releases), put it together from whoever holds the
+   * blobs. Checked against the SHA-256 the manifest names, like any release file; only the pinner vouches for where
+   * it came from.
+   */
+  files?: Record<string, CarriedFile>;
+}
+
+/** A release file carried as blobs: its size and its parts, in order. */
+export interface CarriedFile {
+  size: number;
+  parts: Array<{ hash: string; key: string }>;
+}
+
+/** At most this many parts per carried file (32 MB in parts of about 4 MB, as a mirror). */
+const MAX_CARRIED_PARTS = 64;
+
+/** Carried release files from untrusted input: the valid ones, by platform, or undefined when there are none. */
+export function parseCarriedFiles(value: unknown): Record<string, CarriedFile> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, CarriedFile> = {};
+  for (const [platform, f] of Object.entries(value as Record<string, unknown>).slice(0, 8)) {
+    if (!/^[a-z0-9-]{1,40}$/.test(platform) || !f || typeof f !== 'object' || Array.isArray(f)) continue;
+    const size = Number((f as Record<string, unknown>).size);
+    const parts = (f as Record<string, unknown>).parts;
+    if (!Number.isSafeInteger(size) || size <= 0 || !Array.isArray(parts) || !parts.length || parts.length > MAX_CARRIED_PARTS) continue;
+    const valid = (x: unknown) => !!x && typeof x === 'object' && typeof (x as Record<string, unknown>).hash === 'string' && typeof (x as Record<string, unknown>).key === 'string' && String((x as Record<string, unknown>).hash).length <= 200 && String((x as Record<string, unknown>).key).length <= 200;
+    if (parts.every(valid)) out[platform] = { size, parts: (parts as Array<{ hash: string; key: string }>).map((x) => ({ hash: x.hash, key: x.key })) };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** A lens from a board event's body, or undefined when it isn't one (a client service, released, with somewhere to get it). */
@@ -108,7 +139,8 @@ function parseLens(body: Json, by: Did, time: string): BoardLens | undefined {
     return undefined;
   }
   if (!manifest.client || !manifest.install?.tag || !(manifest.install.image || manifest.install.assets?.wasm)) return undefined;
-  return { app: manifest.app, name: manifest.name, tag: manifest.install.tag, origin: { project, release }, manifest, mode: field(body, 'mode') === 'require' ? 'require' : 'suggest', by, time };
+  const files = parseCarriedFiles(field(body, 'files'));
+  return { app: manifest.app, name: manifest.name, tag: manifest.install.tag, origin: { project, release }, manifest, mode: field(body, 'mode') === 'require' ? 'require' : 'suggest', by, time, ...(files ? { files } : {}) };
 }
 
 const DEFAULT_BOARDS: Record<SpaceKind, Array<Omit<Board, 'pinned'>>> = {
