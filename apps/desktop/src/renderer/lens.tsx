@@ -7,6 +7,7 @@ import { Modal, toast } from './ui.tsx';
 import { BuyTicket } from './shows.tsx';
 import { useTexts } from './texts.tsx';
 import { LensShare } from './lensshare.tsx';
+import { fillWindow } from './windowfill.ts';
 
 /*
  * A board shown through its client service: the service's own renderer (its site) in a sandboxed frame, which gets
@@ -408,36 +409,20 @@ export function LensFrame({ title, release, base, net, location, tilt, tickets, 
 }
 
 /**
- * A lens's view filling the screen: the browser's full screen where it has one for a page's element (a computer, an
- * Android phone), otherwise (an iPhone) the box laid over the whole app. Esc, or the button at the top, leaves it.
+ * A lens's view filling Weave's window (windowfill.ts): inside its border and below its title bar, the screen when
+ * Weave is maximized; on a phone, the whole screen. Esc, or the button at the top, leaves it.
  */
-function useFullscreen(box: { current: HTMLElement | null }, full: boolean, setFull: (on: boolean) => void) {
+function useFullscreen(el: HTMLElement | null, full: boolean, setFull: (on: boolean) => void) {
   useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const native = typeof el.requestFullscreen === 'function' && document.fullscreenEnabled;
-    if (full && native && document.fullscreenElement !== el) el.requestFullscreen().catch(() => el.classList.add('lens-full'));
-    else if (full && !native) el.classList.add('lens-full');
-    document.documentElement.classList.toggle('lens-full-on', full);
-    if (!full) {
-      el.classList.remove('lens-full');
-      if (document.fullscreenElement === el) void document.exitFullscreen().catch(() => {});
-    }
-  }, [full]);
-  useEffect(() => {
-    const changed = () => {
-      if (!document.fullscreenElement && !box.current?.classList.contains('lens-full')) setFull(false);
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && box.current?.classList.contains('lens-full')) setFull(false);
-    };
-    document.addEventListener('fullscreenchange', changed);
+    if (!el || !full) return;
+    const unfill = fillWindow(el);
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setFull(false);
     window.addEventListener('keydown', key);
     return () => {
-      document.removeEventListener('fullscreenchange', changed);
       window.removeEventListener('keydown', key);
+      unfill();
     };
-  }, []);
+  }, [full, el]);
 }
 
 /** The pane's button for it, next to the lens switch. */
@@ -452,7 +437,8 @@ export function LensFullscreenButton({ full, setFull }: { full: boolean; setFull
 
 export function LensView({ space, board, meDid, onOpen, full = false, setFull = () => {} }: { space: SpaceInfo; board: BoardInfo; meDid: string; onOpen(post: string): void; full?: boolean; setFull?(on: boolean): void }) {
   const { t } = useTexts();
-  const box = useRef<HTMLDivElement>(null);
+  // Its box, once it shows (it waits for the view): what fills Weave's window.
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
   useFullscreen(box, full, setFull);
   // An iPhone wants a tap in Weave before the view hears how it is tilted: what that tap does, while it is wanted.
   const [tiltAsk, setTiltAsk] = useState<(() => void) | null>(null);
@@ -519,7 +505,7 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
     reload();
   };
   return (
-    <div className={bleed ? 'lens-box lens-bleed' : 'lens-box'} ref={box}>
+    <div className={bleed ? 'lens-box lens-bleed' : 'lens-box'} ref={setBox}>
       {full && (
         <button className="lens-full-exit" onClick={() => setFull(false)} title={t('lens.fullscreen.exit')} aria-label={t('lens.fullscreen.exit')}>
           ✕

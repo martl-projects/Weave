@@ -496,7 +496,13 @@ try {
   await tab.run(`document.querySelector('#take-over').click()`);
   await until('the first tab to let go', () => run<boolean>(takeOver));
   await until('the second tab to have it', () => tab.run<boolean>(locked));
-  if (process.env.SHOTS) writeFileSync(join(process.env.SHOTS, 'locked.png'), Buffer.from(((await tab.send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+  // The lock screen in every look (it keeps the one chosen).
+  if (process.env.SHOTS)
+    for (const skin of ['', 'win95', 'clean', 'cozy', 'arcade']) {
+      if (skin) await tab.run(`void (document.documentElement.dataset.skin = ${JSON.stringify(skin)})`);
+      await sleep(200);
+      writeFileSync(join(process.env.SHOTS, `locked${skin && `-${skin}`}.png`), Buffer.from(((await tab.send('Page.captureScreenshot')) as { data: string }).data, 'base64'));
+    }
   passed('it takes the account over, and the first tab lets go');
   await run(`document.querySelector('#take-over').click()`);
   await until('the first tab to have it again', () => run<boolean>(lockedOrOpen));

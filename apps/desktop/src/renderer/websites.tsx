@@ -15,6 +15,7 @@ import { serviceIcon, ServiceCatalog } from './addservice.tsx';
 import { HandDialog, platformName } from './keyvaults.tsx';
 import { t, useTexts } from './texts.tsx';
 import { useServiceTexts } from './servicetexts.ts';
+import { fillWindow, focusedSpace } from './windowfill.ts';
 
 /*
  * A project's services, and the websites the website service serves: someone in the project opens a website, answered by a
@@ -59,17 +60,20 @@ function WebsiteFrame({ room, onClose }: { room: WebsiteInfo; onClose(): void })
   const [link] = useState(() => bridge.web!.websiteFrame(room));
   const [failed, setFailed] = useState<string>();
   const [menu, setMenu] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (frame.current?.contentWindow) link.attach(frame.current.contentWindow, setFailed);
     return () => link.detach();
   }, [link]);
+  // Weave's window, not the screen (windowfill.ts): on a phone that is the screen; maximized, too.
+  useEffect(() => (box.current ? fillWindow(box.current) : undefined), []);
   const inBrowser = () => {
     bridge.web!.openWebsite(room);
     onClose();
   };
   // The website has the whole screen; Weave's own controls wait behind one small button, in a corner.
   return createPortal(
-    <div className="website-frame">
+    <div className="website-frame" ref={box}>
       <iframe ref={frame} src={link.url} title={room.name} allow="fullscreen; autoplay; clipboard-write" />
       <button className="website-frame-handle" aria-label={room.name} aria-expanded={menu} onClick={() => setMenu((open) => !open)}>
         ⋯
@@ -160,7 +164,8 @@ function WebsiteCard({ room, shows, autoplay = false }: { room: WebsiteInfo; sho
     if (bridge.web) {
       if (!room.mayJoin) return void (wants.current = false);
       wants.current = false;
-      if (inAFrame()) setFramed(true);
+      // In focus (windowfill.ts) it fills Weave's window at once, as on a phone; an iPhone has no frame for it.
+      if (inAFrame() || (focusedSpace() && !anIPhone())) setFramed(true);
       else playButton.current?.focus();
       return;
     }

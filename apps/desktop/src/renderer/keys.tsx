@@ -621,60 +621,74 @@ export function Unlock({ onDone }: { onDone: () => void }) {
     bridge.web!.unlock().then(onDone, () => setBusy(false));
   }, []);
   const withPasskey = bridge.web!.passkey();
-  // On the stage of the first screen: the passkey first; the words and the ways out folded below (open without a passkey).
+  // In the look the person chose (the first screen, before any, has a stage of its own): the passkey first; the words
+  // and the ways out folded below (open without a passkey, or after something went wrong).
   return (
-    <FirstStage>
-      <p className="first-hello">{t('web.unlock.intro')}</p>
-      {linkWaiting && (
-        <div className="notice">
-          <p>{t('web.unlock.link')}</p>
-          {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
-          <div className="first-ways">
-            <button id="empty-and-link" className="first-btn primary" onClick={() => void reset()}>
-              {t('web.unlock.link.button')}
-            </button>
-          </div>
+    <div className="desktop">
+      <div className="window welcome unlock">
+        <div className="title-bar">
+          <div className="title-bar-text">{t('web.unlock.title')}</div>
         </div>
-      )}
-      {withPasskey && (
-        <div className="first-ways">
-          <button id="unlock-passkey" className={linkWaiting ? 'first-btn' : 'first-btn primary'} disabled={busy} onClick={() => void open()}>
-            <Icon name="lock" /> {t('web.unlock.passkey')}
-          </button>
+        <div className="window-body unlock-stage">
+          {/* The first screen's layout, in this look's colors: the logo, its name, what Weave is for. */}
+          <img className="unlock-logo" src={weaveLogo} alt="" />
+          <h1 className="unlock-title">Weave</h1>
+          <p className="unlock-tagline">
+            <span className="coral">{t('brand.build')}</span> · <span className="yellow">{t('brand.share')}</span> · <span className="mint">{t('brand.belong')}</span>
+          </p>
+          <p className="unlock-intro">{t('web.unlock.intro')}</p>
+          {linkWaiting && (
+            <div className="notice">
+              <p>{t('web.unlock.link')}</p>
+              {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
+              <div className="first-ways">
+                <button id="empty-and-link" className="default" onClick={() => void reset()}>
+                  {t('web.unlock.link.button')}
+                </button>
+              </div>
+            </div>
+          )}
+          {withPasskey && (
+            <div className="first-ways">
+              <button id="unlock-passkey" className={linkWaiting ? '' : 'default'} disabled={busy} onClick={() => void open()}>
+                <Icon name="lock" /> {t('web.unlock.passkey')}
+              </button>
+            </div>
+          )}
+          {said && <p className="notice alarm">{said}</p>}
+          {other && <p className="notice">{t('web.unlock.other')}</p>}
+          <details className="first-more" open={!withPasskey || !!said}>
+            <summary>{t('web.first.more')}</summary>
+            <form
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                void open(words);
+              }}
+            >
+              <div className="field-row-stacked">
+                <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
+                <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
+              </div>
+              <div className="first-ways">
+                <button id="unlock-open" className={withPasskey ? '' : 'default'} disabled={busy || !words.trim()}>
+                  {t('web.unlock.open')}
+                </button>
+              </div>
+            </form>
+            {/* Always a way out: another account, or this browser linked with a computer instead. */}
+            <div className="first-ways">
+              <button id="reset-and-link" type="button" disabled={busy} onClick={() => void reset('link')}>
+                {t('web.unlock.else.link')}
+              </button>
+              <button id="empty-browser" type="button" disabled={busy} onClick={() => void reset()}>
+                {t('web.unlock.empty')}
+              </button>
+              <p className="small muted">{t('web.unlock.else.why')}</p>
+            </div>
+          </details>
         </div>
-      )}
-      {said && <p className="notice alarm">{said}</p>}
-      {other && <p className="notice">{t('web.unlock.other')}</p>}
-      <details className="first-more" open={!withPasskey || !!said}>
-        <summary>{t('web.first.more')}</summary>
-        <form
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            void open(words);
-          }}
-        >
-          <div className="field-row-stacked">
-            <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
-            <textarea id="unlock-words" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
-          </div>
-          <div className="first-ways">
-            <button id="unlock-open" className={withPasskey ? 'first-btn' : 'first-btn primary'} disabled={busy || !words.trim()}>
-              {t('web.unlock.open')}
-            </button>
-          </div>
-        </form>
-        {/* Always a way out: another account, or this browser linked with a computer instead. */}
-        <div className="first-ways">
-          <button id="reset-and-link" type="button" className="first-btn" disabled={busy} onClick={() => void reset('link')}>
-            {t('web.unlock.else.link')}
-          </button>
-          <button id="empty-browser" type="button" className="first-btn" disabled={busy} onClick={() => void reset()}>
-            {t('web.unlock.empty')}
-          </button>
-        </div>
-        <p className="small muted">{t('web.unlock.else.why')}</p>
-      </details>
-    </FirstStage>
+      </div>
+    </div>
   );
 }
 
