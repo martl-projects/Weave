@@ -13,6 +13,7 @@ export type {
   Backend,
   BoardInfo,
   BoardViewInfo,
+  AgentBoardInfo,
   WidgetViewInfo,
   WidgetReleaseInfo,
   LensKindInfo,

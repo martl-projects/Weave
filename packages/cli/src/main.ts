@@ -283,12 +283,13 @@ posts — in a community (-r) or a project's boards (-p); without either, your h
   up <id> / down <id> / unvote <id>   upvote, downvote, or take your vote back
   save <id> / unsave <id>    keep a post for later; --pin puts it at the top of your home (only you see this)
   share <id> --to <community|followers>   share a post into a community; public projects also to your followers  [--text <t>]
-  boards                     a project's boards
-  board add <name>           add a board (maintainers)  [--title <t>] [--type posts|issues|proposals] [--sort hot|new|top] [--position <n>]
+  boards                     a project's boards (-p), or the ones a group's owner made (-g)
+  board add <name>           add a board (a project's maintainers; -g <group>: its owner, posts only)  [--title <t>] [--type posts|issues|proposals] [--sort hot|new|top] [--position <n>]
   board set <name>           change title, sort or position (maintainers)
   board drop <name>          remove a board; its posts stay in the logs
   board follow <name>        bring a board's posts to your Home and notify you (releases and showcase by default); unfollow stops
   board access <name>        who may read and write (maintainers)  [--read <who,…>] [--write <who,…>]
+  board agents <name> off|on close a board to your own agents: they neither read nor write there, nor get its files (on: open it again)
   board lens <name>          show a board through a client service (maintainers): --artifact <project>[@tag] | --from <space>/<app>
                              [--require: every member's node uses it; otherwise suggested]; --off takes it away
   board view <name>          the board as its client service shows it: its state and actions
@@ -644,6 +645,12 @@ const actor = (a: Actor): string => `${a.name ?? a.did.slice(8, 20)}${a.agent ? 
 function needProject(): string {
   if (!values.project) throw new Error('which project? add -p <project>');
   return values.project;
+}
+/** Where a board is: a project (-p), a group (-g: the boards its owner made) or a community (-r). */
+function boardSpace(): string {
+  const space = values.project ?? values.group ?? values.community;
+  if (!space) throw new Error('which project or group? add -p <project> or -g <group>');
+  return space;
 }
 
 /** Chat works in any space: -p project, -g group or -r community. */
@@ -1991,7 +1998,7 @@ ${postLine(p)}`);
     }
 
     case 'boards': {
-      const boards = await (await backend()).boards(values.community ?? needProject());
+      const boards = await (await backend()).boards(boardSpace());
       return out(boards, () => boards.map(boardLine).join('\n'));
     }
 
@@ -2007,11 +2014,17 @@ ${postLine(p)}`);
         const slash = values.from?.lastIndexOf('/') ?? -1;
         const from = values.artifact ? (at > 0 ? { project: values.artifact.slice(0, at), tag: values.artifact.slice(at + 1) } : { project: values.artifact }) : values.from && slash > 0 ? { catalog: values.from.slice(0, slash), app: values.from.slice(slash + 1) } : undefined;
         if (!from && !values.off) throw new Error('usage: weave board lens <name> -p <project> --artifact <project>[@tag] | --from <space>/<app>  [--require]  (--off takes it away)');
-        const view = await (await backend()).setBoardLens({ space: values.community ?? needProject(), board: name, ...(from ? { from } : {}), mode: values.require ? 'require' : 'suggest', off: values.off, as: values.as });
+        const view = await (await backend()).setBoardLens({ space: boardSpace(), board: name, ...(from ? { from } : {}), mode: values.require ? 'require' : 'suggest', off: values.off, as: values.as });
         return out(view, () => lensLine(view));
       }
+      if (sub === 'agents' && name) {
+        // weave board agents <name> off|on: close a board to your own agents (they neither read nor write there), or open it again
+        if (args[2] !== 'off' && args[2] !== 'on') throw new Error('usage: weave board agents <name> off|on  -p <project> | -g <group>');
+        const closed = await (await backend()).closeBoardToAgents({ space: boardSpace(), board: name, off: args[2] === 'on' });
+        return out(closed, () => (closed.length ? closed.map((c) => `${c.space.name} / ${c.board}: closed to your agents (${c.posts.length} posts, ${c.refs.length} files)`).join('\n') : 'no board is closed to your agents'));
+      }
       if (sub === 'view' && name) {
-        const view = await (await backend()).boardView({ space: values.community ?? needProject(), board: name, use: true });
+        const view = await (await backend()).boardView({ space: boardSpace(), board: name, use: true });
         return out(view, () => `${lensLine(view)}${view.state !== undefined ? `\n\n${JSON.stringify(view.state, null, 2)}` : ''}`);
       }
       if (sub === 'act' && name && args[2]) {
@@ -2021,7 +2034,7 @@ ${postLine(p)}`);
         } catch {
           throw new Error('--input is JSON');
         }
-        const done = await (await backend()).boardAction({ space: values.community ?? needProject(), board: name, action: args[2], input: input as never, as: values.as });
+        const done = await (await backend()).boardAction({ space: boardSpace(), board: name, action: args[2], input: input as never, as: values.as });
         return out(done, () => `published ${done.published.length}: ${done.published.map((e) => e.kind).join(', ') || 'nothing'}\n${lensLine(done.view)}`);
       }
       if ((sub === 'follow' || sub === 'unfollow') && name) {
@@ -2030,7 +2043,7 @@ ${postLine(p)}`);
       }
       if (!['add', 'set', 'drop'].includes(sub) || !name) throw new Error('usage: weave board add|set|drop|access|follow|unfollow|lens|view|act <name> -p <project>');
       const boards = await (await backend()).setBoard({
-        project: needProject(),
+        project: values.project ?? values.group ?? needProject(),
         name,
         title: values.title,
         type: values.type as BoardInfo['type'] | undefined,

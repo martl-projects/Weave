@@ -4,6 +4,8 @@ import {
   roughLocation,
   screenTilt,
   lensFileName,
+  lensNotify,
+  LENS_NOTIFY,
   artifactKindOf,
   boardOfEvents,
   channelsOf,
@@ -85,6 +87,22 @@ describe('the widget manifest', () => {
     expect(lensFileName('  ...  ')).toBe('file');
     expect(lensFileName(7)).toBe('file');
     expect(lensFileName('x'.repeat(200)).length).toBe(80);
+  });
+
+  it('reads that a lens may tell members and ask about tickets, and whom an event tells', () => {
+    const ok = checkManifest({ app: 'bets', name: 'Bets', client: { component: 'b.wasm', site: 'site', writes: ['lb.ticket'], notify: true, tickets: true } });
+    expect(ok.problems).toEqual([]);
+    expect(ok.manifest!.client).toMatchObject({ notify: true, tickets: true });
+    expect(checkManifest({ app: 'bets', name: 'Bets', client: { component: 'b.wasm', site: 'site', writes: [] } }).manifest!.client).not.toHaveProperty('notify');
+    expect(checkManifest({ app: 'w', name: 'W', client: { component: 'b.wasm', writes: [], notify: 'all' } }).problems.join()).toMatch(/client.notify/);
+    expect(checkManifest({ app: 'w', name: 'W', client: { component: 'b.wasm', writes: [], tickets: true } }).problems.join()).toMatch(/client.tickets" is for its site/);
+    // Whom an event tells: people by their ids, each once, with one line; nobody or nothing said is no notice.
+    expect(lensNotify({ notify: { to: ['did:key:a', 'did:key:a', 7, 'bob'], text: '  Your ticket:\n 1000 chips ' } })).toEqual({ to: ['did:key:a'], text: 'Your ticket: 1000 chips' });
+    expect(lensNotify({ notify: { to: [], text: 'hi' } })).toBeUndefined();
+    expect(lensNotify({ notify: { to: ['did:key:a'], text: ' ' } })).toBeUndefined();
+    expect(lensNotify({ notify: 'everyone' })).toBeUndefined();
+    const many = lensNotify({ notify: { to: Array.from({ length: 80 }, (_, i) => `did:key:${i}`), text: 'x'.repeat(500) } })!;
+    expect([many.to.length, many.text.length]).toEqual([LENS_NOTIFY.to, LENS_NOTIFY.text]);
   });
 
   it('tells a tilt as the screen is held, without the compass', () => {

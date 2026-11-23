@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { LENS_FILES, lensFileName, roughLocation, screenTilt, type LensLocation } from '@weave/core';
-import type { BoardInfo, BoardViewInfo, SpaceInfo } from '@weave/node/client';
+import type { AgentBoardInfo, BoardInfo, BoardViewInfo, ShowInfo, SpaceInfo, TicketInfo } from '@weave/node/client';
 import { Icon } from './icons.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
-import { toast } from './ui.tsx';
+import { Modal, toast } from './ui.tsx';
+import { BuyTicket } from './shows.tsx';
 import { useTexts } from './texts.tsx';
 
 /*
@@ -38,8 +39,16 @@ import { useTexts } from './texts.tsx';
  *   to the frame    {weave: 'attached', id, ref} / {…, error}        its reference, to put into an action's input
  *   from the frame  {weave: 'save', id, name, type, data}           a file for its member (a PDF it made): Weave
  *   to the frame    {weave: 'saved', id} / {…, error}                offers it in a line above the view; they save it or not
+ *   from the frame  {weave: 'tickets', id, show?}                    the shows of this project, or one of them (only
+ *                                                                  if its manifest says "tickets")
+ *   to the frame    {weave: 'tickets', id, shows: [{id, name, starts, ends, price: {amount, decimals, symbol}, open,
+ *                   cancelled, mine, ticket}]} / {weave: 'tickets', id, show: {…}, holders?: [{did, name, tx}]} /
+ *                   {…, error}                                      mine: its member hosts it; ticket: they have one;
+ *                                                                  holders: who paid, for its host only
+ *   from the frame  {weave: 'ticket', show}                         its member wants a ticket: Weave shows how to pay
  *
- * The view message says what this Weave answers: can: ['picture', 'attach', 'save', 'tilt'] (what is there of it).
+ * The view message says what this Weave answers: can: ['picture', 'attach', 'save', 'tilt', 'tickets'] (what is there
+ * of it). Telling members is not a message: an event of the lens's own kind names them ("notify" in its body, lensNotify).
  *
  * A chat's widget (widgets.tsx) talks the same way: its 'view' carries {widget: {id, title}} instead of board.
  *
@@ -208,15 +217,15 @@ if (typeof window !== 'undefined') {
   }
 }
 
-export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
+export function LensFrame({ title, release, base, net, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen, full, view, act, onOpen, className, style }: { /** What a view whose manifest says "tickets" learns about its project's shows (or one of them). */ tickets?(show?: string): Promise<Record<string, unknown>>; /** Its member wants a ticket to that show. */ onTicket?(show: string): void; /** The view says whether it lays out the screen's edges itself (then, filling the screen, it gets all of it). */ onEdges?(own: boolean): void; /** A file the view made for its member: shown to them to save or not (null: it is settled). Without it a view cannot hand out files. */ onOffer?(offer: LensOffer | null): void; title: string; release: string; base: string; net?: string[]; location?: LensLocation; /** Its manifest says its site may ask how the device is tilted. */ tilt?: boolean; /** The device wants a tap in Weave first: `allow` is what that tap does (null: no longer needed). */ onTiltAsk?(allow: (() => void) | null): void; onLocated?(): void; onFullscreen?(on: boolean): void; full?: boolean; view: unknown; act(name: string, input: unknown): Promise<unknown>; onOpen?(post: string): void; className?: string; style?: CSSProperties }) {
   const { t } = useTexts();
   const frame = useRef<HTMLIFrameElement>(null);
   // Weave Web's frame takes its CSP from its address (a Pages Function): the hosts this member allowed, or none. On a
   // computer or a phone the node's answer carries them (lensFile), so the address stays as it is.
   const hosts = net?.length ? net.join(',') : '';
   const src = bridge.web && hosts ? `${base}?net=${encodeURIComponent(hosts)}` : base;
-  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
-  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
+  const latest = useRef({ view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen });
+  latest.current = { view, act, onOpen, release, hosts, title, t, location, tilt, tickets, onTicket, onTiltAsk, onOffer, onEdges, onLocated, onFullscreen };
   const tilting = useRef<(() => void) | null>(null);
   const tiltGo = useRef<(() => void) | null>(null);
   const attached = useRef(0);
@@ -325,6 +334,19 @@ export function LensFrame({ title, release, base, net, location, tilt, onTiltAsk
           });
         }
       }
+      // The shows of its project and their tickets: only for a view whose manifest says so. Who paid is told to the
+      // show's host alone (their node knows nobody else's ticket).
+      if (m?.weave === 'tickets') {
+        const show = (m as { show?: unknown }).show;
+        const ask = latest.current.tickets;
+        if (!ask) send({ weave: 'tickets', id: m.id, error: latest.current.t('lens.tickets.not.here', { name: latest.current.title }) });
+        else
+          ask(typeof show === 'string' ? show : undefined).then(
+            (answer) => send({ weave: 'tickets', id: m.id, ...answer }),
+            (e: Error) => send({ weave: 'tickets', id: m.id, error: e.message }),
+          );
+      }
+      if (m?.weave === 'ticket' && typeof (m as { show?: unknown }).show === 'string' && latest.current.tickets) latest.current.onTicket?.((m as unknown as { show: string }).show);
       // How the device is tilted: only for a view whose manifest says so, heard from the device here, never in the frame.
       if (m?.weave === 'tilt') {
         tilting.current?.();
@@ -445,7 +467,29 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
   const { data: view, error, reload } = useApi(() => api<BoardViewInfo>('boardView', { space: space.id, board: board.name, use: true }), [space.id, board.name, board.lens?.release]);
   // Where its view is served here: the desktop, the phone and the web preview each serve it their own way.
   const { data: base } = useApi(async () => (view?.lens?.site ? bridge.lensBase(view.lens.release) : undefined), [view?.lens?.release, view?.lens?.site]);
-  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid }, can: ['picture', 'attach', 'save', ...(view.lens?.tilt ? ['tilt'] : [])] }, [view, meDid]);
+  const asksTickets = !!view?.lens?.tickets && space.kind === 'project';
+  const message = useMemo(() => view && { weave: 'view', state: view.state ?? null, actions: view.actions ?? [], board: view.board, me: { did: meDid }, can: ['picture', 'attach', 'save', ...(view.lens?.tilt ? ['tilt'] : []), ...(asksTickets ? ['tickets'] : [])] }, [view, meDid, asksTickets]);
+  // The show its member wants a ticket to, while Weave shows how to pay it.
+  const [buying, setBuying] = useState<ShowInfo | null>(null);
+  const showFor = (s: ShowInfo) => ({ id: s.id, name: s.name, starts: s.starts, ends: s.ends, price: { amount: String(s.price.amount), decimals: s.price.decimals, symbol: s.price.symbol }, open: s.open, cancelled: s.cancelled, mine: s.mine, ticket: !!s.ticket });
+  const tickets = async (id?: string): Promise<Record<string, unknown>> => {
+    const shows = await api<ShowInfo[]>('shows', space.id);
+    if (id === undefined) return { shows: shows.map(showFor) };
+    const show = shows.find((s) => s.id === id);
+    if (!show) throw new Error(t('lens.tickets.no.show'));
+    if (!show.mine) return { show: showFor(show) };
+    const sold = await api<TicketInfo[]>('tickets', show.id);
+    return { show: showFor(show), holders: sold.filter((x) => x.ok).map((x) => ({ did: x.holder.did, name: x.holder.name ?? null, tx: x.tx })) };
+  };
+  const wantTicket = (id: string) =>
+    void api<ShowInfo[]>('shows', space.id).then(
+      (shows) => {
+        const show = shows.find((s) => s.id === id);
+        if (!show) toast(t('lens.tickets.no.show'), 'error');
+        else setBuying(show);
+      },
+      (e: Error) => toast(e.message, 'error'),
+    );
 
   if (error) return <p className="muted pad">{error}</p>;
   if (!view) return <p className="muted pad">{t('lens.getting.ready', { name: board.lens?.name ?? t('lens.its.view') })}</p>;
@@ -544,9 +588,38 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
           </button>
         </div>
       )}
+      {buying && (
+        <Modal title={buying.name} onClose={() => setBuying(null)}>
+          {buying.ticket ? <p>{t('lens.tickets.have')}</p> : <BuyTicket show={buying} />}
+        </Modal>
+      )}
       {/* A new key when the hosts change: the frame loads again with the CSP that goes with them. */}
-      <LensFrame key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
+      <LensFrame tickets={asksTickets ? tickets : undefined} onTicket={wantTicket} key={net?.allowed ? 'net' : 'none'} title={view.lens.name} release={view.lens.release} base={base} net={net?.allowed ? net.hosts : undefined} location={where?.allowed ? where.asks : undefined} tilt={view.lens.tilt} onTiltAsk={(allow) => setTiltAsk(() => allow)} onOffer={offered} onEdges={setBleed} onFullscreen={setFull} full={full} view={message} act={(name, input) => api('boardAction', { space: space.id, board: board.name, action: name, input })} onOpen={onOpen} />
     </div>
+  );
+}
+
+/**
+ * Whether your agents are let onto this board: a switch of yours, kept on your node. Closed, they neither read nor
+ * write there and get none of its files (a book laid out by an agent, before its pictures come).
+ */
+export function BoardAgentsSwitch({ space, board }: { space: SpaceInfo; board: BoardInfo }) {
+  const { t } = useTexts();
+  const { data: closed, reload } = useApi(() => api<AgentBoardInfo[]>('agentBoards'), [space.id, board.name]);
+  if (!closed) return null;
+  const shut = closed.some((c) => c.space.id === space.id && c.board === board.name);
+  const flip = () =>
+    void api('closeBoardToAgents', { space: space.id, board: board.name, ...(shut ? { off: true } : {}) }).then(
+      () => {
+        reload();
+        toast(t(shut ? 'board.agents.opened' : 'board.agents.closed', { board: board.title }));
+      },
+      (e: Error) => toast(e.message, 'error'),
+    );
+  return (
+    <button onClick={flip} aria-pressed={shut} title={t(shut ? 'board.agents.out.hint' : 'board.agents.in.hint')}>
+      {t(shut ? 'board.agents.out' : 'board.agents.in')}
+    </button>
   );
 }
 

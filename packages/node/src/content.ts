@@ -84,7 +84,8 @@ export class Content {
     let pinned: string[] = [];
     if (query.space) {
       const space = this.core.space(query.space);
-      if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
+      // A group has posts only on the boards its owner made.
+      if (space.kind === 'group' && !this.core.spacePosts(space).boards.length) throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
       const { posts: all, boards } = this.core.spacePosts(space);
       const board = query.board ? this.core.board(space, boards, query.board) : undefined;
       posts = board ? all.filter((p) => p.board === board.name) : all;
@@ -137,7 +138,7 @@ export class Content {
     const scene = input.scene?.trim();
     if (scene && !sceneOf(scene)) throw new Error('a scene is its id, like idea or celebrate');
     const space = this.core.space(input.space);
-    if (space.kind === 'group') throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
+    if (space.kind === 'group' && !this.core.spacePosts(space).boards.length) throw new WeaveError('daemon.posts.group', { space: space.name }, `${space.name} is a group: groups have chat, posts live in projects and communities`);
     const body: Record<string, Json> = { title, text: input.text ?? '' };
     if (link) body.link = link;
     if (image) body.image = image;
@@ -153,6 +154,12 @@ export class Content {
       if (board.type === 'issues') return this.post((await this.openIssue({ project: space.id, title, text: input.text, as: input.as, board: board.name, prompt })).id);
       if (board.type === 'proposals') return this.post((await this.propose({ project: space.id, title, text: input.text, as: input.as, board: board.name })).id);
       body.board = board.name;
+    }
+    // A group's post goes to one of its boards: the one named, or its only one.
+    if (space.kind === 'group') {
+      const boards = this.core.spacePosts(space).boards;
+      if (!input.board && boards.length > 1) throw new Error(`which board of ${space.name}? it has ${boards.map((b) => b.name).join(', ')}`);
+      body.board = this.core.board(space, boards, input.board ?? boards[0].name).name;
     }
     const { id } = await this.node.publish({ kind: KIND_POST, body, space: space.id, as: input.as });
     return this.post(id);
@@ -247,7 +254,7 @@ export class Content {
   #postSources(): Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> {
     const out: Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> = [];
     for (const space of this.core.spaces.values()) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      if (space.kind !== 'project' && space.kind !== 'community' && space.kind !== 'group') continue;
       const entries = this.core.entries(space);
       out.push({ posts: postsOf(space.kind, entries, this.core.state(space).maintainers), entries, space });
     }
@@ -399,8 +406,12 @@ export class Content {
   }
 
   async setBoard(input: { project: string; name: string; title?: string; type?: BoardType; sort?: PostSort; position?: number; on?: boolean }): Promise<BoardInfo[]> {
-    const project = this.core.project(input.project);
-    this.core.maintainerState(project);
+    // A project's boards are its maintainers'; a group's are its owner's (posts only: issues and proposals live in projects).
+    const project = this.core.space(input.project);
+    if (project.kind !== 'project' && project.kind !== 'group') throw new Error(`${project.name} is a ${project.kind}: projects and groups have boards of their own making`);
+    if (project.kind === 'group' && input.type !== undefined && input.type !== 'posts') throw new Error(`a group's board holds posts: ${input.type} live in projects`);
+    if (project.kind === 'group' ? this.core.state(project).founder !== this.node.identity.author : !mayDo(this.core.state(project), this.node.identity.author, 'curate').ok)
+      throw new Error(project.kind === 'group' ? `only the owner of ${project.name} makes its boards` : `only maintainers of ${project.name} can do that`);
     const name = boardName(input.name);
     if (!name) throw new Error('board names use letters, digits and dashes');
     if (input.sort !== undefined && !POST_SORTS.includes(input.sort)) throw new Error(`sort by ${POST_SORTS.join(', ')}`);

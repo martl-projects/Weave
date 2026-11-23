@@ -490,6 +490,52 @@ describe('Weave over MCP', () => {
     close();
   });
 
+  it('keeps an agent out of a board its person closed to their agents: its posts, their chats, its files, and writing there', async () => {
+    const { agentView } = await import('../src/index.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'weave-mcp-closed-'));
+    dirs.push(dir);
+    const node = WeaveNode.init('martl', dir);
+    await node.createProject({ name: 'Album' });
+    await node.setBoard({ project: 'Album', name: 'book', title: 'Our book' });
+    await node.addAgent('claude', ['weave.post', 'weave.msg']);
+    const agent = agentView(node, 'claude');
+
+    // Open: the agent lays the book out (here: a post) and reads the board.
+    const laid = await agent.submit({ space: 'Album', board: 'book', title: 'Cover', text: 'laid out', as: 'claude' });
+    expect((await agent.posts({ space: 'Album', board: 'book' })).map((p) => p.title)).toEqual(['Cover']);
+
+    // Its person closes the board, then adds a photo.
+    await expect(agent.closeBoardToAgents({ space: 'Album', board: 'book' })).rejects.toThrow(/for your person/);
+    await node.closeBoardToAgents({ space: 'Album', board: 'book' });
+    const picture = await node.putBlob({ data: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]).toString('base64'), type: 'image/jpeg' });
+    const photo = await node.submit({ space: 'Album', board: 'book', title: 'IMG_0001', image: picture });
+    await new Promise((resolve) => setTimeout(resolve, 3100));   // the agent's door asks again every few seconds
+
+    await expect(agent.posts({ space: 'Album', board: 'book' })).rejects.toThrow(/closed to agents/);
+    await expect(agent.posts({ space: 'Album', board: 'Our book' })).resolves.toEqual([]);   // by its title: nothing of it comes out
+    expect((await agent.posts({ space: 'Album' })).some((p) => p.board === 'book')).toBe(false);
+    await expect(agent.post(photo.id)).rejects.toThrow(/closed to agents/);
+    await expect(agent.post(photo.id.slice(0, 8))).rejects.toThrow(/closed to agents/);
+    await expect(agent.post(laid.id)).rejects.toThrow(/closed to agents/);
+    await expect(agent.messages(undefined, { post: photo.id })).rejects.toThrow(/closed to agents/);
+    await expect(agent.blob(picture)).rejects.toThrow(/closed to agents/);
+    await expect(agent.boardView({ space: 'Album', board: 'book', use: true })).rejects.toThrow(/closed to agents/);
+    // Writing there is refused by the node itself, whichever door an agent takes.
+    await expect(agent.submit({ space: 'Album', board: 'book', title: 'More', as: 'claude' })).rejects.toThrow(/closed to agents/);
+    await expect(node.publish({ kind: 'weave.msg', body: { text: 'nice', post: photo.id }, space: 'Album', as: 'claude' })).rejects.toThrow(/closed to agents/);
+    await expect(node.publish({ kind: 'weave.post', body: { title: 'x', text: '', board: 'book' }, space: 'Album', as: 'claude' })).rejects.toThrow(/closed to agents/);
+    // The other boards are as before, and so is the person.
+    await agent.submit({ space: 'Album', board: 'ideas', title: 'An idea', as: 'claude' });
+    expect((await node.posts({ space: 'Album', board: 'book' })).length).toBe(2);
+    expect((await node.blob(picture)).type).toBe('image/jpeg');
+
+    // Opened again, the agent is back.
+    expect(await node.closeBoardToAgents({ space: 'Album', board: 'book', off: true })).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    expect((await agent.posts({ space: 'Album', board: 'book' })).length).toBe(2);
+    await node.close();
+  }, 30_000);
+
   it('keeps company spaces an agent isn’t approved in out of its sight', async () => {
     const { agentView } = await import('../src/index.ts');
     const fake = {

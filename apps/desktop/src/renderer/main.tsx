@@ -18,7 +18,7 @@ import { HomeFeed } from './home.tsx';
 import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './websites.tsx';
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
-import { LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { BoardAgentsSwitch, LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
 import { MentionsPanel } from './overlay.tsx';
 import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
@@ -81,13 +81,14 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const open = route[1] === space.id;
   // Its channels come with the space itself: one `spaces` answer for the whole tree, not a call per space (G5N4EzO0).
   const channels = space.channels;
-  const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
+  const hasBoards = space.kind === 'project' || space.kind === 'group';   // a group: the boards its owner made
+  const { data: boards } = useApi(() => (open && hasBoards ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: rooms } = useApi(() => (open && space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
   const [view, arg] = [route[2], route[3]];
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
-  const shownBoards = open && space.kind === 'project' ? (boards ?? []) : [];
+  const shownBoards = open && hasBoards ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
   const [here, ...under] = useHints('place', [{ space: space.id }, ...shownBoards.map((b) => ({ board: { space: space.id, name: b.name } })), ...shownChannels.map((c) => ({ channel: { space: space.id, name: c.name } }))]);
   const boardHint = (name: string) => under[shownBoards.findIndex((b) => b.name === name)];
@@ -97,7 +98,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
       <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} />
       {open && (
         <>
-          {space.kind === 'project' &&
+          {hasBoards &&
             (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
@@ -284,7 +285,8 @@ function ProjectSections({ space, boards, view, arg }: { space: SpaceInfo; board
 function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
-  const { data: boards } = useApi(() => (space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
+  const { data: boards } = useApi(() => (space.kind === 'project' || space.kind === 'group' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
+  const prefix = space.kind === 'group' ? 'g/' : 'p/';
   const { data: info } = useApi(() => (space.kind === 'project' ? api<{ maintainer: boolean }>('project', space.id) : space.kind === 'community' ? api<{ moderator: boolean }>('community', space.id).then((c) => ({ maintainer: c.moderator })) : Promise.resolve({ maintainer: false })), [space.id]);
   const list = members ?? [];
   const mine = waiting.filter((a) => a.project.id === space.id);
@@ -303,7 +305,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
     body = <CatalogView space={space} maintainer={!!info?.maintainer || (space.kind === 'group' && space.founder === me.did)} />;
   } else if (space.kind === 'group' && view === 'settings') {
     body = <GroupSettings group={space} members={list} meDid={me.did} />;
-  } else if (space.kind === 'group') {
+  } else if (space.kind === 'group' && view !== 'b') {
     const channel = view === 'c' ? (arg ?? 'general') : 'general';
     body = (
       <section className="pane-main">
@@ -352,9 +354,10 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
         <section className="pane-main">
           <header className="pane-head">
             <b>
-              p/{space.name} · {board.title}
+              {prefix}{space.name} · {board.title}
             </b>
             <span className="pane-tools">
+              <BoardAgentsSwitch space={space} board={board} />
               <LensFullscreenButton full={lensFull} setFull={setLensFull} />
               <LensSwitch board={board} on={lensOn} choose={chooseLens} />
             </span>
@@ -367,7 +370,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open }: { space: Space
         <PostList
           title={
             <>
-              p/{space.name} · {board?.title ?? arg}
+              {prefix}{space.name} · {board?.title ?? arg}
             </>
           }
           query={{ space: space.id, board: arg }}

@@ -96,7 +96,8 @@ function stage(show: ShowInfo): { label: string; tag: string } {
   return { label: days < 1 ? t('day.today') : days === 1 ? t('day.tomorrow') : t('show.in.days', { n: days }), tag: '' };
 }
 
-function BuyTicket({ show }: { show: ShowInfo }) {
+/** The button that gets a ticket to a show, and then how to pay it from the wallet. */
+export function BuyTicket({ show }: { show: ShowInfo }) {
   const { t } = useTexts();
   const [paying, setPaying] = useState(false);
   const { data: wallet } = useApi(() => api<WalletInfo | undefined>('wallet'), []);

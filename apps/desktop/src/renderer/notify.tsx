@@ -51,6 +51,7 @@ async function hrefOf(open: Notice['open']): Promise<string> {
   if (open.inbox) return '#/inbox';
   if (open.hub) return `#/space/${encodeURIComponent(open.hub)}`;
   if (open.post) return postHref(await api<PostInfo>('post', open.post));
+  if (open.space && open.board) return `${spaceHref(open.space)}/b/${open.board}`;
   return open.space ? channelHref(open.space, open.channel) : '#/';
 }
 
@@ -59,6 +60,7 @@ function looking(open: Notice['open']): boolean {
   if (!document.hasFocus()) return false;
   const here = location.hash;
   if (open.post) return here.endsWith(`/${open.post}`);
+  if (open.space && open.board) return here === `${spaceHref(open.space)}/b/${open.board}`;
   if (open.inbox) return here === '#/inbox';
   if (open.hub) return here === `#/space/${encodeURIComponent(open.hub)}`;
   return !!open.space && here === channelHref(open.space, open.channel);

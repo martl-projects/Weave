@@ -157,6 +157,16 @@ export interface AppClient {
   location?: LensLocation;
   /** Its site may ask how the device is tilted (screenTilt), while it shows: for light on paper, a marble that rolls. */
   tilt?: boolean;
+  /**
+   * Its events may bring a notice to the members they name (lensNotify: "notify" in an event's body), on a board it
+   * shows: a ticket given, a turn that is theirs. Each member's own rules say whether that notifies them.
+   */
+  notify?: boolean;
+  /**
+   * Its site may ask about a show of its project: whether its member has a ticket, and, for the show's host, who
+   * holds one. So an evening's host lets in whoever paid, with an action of its own.
+   */
+  tickets?: boolean;
 }
 
 /**
@@ -211,6 +221,22 @@ export function lensFileName(name: unknown): string {
   // eslint-disable-next-line no-control-regex
   const plain = (typeof name === 'string' ? name : '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').replace(/^[. ]+|[. ]+$/g, '');
   return plain.slice(0, 80).trim() || 'file';
+}
+
+/** How many members one event of a lens may name for a notice, and how long its line may be. */
+export const LENS_NOTIFY = { to: 50, text: 140 } as const;
+
+/**
+ * Whom an event of a lens's own kind tells, and what: "notify": {to: [did…], text} in its body, for a lens whose
+ * manifest says "notify". Undefined when it names nobody or says nothing.
+ */
+export function lensNotify(body: unknown): { to: string[]; text: string } | undefined {
+  const notify = body && typeof body === 'object' && !Array.isArray(body) ? (body as { notify?: unknown }).notify : undefined;
+  if (!notify || typeof notify !== 'object' || Array.isArray(notify)) return undefined;
+  const { to, text } = notify as { to?: unknown; text?: unknown };
+  const names = Array.isArray(to) ? [...new Set(to.filter((d): d is string => typeof d === 'string' && d.startsWith('did:') && d.length <= 200))].slice(0, LENS_NOTIFY.to) : [];
+  const line = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, LENS_NOTIFY.text) : '';
+  return names.length && line ? { to: names, text: line } : undefined;
 }
 
 /** The height a widget asks for in a chat, in CSS pixels: between these, and this one when it says none. */
@@ -850,6 +876,13 @@ export function checkManifest(input: unknown): ManifestCheck {
     problems.push(`"${field}.tilt" says that its site may ask how the device is tilted: true (not ${JSON.stringify(raw.tilt)})`);
     return null;
   };
+  /** A plain yes of a client service ("client.notify", "client.tickets"): true, or left out. */
+  const siteYes = (raw: Record<string, unknown>, key: string, says: string): boolean | null => {
+    if (raw[key] === undefined || raw[key] === false) return false;
+    if (raw[key] === true) return true;
+    problems.push(`"client.${key}" says that ${says}: true (not ${JSON.stringify(raw[key])})`);
+    return null;
+  };
   // A client service: where its component and site are, and what its actions may write (the kinds members sign).
   let client: AppClient | undefined;
   if (m.client !== undefined) {
@@ -863,10 +896,14 @@ export function checkManifest(input: unknown): ManifestCheck {
       const net = siteNet(raw, 'client');
       const location = siteLocation(raw, 'client');
       const tilt = siteTilt(raw, 'client');
+      const notify = siteYes(raw, 'notify', 'its events may bring a notice to the members they name');
+      const tickets = siteYes(raw, 'tickets', "its site may ask who holds a ticket to a show of its project");
       if (net && !site) problems.push('"client.net" is for its site: a client service without one ("client.site") loads nothing');
       else if (location && !site) problems.push('"client.location" is for its site: a client service without one ("client.site") shows nothing');
       else if (tilt && !site) problems.push('"client.tilt" is for its site: a client service without one ("client.site") shows nothing');
-      else if (location !== null && tilt !== null) client = { component, ...(site ? { site } : {}), writes, ...(net ? { net } : {}), ...(location ? { location } : {}), ...(tilt ? { tilt } : {}) };
+      else if (tickets && !site) problems.push('"client.tickets" is for its site: a client service without one ("client.site") asks nothing');
+      else if (location !== null && tilt !== null && notify !== null && tickets !== null)
+        client = { component, ...(site ? { site } : {}), writes, ...(net ? { net } : {}), ...(location ? { location } : {}), ...(tilt ? { tilt } : {}), ...(notify ? { notify } : {}), ...(tickets ? { tickets } : {}) };
     }
   }
   // A group widget: as a client service, but its kinds are its own only (never Weave's), and it says its height.
