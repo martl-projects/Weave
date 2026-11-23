@@ -276,6 +276,8 @@ export class PeerSession2 {
     this.#send({ t: 'heads', heads: this.#v1Heads() });
     const wanted = this.blobs?.wanted() ?? [];
     if (wanted.length) this.want(wanted);
+    for (const [hash, data] of this.#toPush) this.pushBlob(hash, data);
+    this.#toPush.clear();
   }
 
   /** Spaces this connection shares, public included (nothing, with a peer on an older protocol). */
@@ -331,7 +333,13 @@ export class PeerSession2 {
   /** A blob for a peer that keeps ours (a person's storage node), or one it asked for that came late. */
   pushBlob(hash: string, data: Uint8Array): void {
     if (this.#admitted) this.#send({ t: 'blob', hash, data: b64u.encode(data) });
+    // Not let in yet (its hello is on the way): the blob waits for that, it isn't dropped unheard. A browser's
+    // pictures made offline went to its storage node a moment too early, and never again.
+    else if (!this.#closed) this.#toPush.set(hash, data);
   }
+
+  /** Blobs to push once the peer is let in. */
+  #toPush = new Map<string, Uint8Array>();
 
   close(): void {
     if (this.#closed) return;
