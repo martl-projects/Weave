@@ -4,6 +4,9 @@ import { blobHash, MAX_BLOB } from '@weave/core';
 import type { BlobSource } from '@weave/net';
 
 const HASH = /^[A-Za-z0-9_-]{43}$/;
+/** How long a blob is still taken after the wait for it ran out, and of how many at most. */
+const LATE_MS = 120_000;
+const LATE_MAX = 256;
 
 /**
  * Encrypted blobs on disk, one file per hash (see @weave/core blobs). Peers
@@ -13,6 +16,11 @@ export class BlobStore implements BlobSource {
   readonly dir: string;
   /** Hash → callbacks of everyone waiting for it. */
   #waiting = new Map<string, Array<(data: Uint8Array) => void>>();
+  /**
+   * Hash → until when a blob nobody waits for any more is still taken: one that comes after its wait ran out (the
+   * connection dropped and came back, or the node was busy) is kept, so the next one to ask has it at once.
+   */
+  #late = new Map<string, number>();
 
   constructor(dir: string) {
     this.dir = dir;
@@ -52,11 +60,21 @@ export class BlobStore implements BlobSource {
   }
 
   receive(hash: string, data: Uint8Array): void {
-    if (this.#waiting.has(hash) && data.length <= MAX_BLOB && blobHash(data) === hash) this.put(data);
+    if ((this.#waiting.has(hash) || this.#stillLate(hash)) && data.length <= MAX_BLOB && blobHash(data) === hash) {
+      this.#late.delete(hash);
+      this.put(data);
+    }
   }
 
+  #stillLate(hash: string): boolean {
+    const until = this.#late.get(hash);
+    if (until !== undefined && until <= Date.now()) this.#late.delete(hash);
+    return this.#late.has(hash);
+  }
+
+  /** What we're after: asked of every peer that connects (those whose wait ran out a moment ago too). */
   wanted(): string[] {
-    return [...this.#waiting.keys()];
+    return [...new Set([...this.#waiting.keys(), ...[...this.#late.keys()].filter((hash) => this.#stillLate(hash))])];
   }
 
   /**
@@ -74,7 +92,11 @@ export class BlobStore implements BlobSource {
       const timer = setTimeout(() => {
         const rest = (this.#waiting.get(hash) ?? []).filter((d) => d !== done);
         if (rest.length) this.#waiting.set(hash, rest);
-        else this.#waiting.delete(hash);
+        else {
+          this.#waiting.delete(hash);
+          if (this.#late.size >= LATE_MAX) this.#late.delete(this.#late.keys().next().value!);
+          this.#late.set(hash, Date.now() + LATE_MS);
+        }
         reject(new Error("couldn't get that file from anyone online right now"));
       }, timeoutMs);
       const first = !this.#waiting.has(hash);

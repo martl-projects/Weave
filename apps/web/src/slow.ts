@@ -70,6 +70,11 @@ export async function called<T>(method: string, run: () => Promise<T> | T): Prom
     const running = run();
     // Up to here it ran without waiting: this much of it held everything else up.
     first = now() - started;
+    // Counted for the busy line too: a call that ran long without waiting is over before the heartbeat can list it as open.
+    const spent = sections.get(`${method} (a call)`) ?? { ms: 0, n: 0 };
+    spent.ms += first;
+    spent.n++;
+    sections.set(`${method} (a call)`, spent);
     return await running;
   } finally {
     open.delete(id);

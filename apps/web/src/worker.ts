@@ -56,6 +56,7 @@ async function ready(opened: WeaveNode): Promise<void> {
   node = opened;
   // What keeps this Worker busy, said in the console when it was (slow.ts): events taken in, and the node's duties.
   measure(opened.replica, 'ingest', 'events taken in');
+  measure(opened.replica, 'events', 'reading the whole log');
   measureWaiting(opened, 'reconcile', 'duties');
   measureWaiting(opened, 'goOnline', 'going online');
   stopReconciling = (await import('@weave/node')).keepReconciling(opened);
