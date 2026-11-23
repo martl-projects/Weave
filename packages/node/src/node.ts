@@ -1008,11 +1008,18 @@ export class WeaveNode implements Backend {
     const home = resolveHome(dir);
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
+    // Where opening spends its time, said when it was long (a browser's node opens with its person waiting).
+    const began = performance.now();
     const node = new WeaveNode(home, identity);
+    const made = performance.now();
+    let migrated = made;
     if (options.migrate !== false) {
       node.#migrate();
+      migrated = performance.now();
       node.#moveToProtocol3();
     }
+    const done = performance.now();
+    if (done - began >= 2000) console.warn(`weave: opening took ${Math.round(done - began)} ms: the node ${Math.round(made - began)} ms, older homes ${Math.round(migrated - made)} ms, protocol 3 ${Math.round(done - migrated)} ms`);
     return node;
   }
 
