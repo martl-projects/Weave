@@ -78,7 +78,7 @@ A lens that fills the screen (`{weave: 'fullscreen'}`, or the pane's button) sta
 
 ## Pictures and files
 
-A view's frame can neither open a picture of its board (a `wblob:` reference is no address) nor keep one, nor give its member a file. Weave does these for it (`apps/desktop/src/renderer/lens.tsx`); the view message's `can` lists what this Weave answers (`['picture', 'attach', 'save', 'tilt']`, as far as it does), so a view on an older Weave knows not to wait.
+A view's frame can neither open a picture of its board (a `wblob:` reference is no address) nor keep one, nor give its member a file. Weave does these for it (`apps/desktop/src/renderer/lens.tsx`); the view message's `can` lists what this Weave answers (`['picture', 'attach', 'save', 'tilt', 'tickets']`, as far as it does), so a view on an older Weave knows not to wait.
 
 - **`{weave: 'picture', id, ref}`** → `{weave: 'picture', id, type, data}` (an ArrayBuffer) or `{…, error}`: the bytes of a picture, only of a reference the view's own state names, so it sees nothing its member doesn't see on that board anyway.
 - **`{weave: 'attach', id, name, type, data}`** → `{weave: 'attached', id, ref}` or `{…, error}`: Weave keeps the picture as its member's (encrypted, like one they attach themselves); the view puts the reference into an action's input (a `weave.post` with `image`, say). Pictures only, at most 2 MB each and 60 while the view is open (`LENS_FILES` in core).
@@ -96,6 +96,48 @@ A lens's or widget's site may follow how its member tilts the device (light that
 - **Weave hears the sensors, not the frame:** the frame posts `{weave: 'tilt', on: true}` (and `on: false` when it no longer wants it); the host (`apps/desktop/src/renderer/lens.tsx`) listens to the device and answers again and again with `{weave: 'tilt', x, y}`: degrees to the side and forward as the screen is held (`screenTilt` in core), rounded to half a degree, at most thirty times a second, and not while Weave is out of sight. The compass is left out. A device without sensors (a computer) sends nothing: a view should rest then.
 - **No yes of its own:** unlike `location` it is not kept per member. An iPhone asks its owner itself, after a tap in Weave: a line above the lens offers that tap. A widget on an iPhone gets no tilt yet (there is no such line in a chat).
 - The component never gets it, and nothing is published unless the member's own action puts it there.
+
+## Telling members
+
+A board's lens may bring a notice to the members its events name (a ticket given, a turn that is theirs), when its manifest says so:
+
+```json
+"client": { "component": "board.wasm", "site": "site", "writes": ["lb.ticket"], "notify": true }
+```
+
+- **`notify`** in `client`: `true`. Not for a widget in a chat yet.
+- **It is an event, not a message from the frame:** an event of one of the lens's own kinds (never Weave's), about that board, carries `"notify": {"to": [did…], "text": "one line"}` in its body, put there by the lens's `act`. Each named member's own node makes a notice of it (`lensNotify` in core: at most 50 people and 140 characters): "who in board" and the line, leading to the board. Whoever wrote it is not told.
+- **The member's rules decide:** it is an activity notice with the board's name, so the rules for a person, a place or a board (and Unread's counts) apply as to a post. Nothing comes from a project that member took off Home.
+- **Whoever may write on the board may tell:** the events are the member's own, signed by them. A changed client can name anyone on the board with any line, as it can mention them in the chat.
+- Not pushed to a closed Weave Web yet: a notice reaches the Weaves that are running.
+
+## The tickets of a show
+
+A lens's site may ask about the shows of its project (ticketed events, paid on chain: `packages/core/src/tickets.ts`), when its manifest says so. So an evening's host lets in whoever paid, with an action of the lens's own:
+
+```json
+"client": { "component": "board.wasm", "site": "site", "writes": ["lb.ticket"], "tickets": true }
+```
+
+- **`tickets`** in `client`: `true`. Only with a `site`, only on a project's board. The view message's `can` then has `'tickets'`.
+- **`{weave: 'tickets', id}`** → `{weave: 'tickets', id, shows: [{id, name, starts, ends, price: {amount, decimals, symbol}, open, cancelled, mine, ticket}]}`: the project's shows; `mine`: this member hosts it, `ticket`: they have one.
+- **`{weave: 'tickets', id, show}`** → `{weave: 'tickets', id, show: {…}, holders?: [{did, name, tx}]}` or `{…, error}`: one show; `holders` (who paid, with the payment's hash) only for its host, whose node is the only one that knows. Others learn nothing about anyone's ticket but their own.
+- **`{weave: 'ticket', show}`**: its member wants a ticket: Weave shows its own way to pay (the wallet, the amount). The frame never sees a wallet.
+- **What the lens makes of it is its own:** the host's view proposes an action per holder (an event naming the payment, so that it counts once whichever of the host's devices says it). That happens while the host has the board open: Weave runs no lens in the background.
+
+## Boards in a group
+
+A group has no boards of its own, but its owner can make some (`setBoard` with the group; `weave board add <name> -g <group>`): boards of posts, never issues or proposals. A post of the group belongs to the board it names (`board` in its body); one that names none shows nowhere. The owner pins a lens to such a board as a project's maintainers do (`weave board lens <name> -g <group> --artifact <project>[@tag]`), released in any project they are in: a photo book for a circle of friends, without a project around it. The members' nodes fetch a release from Weave's own files from whoever holds them; one that only a provider hands out (GitHub releases) needs membership in its project, as for a widget (above).
+
+## Taking a lens along
+
+Whoever sees a board's lens can have it for a circle of their own (`shareLens`, `weave board share <name> --to <group> | --new <name>`, "Share" on the board in the app): a new, empty board in a group they own, or in a new group, shown through the same release, required. The board event carries the manifest and where to fetch it, so they need not be in the project that released it; what is on the board it came from stays there. The app then makes a link into that group: an onboarding link to the new board (it works for someone without Weave, through Weave Web), or the group's invite link if that cannot be made. A lens's view offers it itself with `{weave: 'share'}` (`can` has `share`): Weave opens its dialog and asks everything; the view learns nothing of the group or the link.
+
+## A board closed to one's agents
+
+A person can close a board to their own agents (`closeBoardToAgents`, `weave board agents <name> off|on`, a switch on the board in the app): kept on their node (`agent-boards.json`), never shared, and nobody else's business. Closed, an agent of theirs gets nothing of it through Weave's doors for agents (the MCP server's `agentView`, also over an agent token): not its posts, their chats, its lens's view, or the files anything on it names; and the node itself refuses whatever an agent signs for that board, whichever way it came. So an agent lays a book out while the board is open, the person closes it, and then adds the pictures.
+
+What it is not: a wall around the computer. An agent that runs with its person's own rights on the same computer (a coding agent with a shell) can still read the home's files or call `weave` as the person. The switch keeps Weave from handing things over; it does not sandbox the agent.
 
 ## Limits
 

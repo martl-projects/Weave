@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
 import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type CarriedFile, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
-import type { BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
+import type { AgentBoardInfo, BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
 import { readJson, writeJson } from './home.ts';
 import type { ServicesHost } from './node.ts';
 import { pullImage } from './registry.ts';
@@ -195,7 +195,7 @@ export class Lenses {
   /** A board of a space, with its lens if it has one. */
   #board(spaceRef: string, name: string) {
     const space = this.h.space(spaceRef);
-    if (space.kind !== 'project' && space.kind !== 'community') throw new Error(`${this.h.spaceName(space)} has no boards`);
+    if (space.kind !== 'project' && space.kind !== 'community' && space.kind !== 'group') throw new Error(`${this.h.spaceName(space)} has no boards`);
     const board = boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers).find((b) => b.name === name);
     if (!board) throw new Error(`${this.h.spaceName(space)} has no board "${name}"`);
     return { space, board };
@@ -233,6 +233,25 @@ export class Lenses {
     return this.boardView({ space: space.id, board: board.name });
   }
 
+  /** The lens a board here is shown through, as it was released (shareLens pins the same one elsewhere). */
+  pinned(spaceRef: string, name: string): BoardLens {
+    const { space, board } = this.#board(spaceRef, name);
+    if (!board.lens) throw new Error(`${board.title} in ${this.h.spaceName(space)} is shown through no client service`);
+    return board.lens;
+  }
+
+  /**
+   * Pin the lens of a board you see to a board of yours, required: the same release, with the manifest it was pinned
+   * with there, so whoever sees a lens can take it along without being in the project that released it.
+   */
+  async copyBoardLens(input: { from: { space: string; board: string }; space: string; board: string }): Promise<BoardViewInfo> {
+    const lens = this.pinned(input.from.space, input.from.board);
+    const { space, board } = this.#board(input.space, input.board);
+    if (!this.h.state(space).maintainers.has(this.h.identity.author)) throw new Error(`only the maintainers of ${this.h.spaceName(space)} choose how its boards are shown`);
+    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require' }, space: space.id });
+    return this.boardView({ space: space.id, board: board.name });
+  }
+
   /**
    * The board's items, as its lens folds them, oldest first: its posts, their edits, deletions and votes, their chats,
    * and the events of the lens's own kinds (its contract's) about them or the board.
@@ -255,6 +274,44 @@ export class Lenses {
         const name = this.h.actor(e.event.author, e.event.author).name;
         return { id: e.id, kind: e.kind, body: e.body, author: e.event.author, ...(name ? { authorName: name } : {}), time: e.event.time };
       });
+  }
+
+  // ---------------------------------------------------------------- boards a person closed to their own agents
+
+  get #agentBoardsFile(): string {
+    return joinPath(this.h.home.dir, 'agent-boards.json');
+  }
+
+  /**
+   * The boards this person closed to their agents (agent-boards.json on their node, never shared): what an agent's
+   * door (the MCP server's agentView) keeps them out of, reading and writing. `refs`: every file something on that
+   * board names (a photo's picture), so an agent is handed none of them either.
+   */
+  async agentBoards(): Promise<AgentBoardInfo[]> {
+    const closed = readJson<{ closed?: Array<{ space: string; board: string; at: string }> }>(this.#agentBoardsFile)?.closed ?? [];
+    const out: AgentBoardInfo[] = [];
+    for (const c of closed) {
+      const space = this.h.spaces.get(c.space);
+      if (!space) continue;
+      const posts = this.#posts(space, c.board);
+      const field = (body: Json, key: string) => (body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, Json>)[key] : undefined);
+      const refs = new Set<string>();
+      for (const e of this.h.entries(space)) {
+        const about = posts.has(e.id) || field(e.body, 'board') === c.board || posts.has(String(field(e.body, 'target'))) || posts.has(String(field(e.body, 'post')));
+        if (about) for (const ref of JSON.stringify(e.body ?? null).match(/wblob:[\w.-]{20,200}/g) ?? []) refs.add(ref);
+      }
+      out.push({ space: { id: space.id, kind: space.kind, name: this.h.spaceName(space) }, board: c.board, at: c.at, posts: [...posts], refs: [...refs] });
+    }
+    return out;
+  }
+
+  /** Close a board to your agents (or, `off`, open it again): on this node only. */
+  async closeBoardToAgents(input: { space: string; board: string; off?: boolean }): Promise<AgentBoardInfo[]> {
+    const { space, board } = this.#board(input.space, input.board);
+    const closed = (readJson<{ closed?: Array<{ space: string; board: string; at: string }> }>(this.#agentBoardsFile)?.closed ?? []).filter((c) => !(c.space === space.id && c.board === board.name));
+    if (!input.off) closed.push({ space: space.id, board: board.name, at: new Date(this.h.clock()).toISOString() });
+    writeJson(this.#agentBoardsFile, { closed });
+    return this.agentBoards();
   }
 
   // ---------------------------------------------------------------- the network of a lens's site, as its member allowed
@@ -399,7 +456,7 @@ export class Lenses {
   /** The lens a board here is pinned to, by its release. */
   #pinned(release: string): BoardLens | undefined {
     for (const space of this.h.spaces.values()) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      if (space.kind !== 'project' && space.kind !== 'community' && space.kind !== 'group') continue;
       const lens = boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers).find((b) => b.lens?.origin.release === release)?.lens;
       if (lens) return lens;
     }
@@ -413,7 +470,7 @@ export class Lenses {
   lensKinds(): LensKindInfo[] {
     const by = new Map<string, Set<string>>();
     for (const space of this.h.spaces.values()) {
-      if (space.kind !== 'project' && space.kind !== 'community') continue;
+      if (space.kind !== 'project' && space.kind !== 'community' && space.kind !== 'group') continue;
       for (const board of boardsOf(space.kind, this.h.entries(space), this.h.state(space).maintainers)) {
         for (const kind of board.lens?.manifest.client?.writes ?? []) {
           if (kind.startsWith('weave.') || kind.includes('*')) continue;
@@ -437,7 +494,7 @@ export class Lenses {
     if (!lens) return base;
     const net = this.#net(lens);
     const location = this.#location(lens);
-    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}) };
+    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}), ...(lens.manifest.client!.tickets ? { tickets: true } : {}) };
     if (lens.mode === 'suggest' && !input.use) return { ...base, lens: about };
     let ready: Ready;
     try {

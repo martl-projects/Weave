@@ -290,7 +290,10 @@ async function followOnboard(counted: boolean): Promise<void> {
   const done = await own<{ open?: { kind: string; id: string } }>('followOnboardLink', onboardLink, STORAGE_AT, { counted: true });
   // Kept as a quick start: its route opens the project and enters the game.
   const code = parseOnboardLink(onboardLink)?.code;
-  if (done.open && code) location.hash = `#/play/${code}`;
+  if (!done.open || !code) return;
+  // A newcomer: the renderer takes them there in focus (onboardlinks.tsx, inFocus).
+  sessionStorage.setItem('weave.focus', code);
+  location.hash = `#/play/${code}`;
 }
 
 // An invitation stays out of the address bar, the history and whatever is shared from it.

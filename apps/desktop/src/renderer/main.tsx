@@ -19,7 +19,9 @@ import { BackupPost, HomeFeed } from './home.tsx';
 import { ProjectAvailableView, ProjectLiveView, ProjectServicesView } from './websites.tsx';
 import { serviceIcon } from './addservice.tsx';
 import { CatalogView } from './catalog.tsx';
-import { LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { BoardAgentsSwitch, LensFullscreenButton, LensSwitch, LensView, useLensChoice } from './lens.tsx';
+import { LensShareButton } from './lensshare.tsx';
+import { endFocus, focusedSpace, onFocus, takeLensFull } from './windowfill.ts';
 import { MentionsPanel } from './overlay.tsx';
 import { Picker } from './picker.tsx';
 import { RoutinesPage, SetupDeskDialog } from './routines.tsx';
@@ -69,7 +71,9 @@ function useFolded(pane: 'places' | 'members'): [boolean, () => void] {
       return false;
     }
   };
-  const [folded, setFolded] = useState(stored);
+  // In focus (windowfill.ts) both fold, for now; afterwards they are as they were.
+  const [folded, setFolded] = useState(() => !!focusedSpace() || stored());
+  useEffect(() => onFocus(() => setFolded(!!focusedSpace() || stored())), [key]);
   useEffect(() => {
     const changed = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; folded: boolean }>).detail;
@@ -143,7 +147,8 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const open = route[1] === space.id;
   // Its channels come with the space itself: one `spaces` answer for the whole tree, not a call per space (G5N4EzO0).
   const channels = space.channels;
-  const { data: boards } = useApi(() => (open && space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
+  const hasBoards = space.kind === 'project' || space.kind === 'group';   // a group: the boards its owner made
+  const { data: boards } = useApi(() => (open && hasBoards ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: rooms } = useApi(() => (open && space.kind === 'project' ? api<WebsiteInfo[]>('websites', space.id) : Promise.resolve([])), [space.id, open]);
   const { data: services } = useApi(() => (open && space.kind === 'project' ? api<ServiceProfileInfo[]>('servicesIn', space.id).then((all) => all.filter((s) => !onlyAWebsite(s.contract))).catch(() => []) : Promise.resolve([])), [space.id, open]);
   const unread = (channels ?? []).some((c) => isUnread(`${space.id}/${c.name}`, c.last));
@@ -156,7 +161,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
   const liveTarget = targetHere && view === 'live' && !!share.website;
   const spaceMark = targetHere ? (boardTarget || liveTarget ? 'path' : 'target') : shareable && share.also.includes(space.id) ? 'included' : undefined;
   // What waits for you here (hints: Unread counts on the node), for the space and what shows of it.
-  const shownBoards = open && space.kind === 'project' ? (boards ?? []) : [];
+  const shownBoards = open && hasBoards ? (boards ?? []) : [];
   const shownChannels = open ? (channels ?? []) : [];
   const [here, ...under] = useHints('place', [{ space: space.id }, ...shownBoards.map((b) => ({ board: { space: space.id, name: b.name } })), ...shownChannels.map((c) => ({ channel: { space: space.id, name: c.name } }))]);
   const boardHint = (name: string) => under[shownBoards.findIndex((b) => b.name === name)];
@@ -166,7 +171,7 @@ function TreeSpace({ space, route, waiting }: { space: SpaceInfo; route: string[
       <TreeLink href={base} sprite={space.id} image={space.icon} group={space.kind === 'group' ? space : undefined} label={space.name} on={open && !view} unread={!open && unread} badge={waiting} hint={here} extra={<ShareAdd space={space} route={route} />} mark={spaceMark} />
       {open && (
         <>
-          {space.kind === 'project' &&
+          {hasBoards &&
             (boards ?? []).map((b) => <TreeLink key={b.name} depth={1} href={`${base}/b/${b.name}`} icon={boardIcon(b)} label={`${b.title} (${b.count})`} on={view === 'b' && arg === b.name} hint={boardHint(b.name)} mark={boardTarget === b.name ? 'target' : undefined} />)}
           {(channels ?? []).map((c) => (
             <TreeLink
@@ -542,15 +547,17 @@ function SpaceBar({ space, chat, route, boards, bars, open, onInviteTo, sorting 
 function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space: SpaceInfo; spaces: SpaceInfo[]; route: string[]; me: Profile; waiting: Admission[]; open(d: Dialog): void; bars: Bars }) {
   const [view, arg, postId] = [route[2], route[3], route[4]];
   const { data: members } = useApi(() => api<MemberInfo[]>('members', space.id), [space.id]);
-  const { data: boards } = useApi(() => (space.kind === 'project' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
+  const { data: boards } = useApi(() => (space.kind === 'project' || space.kind === 'group' ? api<BoardInfo[]>('boards', space.id) : Promise.resolve([])), [space.id]);
+  const prefix = space.kind === 'group' ? 'g/' : 'p/';
   const { data: info } = useApi(() => (space.kind === 'project' ? api<{ maintainer: boolean }>('project', space.id) : space.kind === 'community' ? api<{ moderator: boolean }>('community', space.id).then((c) => ({ maintainer: c.moderator })) : Promise.resolve({ maintainer: false })), [space.id]);
   const list = members ?? [];
   const mine = waiting.filter((a) => a.project.id === space.id);
   const lensBoard = view === 'b' && arg ? boards?.find((b) => b.name === arg) : undefined;
   const [lensOn, chooseLens] = useLensChoice(space, lensBoard);
   // The lens's view filling the screen (lens.tsx): left again when the board changes.
+  // A newcomer's link to it (windowfill.ts) starts it filling Weave's window.
   const [lensFull, setLensFull] = useState(false);
-  useEffect(() => setLensFull(false), [lensBoard?.name, space.id]);
+  useEffect(() => setLensFull(!!lensBoard && takeLensFull(space.id, lensBoard.name)), [lensBoard?.name, space.id]);
   const common = { meDid: me.did, meName: me.name, spaces, members: list };
   // A space's own Invite buttons make a Weave link, in share mode (share.tsx); the toolbar's Invite has the plain invite link.
   const invite = startShare;
@@ -562,7 +569,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
     body = <CatalogView space={space} maintainer={!!info?.maintainer || (space.kind === 'group' && space.founder === me.did)} />;
   } else if (space.kind === 'group' && view === 'settings') {
     body = <GroupSettings group={space} members={list} meDid={me.did} />;
-  } else if (space.kind === 'group') {
+  } else if (space.kind === 'group' && view !== 'b') {
     const channel = view === 'c' ? (arg ?? 'general') : 'general';
     body = (
       <section className="pane-main">
@@ -612,9 +619,11 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
         <section className="pane-main">
           <header className="pane-head">
             <b>
-              p/{space.name} · {board.title}
+              {prefix}{space.name} · {board.title}
             </b>
             <span className="pane-tools">
+              <LensShareButton space={space} board={board} meDid={me.did} />
+              <BoardAgentsSwitch space={space} board={board} />
               <LensFullscreenButton full={lensFull} setFull={setLensFull} />
               <LensSwitch board={board} on={lensOn} choose={chooseLens} />
             </span>
@@ -627,7 +636,7 @@ function SpaceScreen({ space, spaces, route, me, waiting, open, bars }: { space:
         <PostList
           title={
             <>
-              p/{space.name} · {board?.title ?? arg}
+              {prefix}{space.name} · {board?.title ?? arg}
             </>
           }
           query={{ space: space.id, board: arg }}
@@ -1036,6 +1045,13 @@ function Shell() {
   useEffect(() => {
     if (!inPlace) rememberOutside(location.hash);
   }, [routeKey]);
+  // Focus (windowfill.ts): on the place a link led to, while one stays there (its posts too); elsewhere it ends.
+  const [focus, setFocus] = useState(focusedSpace);
+  useEffect(() => onFocus(() => setFocus(focusedSpace())), []);
+  useEffect(() => {
+    const on = focusedSpace();
+    if (on && route[0] !== 'play' && route[0] !== 'post' && route[1] !== on) endFocus();
+  }, [routeKey]);
   // Back: out of a place to where it was opened from; from Places, Inbox, People or a hub to Home.
   const back = () => (inPlace ? backFrom(route) : navigate('#/'));
   useSwipeBack(phone && route.length > 0, back);
@@ -1099,7 +1115,7 @@ function Shell() {
   }
 
   return (
-    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${sharing ? ' sharing' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
+    <div className={`window app-window${placesOpen ? ' places-open' : ''}${space || chat ? ' phone-place' : ''}${barsFolded ? ' bars-folded' : ''}${titlePlay.away ? ' bars-away' : ''}${route.length === 0 ? ' at-home' : ''}${sharing ? ' sharing' : ''}${focus ? ' focus' : ''}${bridge.platform === 'darwin' ? ' mac' : ''}`}>
       {phone && !inPlace && titlePlay.away && (
         <div className="space-float home-float mobile-only">
           {route.length > 0 && (

@@ -120,7 +120,9 @@ Things only the person does: approving GitHub sign-ins and app installs on githu
 
 /**
  * The node as an agent sees it: company spaces it isn't approved in (stage 9)
- * stay out of everything it reads, and tools aimed at them are refused.
+ * stay out of everything it reads, and tools aimed at them are refused. So do
+ * the boards its person closed to their agents (agentBoards): their posts, the
+ * chats of those posts, their lens's view and actions, and the files they name.
  */
 export function agentView(backend: Backend, as: string): Backend {
   let blocked: { at: number; list: Array<{ id: string; name: string }> } | undefined;
@@ -142,24 +144,65 @@ export function agentView(backend: Backend, as: string): Backend {
   const refuse = () => {
     throw new Error(`agent "${as}" isn't approved in that company space: those who manage it can approve it`);
   };
+  // The boards this person closed to their agents: asked again every few seconds, so that closing one holds at once.
+  type Closed = Awaited<ReturnType<Backend['agentBoards']>>;
+  let closed: { at: number; list: Closed } | undefined;
+  const closedNow = async (): Promise<Closed> => {
+    if (!closed || Date.now() - closed.at > 3000) closed = { at: Date.now(), list: await Promise.resolve().then(() => backend.agentBoards()).catch(() => []) };
+    return closed.list;
+  };
+  const shut = (board: string, space: string): never => {
+    throw new Error(`${space}'s board "${board}" is closed to agents: its person closed it (they open it again in Weave, on the board)`);
+  };
+  /** The closed board something is on, if any: a post or an event by its id, space and board, or by the post it is about. */
+  const onClosed = (list: Closed, x: unknown): Closed[number] | undefined => {
+    const v = x as { id?: unknown; space?: { id?: string }; board?: unknown; post?: unknown; body?: unknown } | null;
+    if (!v || typeof v !== 'object') return undefined;
+    const body = (v.body && typeof v.body === 'object' && !Array.isArray(v.body) ? v.body : {}) as Record<string, unknown>;
+    return list.find(
+      (c) =>
+        (typeof v.id === 'string' && c.posts.includes(v.id)) ||
+        (typeof v.post === 'string' && c.posts.includes(v.post)) ||
+        (v.space?.id === c.space.id && (v.board === c.board || (v.board as { name?: unknown } | null)?.name === c.board || body.board === c.board || c.posts.includes(String(body.target)) || c.posts.includes(String(body.post)))),
+    );
+  };
+  /** What a call is aimed at: a board named with its space, a post (by id, or the start of it), or a file. */
+  const aimedAtClosed = (list: Closed, a: unknown): Closed[number] | undefined => {
+    if (typeof a === 'string') return list.find((c) => c.refs.includes(a) || (a.length >= 6 && c.posts.some((p) => p.startsWith(a))));
+    if (!a || typeof a !== 'object') return undefined;
+    const v = a as Record<string, unknown>;
+    const space = [v.space, v.project, v.group, v.community].find((s) => typeof s === 'string') as string | undefined;
+    return list.find(
+      (c) =>
+        (space !== undefined && (space === c.space.id || space === c.space.name) && typeof v.board === 'string' && (v.board === c.board || v.board.toLowerCase() === c.board)) ||
+        [v.post, v.target, v.ref, v.image].some((p) => typeof p === 'string' && (c.refs.includes(p) || (p.length >= 6 && c.posts.some((id) => id.startsWith(p))))),
+    );
+  };
   return new Proxy(backend, {
     get(target, prop) {
       const value = (target as unknown as Record<string | symbol, unknown>)[prop];
       if (typeof value !== 'function') return value;
       const fn = value as (...args: unknown[]) => unknown;
-      if (prop === 'agentBlocked' || prop === 'whoami') return fn.bind(target);
+      if (prop === 'agentBlocked' || prop === 'whoami' || prop === 'agentBoards') return fn.bind(target);
+      // Opening a board again is its person's to do, in Weave: never an agent's.
+      if (prop === 'closeBoardToAgents') return async () => { throw new Error('closing a board to agents, and opening it again, is for your person to do in Weave'); };
       if (prop === 'watch')
         return (onItem: (item: FeedItem) => void, signal: AbortSignal) =>
-          fn.call(target, (item: FeedItem) => void blockedNow().then((list) => !hidden(list, item) && onItem(item)), signal);
+          fn.call(target, (item: FeedItem) => void Promise.all([blockedNow(), closedNow()]).then(([list, shutNow]) => !hidden(list, item) && !onClosed(shutNow, item) && onItem(item)), signal);
       return async (...args: unknown[]) => {
         const list = await blockedNow();
+        const shutNow = await closedNow();
         for (const a of args) {
           if (aimed(list, a)) refuse();
           if (a && typeof a === 'object') for (const k of ['space', 'project', 'community', 'group']) if (aimed(list, (a as Record<string, unknown>)[k])) refuse();
+          const c = aimedAtClosed(shutNow, a);
+          if (c) shut(c.board, c.space.name);
         }
         const out = await fn.apply(target, args);
-        if (Array.isArray(out)) return out.filter((x) => !hidden(list, x));
+        if (Array.isArray(out)) return out.filter((x) => !hidden(list, x) && !onClosed(shutNow, x));
         if (hidden(list, out)) refuse();
+        const c = onClosed(shutNow, out);
+        if (c) shut(c.board, c.space.name);
         return out;
       };
     },

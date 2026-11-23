@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { NoticeSwitch } from './notify.tsx';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
@@ -1514,6 +1514,10 @@ export function NewDialog({ onClose }: { onClose(): void }) {
   const { data: packs } = useApi(() => api<Pack[]>('setupPacks').catch(() => [] as Pack[]), []);
   const [withPack, setWithPack] = useState<string>();
   const [packFor, setPackFor] = useState<{ project: SpaceInfo; pack: Pack }>();
+  // Making a space takes a moment: the button says so and takes no second click, or each click made another one.
+  const [busy, setBusy] = useState(false);
+  // The state shows it; the ref stops a second click before the button has re-rendered (a double click, Enter twice).
+  const submitting = useRef(false);
   const go = (space?: SpaceInfo) => {
     if (!space) return;
     onClose();
@@ -1522,6 +1526,17 @@ export function NewDialog({ onClose }: { onClose(): void }) {
   };
   const create = async (e: FormEvent) => {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    try {
+      await submit();
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
+  const submit = async () => {
     const { name, description, invite } = form.values;
     if (tab === 'project') {
       const made = await attempt(() => api<ProjectInfo>('createProject', { name, description }), t('new.created', { name: `p/${name}` }));
@@ -1556,7 +1571,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
               href="#"
               onClick={(e) => {
                 e.preventDefault();
-                setTab(key);
+                if (!busy) setTab(key);
               }}
             >
               {t(`new.tab.${key}`)}
@@ -1564,7 +1579,7 @@ export function NewDialog({ onClose }: { onClose(): void }) {
           </li>
         ))}
       </menu>
-      <form className="window tab-body form" role="tabpanel" onSubmit={create}>
+      <form className="window tab-body form" role="tabpanel" onSubmit={create} aria-busy={busy}>
         <div className="window-body">
           <p className="small">{t(`new.blurb.${tab}`)}</p>
           {tab === 'join' ? (
@@ -1607,8 +1622,11 @@ export function NewDialog({ onClose }: { onClose(): void }) {
             <button type="button" onClick={onClose}>
               {t('button.cancel')}
             </button>
-            <button className="default">{t(tab === 'join' ? 'new.join' : 'new.create')}</button>
+            <button className="default" disabled={busy}>
+              {t(busy ? (tab === 'join' ? 'new.joining' : 'new.creating') : tab === 'join' ? 'new.join' : 'new.create')}
+            </button>
           </div>
+          {busy && <progress className="wide" aria-label={t(tab === 'join' ? 'new.joining' : 'new.creating')} />}
         </div>
       </form>
     </Modal>

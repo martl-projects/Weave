@@ -22,7 +22,7 @@ export interface AgentGrant {
 const WRITES = ['publish', 'submit', 'editPost', 'deletePost', 'upvote', 'say', 'deleteMessage', 'react', 'startThread', 'reply', 'openIssue', 'claimIssue', 'setIssueStatus', 'vote', 'requestPermission', 'requestHand'] as const satisfies readonly RpcMethod[];
 
 /** Reads, and storing a file to attach (no event, nothing signed). */
-const READS = ['whoami', 'feed', 'spaces', 'posts', 'post', 'members', 'boards', 'project', 'threads', 'issues', 'proposals', 'messages', 'channels', 'chats', 'openChat', 'profile', 'imprint', 'tiers', 'blob', 'putBlob', 'putFile', 'agentBlocked'] as const satisfies readonly RpcMethod[];
+const READS = ['agentBoards', 'whoami', 'feed', 'spaces', 'posts', 'post', 'members', 'boards', 'project', 'threads', 'issues', 'proposals', 'messages', 'channels', 'chats', 'openChat', 'profile', 'imprint', 'tiers', 'blob', 'putBlob', 'putFile', 'agentBlocked'] as const satisfies readonly RpcMethod[];
 
 /** Every method an agent token may call, one by one: a new method stays off until it's added here on purpose. */
 export const AGENT_TOKEN_METHODS: readonly RpcMethod[] = [...WRITES, ...READS];

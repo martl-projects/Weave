@@ -620,54 +620,62 @@ export function Unlock({ onDone }: { onDone: () => void }) {
     setBusy(true);
     bridge.web!.unlock().then(onDone, () => setBusy(false));
   }, []);
+  const withPasskey = bridge.web!.passkey();
+  // In the look the person chose (the first screen, before any, has a stage of its own): the passkey first; the words
+  // and the ways out folded below (open without a passkey, or after something went wrong).
   return (
     <div className="desktop">
-      <div className="window welcome">
+      <div className="window welcome unlock">
         <div className="title-bar">
           <div className="title-bar-text">{t('web.unlock.title')}</div>
         </div>
-        <div className="window-body">
-          <div className="welcome-head">
-            <WeaveMark size={48} />
-            <p>{t('web.unlock.intro')}</p>
-          </div>
+        <div className="window-body unlock-stage">
+          {/* The first screen's layout, in this look's colors: the logo, its name, what Weave is for. */}
+          <img className="unlock-logo" src={weaveLogo} alt="" />
+          <h1 className="unlock-title">Weave</h1>
+          <p className="unlock-tagline">
+            <span className="coral">{t('brand.build')}</span> · <span className="yellow">{t('brand.share')}</span> · <span className="mint">{t('brand.belong')}</span>
+          </p>
+          <p className="unlock-intro">{t('web.unlock.intro')}</p>
           {linkWaiting && (
             <div className="notice">
               <p>{t('web.unlock.link')}</p>
-              <div className="buttons">
-                {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
+              {/* The link stays in this tab (sessionStorage) across the reload, and the link screen comes next. */}
+              <div className="first-ways">
                 <button id="empty-and-link" className="default" onClick={() => void reset()}>
                   {t('web.unlock.link.button')}
                 </button>
               </div>
             </div>
           )}
-          {bridge.web!.passkey() && (
-            <div className="buttons">
-              <button className={linkWaiting ? '' : 'default'} disabled={busy} onClick={() => void open()}>
-                {t('web.unlock.passkey')}
+          {withPasskey && (
+            <div className="first-ways">
+              <button id="unlock-passkey" className={linkWaiting ? '' : 'default'} disabled={busy} onClick={() => void open()}>
+                <Icon name="lock" /> {t('web.unlock.passkey')}
               </button>
             </div>
           )}
-          <form
-            onSubmit={(e: FormEvent) => {
-              e.preventDefault();
-              void open(words);
-            }}
-          >
-            <div className="field-row-stacked">
-              <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
-              <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
-            </div>
-            {said && <p className="notice alarm">{said}</p>}
-            {other && <p className="notice">{t('web.unlock.other')}</p>}
-            <div className="buttons">
-              <button disabled={busy || !words.trim()}>{t('web.unlock.open')}</button>
-            </div>
-          </form>
-          {/* Always a way out: another account, or this browser linked with a computer instead. */}
-          <fieldset>
-            <legend>{t('web.unlock.else')}</legend>
+          {said && <p className="notice alarm">{said}</p>}
+          {other && <p className="notice">{t('web.unlock.other')}</p>}
+          <details className="first-more" open={!withPasskey || !!said}>
+            <summary>{t('web.first.more')}</summary>
+            <form
+              onSubmit={(e: FormEvent) => {
+                e.preventDefault();
+                void open(words);
+              }}
+            >
+              <div className="field-row-stacked">
+                <label htmlFor="unlock-words">{t('web.unlock.words')}</label>
+                <textarea id="unlock-words" className="wide" rows={3} spellCheck={false} value={words} onChange={(e) => setWords(e.target.value)} />
+              </div>
+              <div className="first-ways">
+                <button id="unlock-open" className={withPasskey ? '' : 'default'} disabled={busy || !words.trim()}>
+                  {t('web.unlock.open')}
+                </button>
+              </div>
+            </form>
+            {/* Always a way out: another account, or this browser linked with a computer instead. */}
             <div className="first-ways">
               <button id="reset-and-link" type="button" disabled={busy} onClick={() => void reset('link')}>
                 {t('web.unlock.else.link')}
@@ -677,7 +685,7 @@ export function Unlock({ onDone }: { onDone: () => void }) {
               </button>
               <p className="small muted">{t('web.unlock.else.why')}</p>
             </div>
-          </fieldset>
+          </details>
         </div>
       </div>
     </div>

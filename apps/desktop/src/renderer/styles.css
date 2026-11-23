@@ -665,6 +665,29 @@ menu[role='tablist'] { margin-bottom: 0; }
 .notify-settings .marks-row > div { min-width: 0; flex: 1 1 200px; }
 .notify-settings .notice-rule { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .welcome { width: min(420px, calc(100vw - 32px)); }
+/* Weave Web's lock screen: the first screen's layout (logo, name, tagline, one big way in) inside the chosen look's window. */
+.welcome.unlock { width: min(400px, calc(100vw - 32px)); }
+.unlock-stage { display: flex; flex-direction: column; align-items: stretch; text-align: center; padding: 18px 18px 12px; font-family: var(--content-font); }
+.unlock-logo { align-self: center; width: 88px; height: 88px; border-radius: 20px; box-shadow: 0 6px 22px rgb(0 0 0 / 0.18); }
+:root[data-skin='win95'] .unlock-logo { border-radius: 0; box-shadow: none; image-rendering: auto; }
+:root[data-skin] .unlock-title { margin: 12px 0 0; font-size: 30px; line-height: 1.1; font-weight: 800; letter-spacing: -0.01em; }
+:root[data-skin='win95'] .unlock-title { font-weight: bold; letter-spacing: 0; }
+/* The logo's colors, deep enough to read on a light window (a dark one takes them as they are). */
+.unlock-tagline { margin: 4px 0 12px; font-size: 13px; font-weight: 600; }
+.unlock-tagline .coral { color: #d8433b; }
+.unlock-tagline .yellow { color: #b38a00; }
+.unlock-tagline .mint { color: #12936a; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .coral { color: #ff6b62; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .yellow { color: #f5e471; }
+:root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .mint { color: #5ae0a4; }
+.unlock-intro { margin: 0 0 4px; font-size: 12px; opacity: 0.85; }
+.unlock .first-ways { margin: 12px 0 6px; }
+.unlock .first-ways button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; }
+.unlock .first-ways button.default { font-weight: bold; }
+.unlock .notice { text-align: left; }
+.unlock .first-more { margin-top: 2px; font-size: 12px; }
+.unlock .first-more[open] > summary { margin-bottom: 8px; }
+.unlock form, .unlock .first-more p { text-align: left; }
 .welcome-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-family: var(--content-font); font-size: 12px; }
 .first-ways { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .first-ways button { width: 100%; padding: 10px; }
@@ -687,7 +710,11 @@ menu[role='tablist'] { margin-bottom: 0; }
 .first-stage label { font-size: 13px; opacity: 0.85; }
 .first-stage .field-row-stacked { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 0; }
 .first-stage input, :root[data-skin] .first-stage input { box-sizing: border-box; width: 100%; height: 44px; padding: 0 14px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; font: inherit; font-size: 15px; box-shadow: none; outline: none; }
-.first-stage input:focus { border-color: #f5e471; }
+.first-stage textarea, :root[data-skin] .first-stage textarea { box-sizing: border-box; width: 100%; padding: 10px 14px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; font: inherit; font-size: 15px; box-shadow: none; outline: none; resize: vertical; }
+.first-stage input:focus, .first-stage textarea:focus { border-color: #f5e471; }
+.first-stage .notice, :root[data-skin] .first-stage .notice { margin: 8px 0; padding: 10px 12px; border: 1px solid rgb(255 255 255 / 0.18); border-radius: 12px; background: rgb(255 255 255 / 0.06); color: inherit; }
+.first-stage .notice.alarm, :root[data-skin] .first-stage .notice.alarm { border-color: rgb(255 110 110 / 0.6); background: rgb(255 83 83 / 0.12); }
+.first-stage .notice p { margin: 0 0 4px; }
 .first-stage .first-ways { gap: 10px; margin: 14px 0 6px; }
 .first-btn, :root[data-skin] .first-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px; padding: 0 18px; border: 1px solid rgb(255 255 255 / 0.22); border-radius: 12px; background: rgb(255 255 255 / 0.04); color: #f2f2f6; box-shadow: none; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.15s; }
 .first-btn:hover:not(:disabled), :root[data-skin] .first-btn:hover:not(:disabled) { background: rgb(255 255 255 / 0.1); transform: translateY(-1px); }
@@ -1435,6 +1462,12 @@ button.session-title:hover { text-decoration: underline; }
 /* The view alone on the screen: its lines about hosts and place stay in the pane (they come back on leaving). */
 .lens-box:fullscreen .lens-net, .lens-box.lens-full .lens-net { display: none; }
 html.lens-full-on, html.lens-full-on body { overflow: hidden; overscroll-behavior: none; }
+/* Wider than a phone it fills Weave's window, not the screen (windowfill.ts): inside its border, below its title bar. */
+.lens-box.lens-full.lens-window, .website-frame.lens-window { top: var(--fill-top); left: var(--fill-left); right: auto; bottom: auto; width: var(--fill-width); height: var(--fill-height); max-width: none; padding: 0; }
+.lens-box.lens-window .lens-full-exit, .website-frame.lens-window .website-frame-handle { top: 6px; right: 6px; }
+.website-frame.lens-window .website-frame-menu { top: 50px; right: 8px; }
+/* Focus (windowfill.ts): around the place a link led to, the toolbar and the status bar step aside. */
+.app-window.focus > .toolbar, .app-window.focus > .status-bar { display: none; }
 /* Its ✕, in the corner the view keeps free (corner: 40): a round dark button, in Windows 95 the title bar's close box. */
 :root[data-skin] .lens-full-exit { position: absolute; top: calc(6px + env(safe-area-inset-top)); right: calc(6px + env(safe-area-inset-right)); z-index: 2; display: grid; place-items: center; box-sizing: border-box; width: 30px; min-width: 0; height: 30px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 50%; background: #000a; box-shadow: 0 1px 4px #0006; color: #fff; text-shadow: none; font: 16px/1 system-ui, sans-serif; opacity: 0.75; cursor: pointer; transition: opacity 0.2s; }
 :root[data-skin='win95'] .lens-full-exit { width: 26px; height: 24px; border-radius: 0; background: var(--face, silver); color: #000; font: bold 14px/1 'Pixelated MS Sans Serif', Arial, sans-serif; box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf, 0 2px 6px #0005; opacity: 0.9; }

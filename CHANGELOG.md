@@ -2,6 +2,60 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.37.0 · 2026-11-23
+
+- Texts: the lock screen's old window title and its 'something else' box are gone
+- Weave Web's lock screen on the first screen's stage: the passkey first, the words and the ways out folded below (open without a passkey); the browser check follows the stage's buttons
+- A group gets boards its owner makes, a board can be closed to one's own agents, and a lens tells members and asks about a show's tickets
+- Only on my computers: a place a person keeps from their browsers and always-on nodes
+- Weave Web fills faster and says how far it is
+- Weave Web's first screen without the threads behind: a quiet dark ground
+- Full screen, edge to edge: a mini-app's ⤢ fills the screen as a lens does (no window); on an iPhone's home screen both take the screen's height; the ✕ is a proper close button (Windows 95's close box; round and dark elsewhere), no longer a faint oval stretched by the button's minimum width
+- Weave Web's first screen is a stage: Weave's threads drifting behind, the logo, its name
+- Weave Web's start, calmer: one way first, one beside it, the rest folded
+- Weave Web's browser check: a newcomer with a passkey comes straight in, and writes the 24 words down later under Keys & devices
+- Phones: on an iPhone's home screen the window takes the screen's height, as the viewport stops above the home indicator and the page's ground showed below
+- Long links and words break inside a post's text instead of widening the page
+- Phones: edge to edge. The window is the whole screen (100dvh: an iPhone's home screen counted 100% short of the bottom), without a frame; folded, nothing pads for the status bar, Home's list starts below it and ends above the tabs and scrolls under both
+- Home: the backup notice is a quiet note in a hint's colour; its bar has no Submit and shows the filter, sources and sort as icons beside the title (sort is an icon in every list)
+- Phones: the backup notice is a post pinned on top of Home, not a banner; Places, Inbox, People and My hub fold nothing, only Home and places do
+- Phones: Home's own bar (posting, its sources, the sort) folds away with the title and comes back with it
+- Phones: only Home floats its tabs; Places, Inbox, People and My hub keep them as a bar along the bottom
+- Phones: Home and the lists beside it start folded, Home's icon floating at the top (back beside it) and the tabs floating at the bottom as Places alone; a tap on the icon or pulling down brings the title back and widens the tabs to the right
+- Phones: folded, a place keeps back beside its icon (larger, with a shadow); the bar folds up into them and unfolds back down
+- Phones: a place's menu is one list as Places has it, a head per section (boards, services, share, sort) and a small row per thing, the one you're at marked
+- Phones in Windows 95: the place's bar is a title bar, its menu a grey window of raised buttons (the chosen one pressed in), square chips, the icon and Post as raised buttons
+- Phones: the menu in a place's bar is a popover in sections (its boards, its services, sharing it, sorting), and a board's sort, following and lens are in it instead of a bar over the list
+- Phones: one bar per screen. In a place only its own bar (back, its icon, its boards with what's new first, Live, a menu with the rest); reading on folds it to the place's icon and hides the field to write in, pulling down brings both back. Posting is a button low on the right, in boards only. Elsewhere four tabs (Places, Inbox, People, My hub) that fold to a slim strip; Places is #/places; back and a swipe from the left edge lead out
+- The link's first step: where it opens on one aligned line, the board bold with its icon; the step under the window's title
+- The link's first step: the message first, then who gets it as a tree, places bold with their icons
+- The link's dialog: one title on top, a preview like Signal's, floating help
+- The link's three steps: who gets it, access, and its preview edited in place
+- Places and the participants fold to a narrow strip: icons and faces with their counts, a button in each pane's head and in the View menu, remembered on this device
+- Share mode's target gets a near-black outline, as Windows 95 icons have
+- Share mode: the 16-pixel target seen at an angle again, with its grey side, filling its icon; no black
+- Share mode's icons: always their 16-pixel drawing
+- Share mode: the 16-pixel target fills its icon (14 pixels across), as big as the icons beside it
+- Share mode: the 16-pixel target drawn by hand, pixel by pixel; sharp screens get the 32-pixel one
+- Share mode: the target seen at an angle, with its side and a feathered dart; no hint in the bar
+- Share mode: Windows 95 checkboxes beside the places, and a new target with a dart
+- Share mode's check is Windows 95's checked checkbox (98.css's box and checkmark, pixel for pixel)
+- Share mode: the Clean look uses the target and check bitmaps too, in color
+- Share mode: target and check icons, at the far right of a row
+- Share mode: every place the link adds them to has the same frame
+- Share mode in the Clean look: the check is a round mark, not a button; the target stays in the accent color
+- Share mode: a target where the link leads, a check wherever it adds them; the bar names them all
+- Share mode: the highlight goes up the tree, to the space a board or Live is in
+- Share mode marks the tree: a check where the link leads, included places highlighted
+- Weave Web offers to drop a damaged copy of the account in the browser, so its member can come in again
+- Weave Web says why it doesn't start, fills an iPhone's screen from the home screen, and remembers the yes to tilt
+- Share mode: a Weave link is made by going where it should lead
+- Weave Web: with a passkey, a newcomer comes straight in; the 24 words come later
+- browser-check: a count of 0 for the icon is a count too
+- Pushes: an address and a key per place and per sender, so one taken back is that one's alone; the service worker shows only what opens with the key of the address it came to; the relay named in the settings, Renew everything, and how to run your own relay (docs/push-relay.md)
+- Pushes to a closed Weave Web, stage 3: an address and a key per place, sealed to those who run it; their messages pushed there; quiet places take theirs back; no catch-up notifications as Weave opens
+- Notifications per place and person, where they are: notify, count only or quiet, at the head of a group's chat, a project, a community's posts, a direct chat and a hub (a rule like those in the settings) (OVb4TP5x)
+
 ## v0.36.0 · 2026-11-21
 
 - A lens that lays out the screen's edges itself fills all of the screen: under a phone's notch and home bar too, and it hears how much of each edge is covered

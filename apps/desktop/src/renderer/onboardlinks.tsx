@@ -10,6 +10,7 @@ import { GroupIcon } from './avatar-editor.tsx';
 import { ShareMark } from './share.tsx';
 import { useTexts } from './texts.tsx';
 import { playSoon } from './websites.tsx';
+import { focusOn } from './windowfill.ts';
 import weaveMark from './mark.png';
 
 /*
@@ -355,12 +356,14 @@ export function OnboardLinkDialog() {
     setLink(undefined);
   };
   const follow = async (quiet = false) => {
+    // In no place yet: a newcomer, whom the link takes there in focus.
+    const newcomer = (await api<SpaceInfo[]>('spaces').catch(() => [{}])).length === 0;
     const done = await attempt(() => api<{ target?: OpenTarget; welcome?: string }>('followOnboardLink', link));
     if (!done) return;
     bump();
     close();
     if (!quiet) toast(done.welcome ? `${look?.by.name ?? ''}: ${done.welcome}` : t('linkb.joined', { title: look?.title ?? '' }));
-    if (done.target) openTarget(done.target);
+    if (done.target) openTarget(done.target, newcomer);
   };
   // Your own link, or one to where you are already: straight there.
   const quick = !!look && (look.mine || (look.spaces.length > 0 && look.spaces.every((s) => s.member)));
@@ -395,11 +398,16 @@ export function OnboardLinkDialog() {
 
 const PREFIX: Record<string, string> = { project: 'p', community: 'r', group: 'g' };
 
-/** Go where a link leads: a chat with its creator, a space, a board or post in it, or its website, started as ▶ would. */
-export function openTarget(target: OpenTarget): void {
+/**
+ * Go where a link leads: a chat with its creator, a space, a board or post in it, or its website, started as ▶ would.
+ * In focus (a newcomer's first steps, a quick start opened as an app): Weave's other things step aside there, a board's
+ * lens and the website start filling Weave's window (windowfill.ts).
+ */
+export function openTarget(target: OpenTarget, focus = false): void {
   if (target.chat) return void startChat(target.chat);
   const space = target.space;
   if (!space) return;
+  if (focus) focusOn(space.id, target.kind === 'board' ? target.board : undefined);
   const base = `#/${PREFIX[space.kind] ?? 'p'}/${space.id}`;
   if (target.kind === 'post' && target.post) return navigate(`#/post/${target.post}`);
   if (target.kind === 'board' && target.board) return navigate(`${base}/b/${target.board}`);
@@ -410,13 +418,29 @@ export function openTarget(target: OpenTarget): void {
   navigate(base);
 }
 
+/**
+ * Weave Web's account made with this link a moment ago (FOCUS_KEY, set by Weave Web's page), or the quick start opened as
+ * an app of its own (its address is /play/<code>): either goes there in focus.
+ */
+const FOCUS_KEY = 'weave.focus';
+function inFocus(code: string): boolean {
+  if (bridge.web && location.pathname === `/play/${code}`) return true;
+  try {
+    if (sessionStorage.getItem(FOCUS_KEY) !== code) return false;
+    sessionStorage.removeItem(FOCUS_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** /play/<code>: a quick start, from Quick start or an icon on the home screen. Goes where its link leads. */
 export function QuickRoute({ code }: { code: string }) {
   const { t } = useTexts();
   const { data: links } = useApi(() => api<PlayLinkInfo[]>('playLinks'), []);
   const link = links?.find((l) => l.code === code);
   useEffect(() => {
-    if (link) openTarget(link.target);
+    if (link) openTarget(link.target, inFocus(code));
   }, [link?.code]);
   if (!links || link) return null;
   return (

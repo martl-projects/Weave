@@ -192,7 +192,7 @@ export function boardsOf(kind: SpaceKind, entries: Entry[], maintainers: Set<Did
       if (board && Array.isArray(pinned)) board.pinned = [...new Set(pinned.filter((p): p is string => typeof p === 'string'))].slice(0, 20);
       continue;
     }
-    if (kind !== 'project') continue; // a community has its one board
+    if (kind !== 'project' && kind !== 'group') continue; // a community has its one board; a group has the ones its owner made
     if (field(e.body, 'on') === false) {
       boards.delete(name);
       continue;
@@ -204,7 +204,7 @@ export function boardsOf(kind: SpaceKind, entries: Entry[], maintainers: Set<Did
     boards.set(name, {
       name,
       title: str(e.body, 'title', 40) || before?.title || name,
-      type: before?.type ?? (BOARD_TYPES.includes(type) ? type : 'posts'), // a board keeps its type
+      type: before?.type ?? (kind === 'project' && BOARD_TYPES.includes(type) ? type : 'posts'), // a board keeps its type; issues and proposals are a project's
       sort: POST_SORTS.includes(sort) ? sort : (before?.sort ?? 'hot'),
       position: field(e.body, 'position') !== undefined && Number.isFinite(position) ? position : (before?.position ?? boards.size),
       pinned: before?.pinned ?? [],
@@ -536,7 +536,8 @@ export function postsOf(kind: SpaceKind | undefined, entries: Entry[], maintaine
       if (!title) continue;
       const link = str(e.body, 'link', 500);
       const share = shareOf(e.body);
-      const board = kind === 'project' ? (boardName(field(e.body, 'board')) ?? 'releases') : COMMUNITY_BOARD;
+      // A group's post belongs to the board it names (a group has no board of its own to fall back to).
+      const board = kind === 'project' ? (boardName(field(e.body, 'board')) ?? 'releases') : kind === 'group' ? (boardName(field(e.body, 'board')) ?? '') : COMMUNITY_BOARD;
       const text = typeof e.body === 'string' ? e.body : str(e.body, 'text');
       const image = parseBlobRef(field(e.body, 'image')) ? str(e.body, 'image', 200).trim() : '';
       const scene = sceneOf(field(e.body, 'scene'));

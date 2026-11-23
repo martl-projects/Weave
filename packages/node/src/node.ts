@@ -95,6 +95,9 @@ import {
   isLanguageSetting,
   LANGUAGES,
   type LanguageSetting,
+  boardsOf,
+  boardName,
+  lensNotify,
 } from '@weave/core';
 import { WeaveError, type AppAsset } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
@@ -128,6 +131,7 @@ import {
   type WebsiteInfo,
   type KeyvaultInfo,
   type Preferences,
+  type LensShareInfo,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
@@ -1587,6 +1591,13 @@ export class WeaveNode implements Backend {
     const signer = input.as ? this.#agents.find((a) => a.name === input.as) : this.identity;
     if (!signer) throw noAgentError(input.as!, this.#agents.map((a) => a.name));
     if (input.as) this.#agentMay(input.as, input.kind);
+    // A board its person closed to their agents: nothing an agent signs lands on it, whichever door it came through.
+    if (input.as && input.space && input.body && typeof input.body === 'object' && !Array.isArray(input.body)) {
+      const body = input.body as Record<string, Json>;
+      const space = this.#kernel.space(input.space);
+      const shut = (await this.#lenses.agentBoards()).find((c) => c.space.id === space.id && (body.board === c.board || [body.target, body.post, body.issue].some((p) => typeof p === 'string' && c.posts.includes(p))));
+      if (shut) throw new Error(`${shut.space.name}'s board "${shut.board}" is closed to agents: its person closed it (they open it again in Weave, on the board)`);
+    }
     // An always-on node hosts its person's rooms; everyone else would drop anything else it signed (stage 18).
     if (!input.as && this.#isLinkedNode && !permits(NODE_PERMISSIONS, input.kind)) throw new Error(`this is ${this.nameOf(this.identity.author) ?? 'your'} always-on node: it keeps spaces and hosts rooms, and doesn't post or change anything for them (${input.kind})`);
     // Readers would cut anything longer: refuse instead, so nothing is shortened without the author knowing.
@@ -2965,7 +2976,7 @@ export class WeaveNode implements Backend {
     // Who and which board, for the rules that say what counts where (see the app's notify.tsx).
     const stored = notice.open.space && this.#spaces.get(notice.open.space.id);
     const board = stored && notice.open.post ? this.#kernel.spacePosts(stored).posts.find((p) => p.id === notice.open.post)?.board : undefined;
-    return { ...notice, from: item.author, ...(board ? { board } : {}) };
+    return { ...notice, from: item.author, ...(board ?? notice.open.board ? { board: board ?? notice.open.board } : {}) };
   }
 
   async #noticeOf(item: FeedItem, anyAge = false): Promise<Notice | undefined> {
@@ -3026,6 +3037,16 @@ export class WeaveNode implements Backend {
       const type = item.kind === KIND_ISSUE ? 'issue' : item.kind === KIND_PROPOSAL ? 'proposal' : 'post';
       return { type, category: 'activity', title: `New ${type} in ${where}`, text: `${who}: ${title}`, name: 'daemon.notice.new', values: { type, where, who, title }, open: { space, post: item.id } };
     }
+    // An event of a board's lens that names you (its manifest says "notify"): a ticket given, a turn that is yours.
+    if (space && !item.kind.startsWith('weave.') && (space.kind === 'project' || space.kind === 'community' || space.kind === 'group')) {
+      const told = lensNotify(body);
+      const stored = this.#spaces.get(space.id);
+      if (!told || !told.to.includes(me) || !stored || this.#homeHidden().has(space.id)) return undefined;
+      const board = boardsOf(space.kind, this.#kernel.entries(stored), this.#kernel.state(stored).maintainers).find((b) => b.name === body.board);
+      const client = board?.lens?.manifest.client;
+      if (!board || !client?.notify || !client.writes.includes(item.kind)) return undefined;
+      return { type: 'lens', category: 'activity', title: `${who} in ${board.title}`, text: told.text, name: 'daemon.notice.lens', values: { who, board: board.title, text: told.text }, open: { space, board: board.name } };
+    }
     if (item.kind === KIND_KNOCK) {
       const knock = (await this.knocks()).find((k) => k.id === item.id);
       if (knock) return { type: 'knock', category: 'requests', title: `${knock.name ?? who} asks to join ${knock.space.name}`, text: snippet(knock.note), name: 'daemon.notice.knock', values: { who: knock.name ?? who, space: knock.space.name }, open: { inbox: true } };
@@ -3068,7 +3089,7 @@ export class WeaveNode implements Backend {
     const hidden = this.#kernel.hiddenAuthors();
     const out: HeldNotice[] = [];
     for (const d of this.#kernel.decodeAll()) {
-      if (d.private || !kinds.has(d.inner.kind) || d.event.author === me || hidden.has(d.event.author) || d.event.time <= since) continue;
+      if (d.private || !(kinds.has(d.inner.kind) || !d.inner.kind.startsWith('weave.')) || d.event.author === me || hidden.has(d.event.author) || d.event.time <= since) continue;
       let notice = this.#heldNoticeCache.get(d.id);
       if (notice === undefined) {
         notice = (await this.#noticeFor(this.#kernel.toItem(d), true).catch(() => undefined)) ?? null;
@@ -3225,7 +3246,7 @@ export class WeaveNode implements Backend {
 
   /** Everything that can be shown as a post, including every board of every project. */
   #allPosts(): PostInfo[] {
-    const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project').flatMap((s) => this.#kernel.spacePosts(s).posts);
+    const boardPosts = [...this.#spaces.values()].filter((s) => s.kind === 'project' || s.kind === 'group').flatMap((s) => this.#kernel.spacePosts(s).posts);
     // Posts of followed boards are on Home too: each post once.
     return [...new Map([...this.#kernel.homePosts(), ...boardPosts].map((p) => [p.id, p])).values()];
   }
@@ -3908,6 +3929,34 @@ export class WeaveNode implements Backend {
     return this.#lenses.setBoardLens(...args);
   }
 
+  /**
+   * Take a board's lens along: a board of its own in a group of yours (`group`), or in a new one (`name`), shown through
+   * the same lens. The board starts empty: what is on the board it came from stays there. Then invite people to the group.
+   */
+  async shareLens(input: { space: string; board: string; group?: string; name?: string; title?: string }): Promise<LensShareInfo> {
+    const lens = this.#lenses.pinned(input.space, input.board);
+    const me = this.identity.author;
+    let group: SpaceInfo;
+    if (input.group) {
+      const found = this.#kernel.space(input.group);
+      if (found.kind !== 'group') throw new Error(`${found.name} is a ${found.kind}: a lens is shared to a group`);
+      if (this.#kernel.state(found).founder !== me) throw new Error(`only the owner of ${found.name} makes its boards: share to a group of your own, or a new one`);
+      group = this.#kernel.spaceInfo(found);
+    } else {
+      const name = (input.name ?? '').trim();
+      if (!name) throw new Error('which group? one of yours, or a name for a new one');
+      group = await this.createGroup(name);
+    }
+    const title = (input.title ?? '').trim() || lens.name;
+    const taken = new Set((await this.boards(group.id)).map((b) => b.name));
+    const base = boardName(title) ?? boardName(lens.name) ?? 'board';
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+    await this.setBoard({ project: group.id, name, title });
+    await this.#lenses.copyBoardLens({ from: { space: input.space, board: input.board }, space: group.id, board: name });
+    return { space: group, board: name, title: title.slice(0, 40), lens: { name: lens.name, tag: lens.tag } };
+  }
+
   boardView(...args: Parameters<Lenses['boardView']>): Promise<BoardViewInfo> {
     return this.#lenses.boardView(...args);
   }
@@ -3926,6 +3975,12 @@ export class WeaveNode implements Backend {
 
   allowLensNet(...args: Parameters<Lenses['allowLensNet']>): ReturnType<Lenses['allowLensNet']> {
     return this.#lenses.allowLensNet(...args);
+  }
+  agentBoards(...args: Parameters<Lenses['agentBoards']>): ReturnType<Lenses['agentBoards']> {
+    return this.#lenses.agentBoards(...args);
+  }
+  closeBoardToAgents(...args: Parameters<Lenses['closeBoardToAgents']>): ReturnType<Lenses['closeBoardToAgents']> {
+    return this.#lenses.closeBoardToAgents(...args);
   }
 
   allowLensLocation(...args: Parameters<Lenses['allowLensLocation']>): ReturnType<Lenses['allowLensLocation']> {

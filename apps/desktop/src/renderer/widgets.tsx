@@ -6,6 +6,7 @@ import { LensFrame } from './lens.tsx';
 import { api, bridge, bump, useApi } from './lib.ts';
 import { attempt } from './ui.tsx';
 import { useTexts } from './texts.tsx';
+import { fillWindow } from './windowfill.ts';
 
 /*
  * Group widgets (docs/group-widgets.md): a mini-app sent into a chat, one instance per message. In the chat it shows
@@ -27,8 +28,8 @@ function WidgetFrame({ view, meDid, height, full, onFullscreen, onEdges }: { vie
 }
 
 /**
- * A mini-app filling the screen, edge to edge, as a lens does: the browser's full screen where it has one for an
- * element (a computer, an Android phone), and always laid over the whole app (an iPhone). Esc or its ✕ leaves it.
+ * A mini-app filling Weave's window, edge to edge, as a lens does (windowfill.ts): inside its border and below its title
+ * bar, the screen when Weave is maximized; on a phone, the whole screen. Esc or its ✕ leaves it.
  */
 function WidgetFull({ view, meDid, onClose }: { view: WidgetViewInfo; meDid: string; onClose(): void }) {
   const { t } = useTexts();
@@ -39,24 +40,12 @@ function WidgetFull({ view, meDid, onClose }: { view: WidgetViewInfo; meDid: str
   useEffect(() => {
     const el = box.current;
     if (!el) return;
-    let native = false;
-    if (typeof el.requestFullscreen === 'function' && document.fullscreenEnabled)
-      el.requestFullscreen().then(
-        () => void (native = true),
-        () => {},
-      );
-    document.documentElement.classList.add('lens-full-on');
-    const changed = () => {
-      if (native && !document.fullscreenElement) close.current();
-    };
+    const unfill = fillWindow(el);
     const key = (e: KeyboardEvent) => e.key === 'Escape' && close.current();
-    document.addEventListener('fullscreenchange', changed);
     window.addEventListener('keydown', key);
     return () => {
-      document.removeEventListener('fullscreenchange', changed);
       window.removeEventListener('keydown', key);
-      document.documentElement.classList.remove('lens-full-on');
-      if (document.fullscreenElement === el) void document.exitFullscreen().catch(() => {});
+      unfill();
     };
   }, []);
   return (
