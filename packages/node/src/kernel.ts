@@ -1397,13 +1397,36 @@ export class Kernel {
     // decoded already were taken when it was (and decodedAdd takes those that arrive): a kept view isn't scanned again.
     for (let round = 0; round < 4 && !this.decoded; round++) {
       const began = performance.now();
+      // Its parts, said when the whole was long: a browser's node does this with its person waiting.
+      const parts: Array<[string, number]> = [];
+      let last = began;
+      const mark = (what: string): void => {
+        const now = performance.now();
+        parts.push([what, now - last]);
+        last = now;
+      };
       {
         this.ensureDirects();
-        const plain = this.node.replica.events().flatMap((event) => {
+        mark('direct chats');
+        const events = this.node.replica.events();
+        mark(`reading ${events.length} events`);
+        // By what they are in (own space, direct chats, groups…): where opening them spends its time.
+        const byScope = new Map<string, { ms: number; n: number }>();
+        const plain = events.flatMap((event) => {
+          const at = performance.now();
           const d = this.decode(event);
+          const where = event.kind !== KIND_SEALED ? 'open' : event.scope === SELF_SCOPE ? 'own' : (parseScope(event.scope)?.kind ?? 'other');
+          const spent = byScope.get(where) ?? { ms: 0, n: 0 };
+          spent.ms += performance.now() - at;
+          spent.n++;
+          byScope.set(where, spent);
           return d ? [d] : [];
         });
-        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)]);
+        mark(`opening them (${[...byScope].map(([where, s]) => `${where} ${Math.round(s.ms)} ms/${s.n}`).join(', ')})`);
+        const carries = this.#trustedCarries(plain);
+        mark('carries');
+        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...carries]);
+        mark('approvals');
         // What a carry restates and we can read ourselves counts once, as read.
         // (and restated by several carries, once).
         const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
@@ -1420,9 +1443,14 @@ export class Kernel {
           else this.#bySpace.set(d.space.id, [d]);
         }
       }
-      this.decodes.ms += performance.now() - began;
+      mark('putting in order');
+      const again = this.#takeBoardKeys(this.decoded);
+      mark('board keys');
+      const took = performance.now() - began;
+      this.decodes.ms += took;
       this.decodes.n++;
-      if (!this.#takeBoardKeys(this.decoded)) break;
+      if (took >= 2000) console.warn(`weave: decoding everything took ${Math.round(took)} ms: ${parts.filter(([, ms]) => ms >= 50).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
+      if (!again) break;
     }
     return this.decoded!;
   }
