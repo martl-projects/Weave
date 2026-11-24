@@ -3,6 +3,7 @@ import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge, WebProgress } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
+import { Diagnose } from './diagnose.ts';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { b64u, openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { clearPushKey, loadPushKey, makePushKey, saveBadge, savePushKey, sealNotice } from './pushkey.ts';
@@ -78,6 +79,50 @@ sessionStorage.removeItem(TAKE);
 const worker = new Worker('/worker.js', { type: 'module' });
 
 /*
+ * What is said here, kept for the person to send to themselves (diagnose.ts), where they turned that on: the page's
+ * console and errors, the node's (its Worker passes them on), a view's (lens-frame.html). A mark says the page is open
+ * and where, so the next page knows when this one ended without closing.
+ */
+const diagnose = new Diagnose(
+  (() => {
+    try {
+      return localStorage;
+    } catch {
+      return { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    }
+  })(),
+);
+/** The page before this one ended without closing: what it said is sent once the account is open. */
+let endedBefore = false;
+let diagnosing = false;
+const whereNow = () => {
+  const heap = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize;
+  return `${location.hash || '#'}${heap ? ` (page heap ${Math.round(heap / 1e6)} MB)` : ''}`;
+};
+const startDiagnose = () => {
+  if (diagnosing) return;
+  diagnosing = true;
+  for (const level of ['info', 'warn', 'error'] as const) {
+    const said = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      said(...args);
+      diagnose.line('page', level, args.map((a) => (a instanceof Error ? (a.stack ?? a.message) : typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+    };
+  }
+  window.addEventListener('error', (event) => diagnose.line('page', 'error', `error: ${event.message} at ${event.filename}:${event.lineno}:${event.colno}`));
+  window.addEventListener('unhandledrejection', (event) => diagnose.line('page', 'error', `unhandled rejection: ${String((event.reason as { stack?: unknown; message?: unknown } | null)?.stack ?? (event.reason as { message?: unknown } | null)?.message ?? event.reason)}`));
+  const nav = navigator as Navigator & { deviceMemory?: number; standalone?: boolean };
+  const home = nav.standalone || matchMedia('(display-mode: standalone)').matches;
+  endedBefore = diagnose.started(`${nav.userAgent}; screen ${screen.width}×${screen.height} at ${devicePixelRatio}; ${nav.hardwareConcurrency ?? '?'} cores; ${nav.deviceMemory ?? '?'} GB${home ? '; from the home screen' : ''}`);
+  setInterval(() => document.visibilityState === 'visible' && diagnose.alive(whereNow()), 5000);
+  window.addEventListener('hashchange', () => diagnose.alive(whereNow()));
+  // Put away, a page may be taken by the system without a word: that is no crash.
+  document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? diagnose.alive(whereNow()) : diagnose.closed()));
+  window.addEventListener('pagehide', () => diagnose.closed());
+};
+if (diagnose.on) startDiagnose();
+
+/*
  * A start that fails or hangs must say so: until the account's Worker answered there is nothing on the page but its
  * ground, and a person can't tell a slow start from a broken one. After a while with nothing shown, or when the start
  * threw, the page says how far it came and what went wrong, and offers to load again. Nothing here touches the account.
@@ -145,6 +190,9 @@ interface FromWorker {
   event?: FeedItem | string;
   state?: string;
   detail?: string;
+  /** Something the node said (event 'log'): kept where the person turned that on. */
+  level?: string;
+  text?: string;
   key?: string;
   base?: string;
   net?: string[];
@@ -179,6 +227,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
     services.get(data.key!)?.terminate();
     return void services.delete(data.key!);
   }
+  if (data.event === 'log') return void diagnose.line('node', data.level ?? 'info', data.text ?? '');
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
   if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
   if (data.event === 'status') {
@@ -353,9 +402,23 @@ let given: string | undefined;
 // The page keeps working without a network. It needs a secure page; everything else stands without it.
 void navigator.serviceWorker?.register('/sw.js').catch((error: Error) => console.warn('no offline start:', error.message));
 
+/** Send what was kept to the person themselves; how many messages that was. */
+const sendDiagnose = async (): Promise<number> => {
+  const text = diagnose.text();
+  if (!text) return 0;
+  const { messages } = await own<{ space: string; messages: number }>('diagnose', text);
+  diagnose.sent(text);
+  return messages;
+};
+
 const goOnline = async (invite?: string) => {
   open = true;
   await own('connect', STORAGE, invite);
+  // The page before ended without closing: what it said goes to its person now, without their asking again.
+  if (endedBefore) {
+    endedBefore = false;
+    void sendDiagnose().catch((error: Error) => console.warn('the lines kept here were not sent:', error.message));
+  }
 };
 
 /** Ask for the account again, by a reload: the tab that has it lets go when this one waits for it. */
@@ -537,6 +600,16 @@ const web: Bridge['web'] = {
   onProgress: (listener) => {
     progressListeners.push(listener);
     return () => void progressListeners.splice(progressListeners.indexOf(listener), 1);
+  },
+  diagnose: {
+    on: () => diagnose.on,
+    set: (on) => {
+      diagnose.set(on);
+      if (on) startDiagnose();
+    },
+    size: () => diagnose.text().length,
+    said: (source, level, text) => diagnose.line(source, level, text),
+    send: sendDiagnose,
   },
   ways: () => own<string[]>('ways'),
   laterWords: () => own<string | undefined>('laterWords'),

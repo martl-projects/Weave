@@ -64,6 +64,14 @@
             var found = url(inside(el.getAttribute(attr), 'index.html') || '');
             if (found) el.setAttribute(attr, found);
           });
+          // Before anything of the view runs: what goes wrong in it is said to Weave, which keeps it where its person
+          // turned that on (diagnose.ts). Nobody sees a phone's console.
+          var tell = doc.createElement('script');
+          tell.textContent =
+            "(function(){function say(text){try{parent.postMessage({weave:'log',level:'error',text:String(text).slice(0,2000)},'*')}catch(e){}}" +
+            "addEventListener('error',function(e){say((e.message||'error')+' at '+(e.filename||'')+':'+e.lineno+':'+e.colno+(e.error&&e.error.stack?' '+e.error.stack:''))});" +
+            "addEventListener('unhandledrejection',function(e){var r=e.reason;say('unhandled rejection: '+(r&&(r.stack||r.message)||r))});})();";
+          doc.head.insertBefore(tell, doc.head.firstChild);
           // After everything the view's page runs as it loads: it listens now.
           var done = doc.createElement('script');
           done.textContent = "parent.postMessage({ weave: 'loaded' }, '*');";

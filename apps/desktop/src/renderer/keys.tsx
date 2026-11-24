@@ -550,7 +550,56 @@ function WebAccountBox() {
         <AsyncButton onClick={async () => void ((await ask(t('web.forget.ask'), t('web.forget.button'))) && (await attempt(() => bridge.web!.forget())))}>{t('web.forget.button')}</AsyncButton>
       </div>
     </fieldset>
+    <DiagnoseBox />
     </>
+  );
+}
+
+/**
+ * Weave Web: what this browser says, kept for its person to send to themselves (off unless turned on). On a phone
+ * nobody sees the console, and a page that crashed took what it said with it.
+ */
+function DiagnoseBox() {
+  const { t } = useTexts();
+  const diagnose = bridge.web!.diagnose;
+  const [on, setOn] = useState(() => diagnose.on());
+  const [size, setSize] = useState(() => diagnose.size());
+  return (
+    <fieldset>
+      <legend>{t('web.diagnose.legend')}</legend>
+      <p className="small">{t('web.diagnose.why')}</p>
+      <div className="field-row">
+        <input
+          id="diagnose-on"
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            diagnose.set(e.target.checked);
+            setOn(e.target.checked);
+            setSize(diagnose.size());
+          }}
+        />
+        <label htmlFor="diagnose-on">{t('web.diagnose.on')}</label>
+      </div>
+      {on && (
+        <>
+          <p className="small muted">{t('web.diagnose.kept', { size: Math.ceil(size / 1000) })}</p>
+          <div className="buttons">
+            <AsyncButton
+              onClick={() =>
+                attempt(async () => {
+                  const messages = await diagnose.send();
+                  setSize(diagnose.size());
+                  toast(messages ? t('web.diagnose.sent', { messages }) : t('web.diagnose.nothing'));
+                })
+              }
+            >
+              {t('web.diagnose.send')}
+            </AsyncButton>
+          </div>
+        </>
+      )}
+    </fieldset>
   );
 }
 
@@ -656,7 +705,12 @@ export function Unlock({ onDone }: { onDone: () => void }) {
             </div>
           )}
           {/* Opening takes a while with much in the account: say that something happens. */}
-          {busy && <p className="muted" role="status">{t('web.unlock.opening')}</p>}
+          {busy && (
+            <p className="muted unlock-opening" role="status">
+              <span className="unlock-spinner" aria-hidden="true" />
+              {t('web.unlock.opening')}
+            </p>
+          )}
           {said && <p className="notice alarm">{said}</p>}
           {other && <p className="notice">{t('web.unlock.other')}</p>}
           <details className="first-more" open={!withPasskey || !!said}>

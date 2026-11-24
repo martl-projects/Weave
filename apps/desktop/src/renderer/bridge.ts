@@ -168,6 +168,21 @@ export interface Bridge {
     /** How far this browser is: its storage node's connection, and how much came in (the progress bar). */
     progress(): WebProgress;
     onProgress(listener: (progress: WebProgress) => void): () => void;
+    /**
+     * What this browser said, kept for its person to send to themselves (off unless they turn it on): the console's
+     * lines and errors of the page, the node and a view, and whether the page before ended without closing. Sent, they
+     * are messages in a group of their own, "Weave Diagnose".
+     */
+    diagnose: {
+      on(): boolean;
+      set(on: boolean): void;
+      /** How much is kept, in characters. */
+      size(): number;
+      /** Something a view said (its frame passes its errors on). */
+      said(source: 'lens', level: string, text: string): void;
+      /** Send what is kept; how many messages that was. */
+      send(): Promise<number>;
+    };
     /** The ways into this account: the passkeys' ids, and `words`. */
     ways(): Promise<string[]>;
     addPasskey(): Promise<void>;

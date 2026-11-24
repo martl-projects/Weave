@@ -392,6 +392,8 @@ export function LensFrame({ title, release, base, net, location, tilt, tickets, 
           (files) => send({ weave: 'files', files }),
           (e: Error) => toast(e.message, 'error'),
         );
+      // Something went wrong in the view (Weave Web's frame passes its errors on): kept where the person turned that on.
+      if (m?.weave === 'log' && typeof (m as { text?: unknown }).text === 'string') bridge.web?.diagnose.said('lens', String((m as { level?: unknown }).level ?? 'error').slice(0, 10), (m as unknown as { text: string }).text.slice(0, 2000));
       if (m?.weave === 'loaded') {
         frame.current.dataset.loaded = '1';
         sendView();

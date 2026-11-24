@@ -6,6 +6,7 @@ import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from '.
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
+import { diagnosePieces } from './diagnose.ts';
 import { webMethods } from './methods.ts';
 import { called, measure, measured, measureWaiting, watchBusy } from './slow.ts';
 /** What Weave ships with for newcomers (martl's contact, through martl's front door), as `weave init` applies it. */
@@ -240,6 +241,25 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     return account.lockState(HOME).ways;
   },
 
+  /**
+   * What this browser kept of what was said in it (diagnose.ts), sent to the person themselves: messages in a group
+   * of their own that nobody else is in, which their other devices read. Made the first time.
+   */
+  async diagnose(text: string): Promise<{ space: string; messages: number }> {
+    if (!node) throw new Error('this account is locked');
+    const me = node.identity.author;
+    let space: { id: string } | undefined;
+    for (const group of await node.spaces('group')) {
+      if (group.name !== DIAGNOSE_GROUP) continue;
+      const members = await node.members(group.id);
+      if (members.length === 1 && members[0].did === me) space = group;
+    }
+    space ??= await node.createGroup(DIAGNOSE_GROUP);
+    const pieces = diagnosePieces(text, 6000);
+    for (const piece of pieces) await node.say({ space: space.id, text: `\`\`\`\n${piece}\n\`\`\`` });
+    return { space: space.id, messages: pieces.length };
+  },
+
   addWay(passkey: { id: string; secret: Uint8Array }) {
     account.addWay(HOME, node!, wayIn(passkey));
     handOnAgain();
@@ -274,6 +294,28 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     if (invite) void node!.applyBundle(bundle).catch((error: Error) => console.warn('the contacts Weave ships with:', error.message));
   },
 };
+
+/** The group the lines a person sends themselves go to. */
+const DIAGNOSE_GROUP = 'Weave Diagnose';
+
+// What the node says goes to the page too: it keeps the lines where its person turned that on (diagnose.ts), since
+// nobody sees a phone's console.
+for (const level of ['info', 'warn', 'error'] as const) {
+  const said = console[level].bind(console);
+  console[level] = (...args: unknown[]) => {
+    said(...args);
+    try {
+      self.postMessage({ event: 'log', level, text: args.map((a) => (a instanceof Error ? a.message : typeof a === 'string' ? a : JSON.stringify(a))).join(' ') });
+    } catch {
+      // not something a message carries: said in the console only
+    }
+  };
+}
+for (const what of ['error', 'unhandledrejection'] as const)
+  (globalThis as unknown as { addEventListener(type: string, listener: (event: { message?: string; reason?: unknown }) => void): void }).addEventListener(what, (event) => {
+    const reason = event.reason as { message?: unknown } | undefined;
+    self.postMessage({ event: 'log', level: 'error', text: `${what}: ${String(event.message ?? reason?.message ?? event.reason)}` });
+  });
 
 // From the Worker's start: what holds it up before the account is open is said too.
 watchBusy(takeSpent);

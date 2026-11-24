@@ -681,6 +681,11 @@ menu[role='tablist'] { margin-bottom: 0; }
 :root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .yellow { color: #f5e471; }
 :root:is([data-skin='clean'][data-mode='dark'], [data-skin='arcade']) .unlock-tagline .mint { color: #5ae0a4; }
 .unlock-intro { margin: 0 0 4px; font-size: 12px; opacity: 0.85; }
+/* Opening an account takes seconds: a small wheel turns beside the line that says so. */
+.unlock-opening { display: flex; align-items: flex-start; gap: 8px; text-align: left; }
+.unlock-spinner { flex: none; width: 14px; height: 14px; margin-top: 1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: unlock-spin 0.8s linear infinite; }
+@keyframes unlock-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .unlock-spinner { animation-duration: 2.4s; } }
 .unlock .first-ways { margin: 12px 0 6px; }
 .unlock .first-ways button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; }
 .unlock .first-ways button.default { font-weight: bold; }
