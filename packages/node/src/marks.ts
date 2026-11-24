@@ -1,7 +1,7 @@
 import { join as joinPath } from 'node:path';
 import { artifactsOf, checkMarkAnswer, KIND_APP, KIND_MARKS_MINE, KIND_MARKS_PIN, KIND_OFFICIAL, MARK_LIMITS, MARK_SLOTS, markServicesOf, parseSubject, subjectKey, type Json, type Mark, type MarkService, type MarkSlot, type MarkSubject } from '@weave/core';
 import type { FeedItem, MarkInfo, MarkIssuerInfo, MarksAnswer, MarkServiceInfo } from './backend.ts';
-import { releaseFolder } from './lenses.ts';
+import { madeOnce, releaseFolder } from './lenses.ts';
 import type { Decoded, ServicesHost } from './node.ts';
 import { prepareWasm } from './runtime.ts';
 import { SHIPPED_DIR, shippedProblem, shippedServices, shippedStamp, type ShippedService } from './shipped.ts';
@@ -64,9 +64,7 @@ export class Folder {
   /** Fetch a service's release (once), or take the component Weave ships (exactly that file), and start it. */
   prepare(s: MarkService): Promise<string> {
     const key = `${this.#part}:${s.origin.release}`;
-    const before = this.#ready.get(s.origin.release);
-    if (before && this.#h.runtime.running(key)) return before;
-    const ready = (async () => {
+    return madeOnce(this.#ready, s.origin.release, () => this.#h.runtime.running(key), async () => {
       const dir = joinPath(this.#h.home.dir, this.#part, s.shipped ? `${s.service}-${s.origin.release.slice(7, 23)}` : s.origin.release.slice(0, 40));
       let component: string;
       if (s.shipped) {
@@ -91,10 +89,7 @@ export class Folder {
         () => {},
       );
       return key;
-    })();
-    this.#ready.set(s.origin.release, ready);
-    ready.catch(() => this.#ready.delete(s.origin.release));
-    return ready;
+    });
   }
 
   /**

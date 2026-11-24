@@ -80,9 +80,7 @@ export interface PureComponent {
  * and act. `ready` keeps what is being made ready, by key, so it happens once.
  */
 export function preparePure(h: ServicesHost, ready: Map<string, Promise<Ready>>, c: PureComponent): Promise<Ready> {
-  const before = ready.get(c.key);
-  if (before && h.runtime.running(c.key)) return before;
-  const making = (async (): Promise<Ready> => {
+  return madeOnce(ready, c.key, () => h.runtime.running(c.key), async (): Promise<Ready> => {
     const root = await releaseFolder(h, c.dir, { origin: c.via ?? c.origin, tag: c.tag, manifest: c.manifest, ...(c.carried ? { carried: c.carried } : {}) });
     if (!existsSync(joinPath(root, c.part.component))) throw new Error(`${c.name} ${c.tag} has no ${c.part.component}`);
     const entry = await preparePureWasm(joinPath(root, c.part.component), joinPath(c.dir, 'wasm'));
@@ -102,9 +100,31 @@ export function preparePure(h: ServicesHost, ready: Map<string, Promise<Ready>>,
       () => {},
     );
     return { key: c.key, ...(c.part.site ? { site: joinPath(root, c.part.site) } : {}) };
-  })();
-  ready.set(c.key, making);
-  making.catch(() => ready.delete(c.key));
+  });
+}
+
+/** What is being made ready right now. */
+const inTheMaking = new WeakSet<Promise<unknown>>();
+
+/**
+ * Something made ready once, by key: asked for again while it is still being made, it is that same making. Only
+ * what was made and no longer runs (it crashed, or hung) is made again. Without the first, a board asked for once a
+ * second while its lens was fetched started fetching and transpiling it anew each time: 130 at once in a browser,
+ * none of which finished.
+ */
+export function madeOnce<T>(ready: Map<string, Promise<T>>, key: string, running: () => boolean, make: () => Promise<T>): Promise<T> {
+  const before = ready.get(key);
+  if (before && (inTheMaking.has(before) || running())) return before;
+  const making = make();
+  inTheMaking.add(making);
+  ready.set(key, making);
+  making.then(
+    () => inTheMaking.delete(making),
+    () => {
+      inTheMaking.delete(making);
+      if (ready.get(key) === making) ready.delete(key);
+    },
+  );
   return making;
 }
 
