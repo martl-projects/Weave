@@ -51,6 +51,8 @@ export const CONTROL_KINDS: ReadonlySet<string> = new Set([
   'weave.space.close',
   'weave.space.history',
   'weave.space.serving',
+  // a release channel's guests, in its project (lensguests.ts): who may get the channel, so connections look again
+  'weave.lens.guest',
   'weave.space.carry',
   'weave.space.settle',
   'weave.space.shred',

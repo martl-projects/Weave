@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join as joinPath, resolve as resolvePath, sep } from 'node:path';
-import { boardsOf, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type CarriedFile, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
+import { boardsOf, releaseById, KIND_BOARD_LENS, KIND_MSG, KIND_POST_DELETE, KIND_POST_EDIT, KIND_UPVOTE, postsOf, type AppManifest, type BoardLens, type CarriedFile, type Did, type Json, locationCovers, type LensLocation } from '@weave/core';
 import { tagFolder } from './appinstall.ts';
-import type { AgentBoardInfo, BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
+import type { Actor, AgentBoardInfo, BoardViewInfo, FeedItem, LensKindInfo, LensNetInfo, LensLocationInfo } from './backend.ts';
 import { readJson, writeJson } from './home.ts';
 import type { ServicesHost } from './node.ts';
+import type { Channels } from './channels.ts';
 import { pullImage } from './registry.ts';
 import { safePath, untar } from './untar.ts';
 import { gunzipSync } from 'node:zlib';
@@ -70,6 +71,8 @@ export interface PureComponent {
   part: { component: string; site?: string };
   /** Its release files as carried along to where it's used (a lens pinned outside its project). */
   carried?: Record<string, CarriedFile>;
+  /** Where to fetch it instead: the same release in its project's channel (a guest's, channels.ts). */
+  via?: { project: string; release: string };
 }
 
 /**
@@ -80,7 +83,7 @@ export function preparePure(h: ServicesHost, ready: Map<string, Promise<Ready>>,
   const before = ready.get(c.key);
   if (before && h.runtime.running(c.key)) return before;
   const making = (async (): Promise<Ready> => {
-    const root = await releaseFolder(h, c.dir, { origin: c.origin, tag: c.tag, manifest: c.manifest, ...(c.carried ? { carried: c.carried } : {}) });
+    const root = await releaseFolder(h, c.dir, { origin: c.via ?? c.origin, tag: c.tag, manifest: c.manifest, ...(c.carried ? { carried: c.carried } : {}) });
     if (!existsSync(joinPath(root, c.part.component))) throw new Error(`${c.name} ${c.tag} has no ${c.part.component}`);
     const entry = await preparePureWasm(joinPath(root, c.part.component), joinPath(c.dir, 'wasm'));
     h.runtime.startWasm(
@@ -187,9 +190,22 @@ export class Lenses {
   /** The last state folded per board, by what it was folded from. */
   #folded = new Map<string, { from: string; state: Json }>();
 
-  constructor(host: ServicesHost, services: () => Services) {
+  readonly #channels: () => Channels;
+
+  constructor(host: ServicesHost, services: () => Services, channels: () => Channels) {
     this.h = host;
     this.#svc = services;
+    this.#channels = channels;
+  }
+
+  /**
+   * The release channel a board carries with a lens of a project of ours pinned outside it (channels.ts): undefined
+   * when we aren't one of its maintainers, or it has no file for guests to get.
+   */
+  async #channelFor(projectId: string, space: string, manifest: { install?: { assets?: Record<string, unknown> } }): Promise<Json | undefined> {
+    const project = this.h.spaces.get(projectId);
+    if (!project || projectId === space || !manifest.install?.assets?.wasm || !this.h.state(project).maintainers.has(this.h.identity.author)) return undefined;
+    return (await this.#channels().forBoard(project).catch(() => undefined)) as unknown as Json | undefined;
   }
 
   /** A board of a space, with its lens if it has one. */
@@ -229,6 +245,8 @@ export class Lenses {
       const wasm = await this.#svc().carryRelease({ project: found.project.id, id: found.artifact.id, tag: found.artifact.tag, manifest }, 'wasm', PURE_MAX);
       body.files = { wasm } as unknown as Json;
     }
+    const channel = await this.#channelFor(found.project.id, space.id, manifest);
+    if (channel) body.channel = channel;
     await this.h.publish({ kind: KIND_BOARD_LENS, body, space: space.id, as: input.as });
     return this.boardView({ space: space.id, board: board.name });
   }
@@ -252,7 +270,9 @@ export class Lenses {
     // project alone hands out a release from GitHub, and the people here needn't be in it.
     const wasm = lens.manifest.install?.assets?.wasm;
     const files = lens.files ?? (lens.origin.project !== space.id && wasm && !wasm.parts?.length ? await this.#svc().carryRelease({ project: lens.origin.project, id: lens.origin.release, tag: lens.tag, manifest: lens.manifest }, 'wasm', PURE_MAX).then((carried) => ({ wasm: carried })).catch(() => undefined) : undefined);
-    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require', ...(files ? { files: files as unknown as Json } : {}) }, space: space.id });
+    // Its release channel goes along too: as the board carried it, or ours if the lens is from a project we keep.
+    const channel = (lens.channel as unknown as Json | undefined) ?? (await this.#channelFor(lens.origin.project, space.id, lens.manifest));
+    await this.h.publish({ kind: KIND_BOARD_LENS, body: { board: board.name, origin: lens.origin, manifest: lens.manifest as unknown as Json, mode: 'require', ...(files ? { files: files as unknown as Json } : {}), ...(channel ? { channel } : {}) }, space: space.id });
     return this.boardView({ space: space.id, board: board.name });
   }
 
@@ -400,7 +420,10 @@ export class Lenses {
   /** Fetch a lens's package (once per release), transpile its component, and run it: ready to fold and act. */
   #prepare(lens: BoardLens): Promise<Ready> {
     const client = lens.manifest.client!;
-    return preparePure(this.h, this.#ready, { key: `lens:${lens.origin.release}`, dir: joinPath(this.h.home.dir, 'lenses', lens.origin.release.slice(0, 40)), name: lens.name, tag: lens.tag, origin: lens.origin, manifest: lens.manifest, part: client, ...(lens.files ? { carried: lens.files } : {}) });
+    // A guest fetches it from the project's channel, where its maintainers published the same file (channels.ts).
+    const official = this.#channels().official(lens);
+    const via = official && official.channel.id !== lens.origin.project ? { project: official.channel.id, release: official.release } : undefined;
+    return preparePure(this.h, this.#ready, { key: `lens:${lens.origin.release}`, dir: joinPath(this.h.home.dir, 'lenses', lens.origin.release.slice(0, 40)), name: lens.name, tag: lens.tag, origin: lens.origin, manifest: lens.manifest, part: client, ...(lens.files ? { carried: lens.files } : {}), ...(via ? { via } : {}) });
   }
 
   /**
@@ -491,6 +514,23 @@ export class Lenses {
    * A board as its lens shows it: its state (folded from its items) and actions, and whether it has a renderer.
    * Without a lens, or with a suggested one this member didn't choose (`use`), just the board.
    */
+  /**
+   * Whether the lens a board shows is its project's own release: the file its maintainers published (in the project,
+   * or in its channel for a guest), with who did. `unchecked` while there's nothing to check against yet.
+   */
+  #officialInfo(lens: BoardLens): { official?: { by: Actor; project: string }; unchecked?: true } {
+    const project = this.h.spaces.get(lens.origin.project);
+    if (project && !project.reader && this.h.state(project).members.has(this.h.identity.author)) {
+      const a = releaseById(this.h.entries(project), this.h.state(project).maintainers, lens.origin.release)?.artifact;
+      const same = a && a.manifest.install?.assets?.wasm?.sha256 === lens.manifest.install?.assets?.wasm?.sha256;
+      return same ? { official: { by: this.h.actor(a.author, a.signer as Did), project: this.h.spaceName(project) } } : { unchecked: true };
+    }
+    const found = this.#channels().official(lens);
+    if (!found) return lens.channel ? { unchecked: true } : {};
+    const name = this.h.spaceName(found.channel).replace(/ · Releases$/, '');
+    return { official: { by: this.h.actor(found.by, found.by), project: name } };
+  }
+
   async boardView(input: { space: string; board: string; use?: boolean }): Promise<BoardViewInfo> {
     const { space, board } = this.#board(input.space, input.board);
     const lens = board.lens;
@@ -498,7 +538,7 @@ export class Lenses {
     if (!lens) return base;
     const net = this.#net(lens);
     const location = this.#location(lens);
-    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}), ...(lens.manifest.client!.tickets ? { tickets: true } : {}) };
+    const about = { name: lens.name, tag: lens.tag, mode: lens.mode, release: lens.origin.release, by: this.h.actor(lens.by, lens.by), writes: lens.manifest.client!.writes, ...(net.hosts.length ? { net } : {}), ...(location ? { location } : {}), ...(lens.manifest.client!.tilt ? { tilt: true } : {}), ...(lens.manifest.client!.tickets ? { tickets: true } : {}), ...this.#officialInfo(lens) };
     if (lens.mode === 'suggest' && !input.use) return { ...base, lens: about };
     let ready: Ready;
     try {

@@ -160,6 +160,11 @@ export interface SpaceAccess {
    */
   mayReceive?(space: string, peer: PeerIdentity | undefined): boolean;
   /**
+   * Does the peer only read this space: it gets it, but nothing it sends in it is taken (a release channel's guest,
+   * whose events would otherwise reach the other guests through us).
+   */
+  readOnly?(space: string, peer: PeerIdentity | undefined): boolean;
+  /**
    * Every key that may get this space now, for a holder that can't read its members (a person's storage node, which
    * this node tells): undefined for anyone who shows its key.
    */
@@ -249,6 +254,8 @@ export class PeerSession2 {
   #behind = new Set<string>();
   /** Spaces the peer showed the key of but may not have (not a member yet): only its join is taken. */
   #pending = new Set<string>();
+  /** Shared spaces the peer only reads (SpaceAccess.readOnly): it gets them, nothing it sends in them is taken. */
+  #readOnly = new Set<string>();
   /** Who the peer proved to be on this connection, by its last hello. */
   #peerId?: PeerIdentity;
   /** A look again at what the peer may have is due (control events came in). */
@@ -559,6 +566,7 @@ export class PeerSession2 {
           this.replica.batch(() => {
             for (const item of items) {
               if (!isWireItemV2(item)) continue;
+              if (this.#readOnly.has(item.e.space)) continue;
               if (!this.#shared.has(item.e.space)) {
                 // From a peer behind in a space, only a join the node accepts (one that came in before our newer key was
                 // made), and only a few: someone behind may be someone removed. The same from a peer that holds the key
@@ -734,6 +742,7 @@ export class PeerSession2 {
     // Whose public events it gets follows what it shares: more shared, more to compare again (and v1 logs to send).
     const sharedBefore = [...this.#shared].sort().join(',');
     this.#shared = shared;
+    this.#readOnly = new Set([...shared].filter((space) => this.#access.readOnly?.(space, this.#peerId)));
     if (this.#access.publicFor && [...shared].sort().join(',') !== sharedBefore) {
       this.#publicOk = this.#access.publicFor(shared) ?? (() => true);
       this.#started.delete('public');

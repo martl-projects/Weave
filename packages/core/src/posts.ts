@@ -100,6 +100,32 @@ export interface BoardLens {
    * it came from.
    */
   files?: Record<string, CarriedFile>;
+  /**
+   * Its project's release channel, carried along when pinned outside the project (channels.ts): its keys, where to
+   * meet it, and a reader link to knock with once. Whoever reads the board gets its releases from there (directly
+   * from the project's maintainers, checked against what they signed), and they know who uses it.
+   */
+  channel?: LensChannel;
+}
+
+/** A release channel as a board carries it: its keys and meeting point, and the reader link to knock with. */
+export interface LensChannel {
+  space: { id: string; kind: 'project'; name: string; founder: Did; keys: Record<string, string>; [field: string]: unknown };
+  entry: { topics: string[]; bootstrap: unknown[]; [field: string]: unknown };
+  /** A knock link (weave:knock:) of the channel's, made as a reader's. */
+  knock: string;
+}
+
+function parseChannel(value: unknown): LensChannel | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const v = value as Record<string, unknown>;
+  const space = v.space as Record<string, unknown> | undefined;
+  const entry = v.entry as Record<string, unknown> | undefined;
+  if (!space || typeof space.id !== 'string' || space.kind !== 'project' || typeof space.name !== 'string' || typeof space.founder !== 'string') return undefined;
+  if (!space.keys || typeof space.keys !== 'object' || Array.isArray(space.keys)) return undefined;
+  if (!entry || !Array.isArray(entry.topics) || !Array.isArray(entry.bootstrap)) return undefined;
+  if (typeof v.knock !== 'string' || !v.knock.startsWith('weave:knock:') || v.knock.length > 4000) return undefined;
+  return { space: space as LensChannel['space'], entry: entry as LensChannel['entry'], knock: v.knock };
 }
 
 /** A release file carried as blobs: its size and its parts, in order. */
@@ -140,7 +166,8 @@ function parseLens(body: Json, by: Did, time: string): BoardLens | undefined {
   }
   if (!manifest.client || !manifest.install?.tag || !(manifest.install.image || manifest.install.assets?.wasm)) return undefined;
   const files = parseCarriedFiles(field(body, 'files'));
-  return { app: manifest.app, name: manifest.name, tag: manifest.install.tag, origin: { project, release }, manifest, mode: field(body, 'mode') === 'require' ? 'require' : 'suggest', by, time, ...(files ? { files } : {}) };
+  const channel = parseChannel(field(body, 'channel'));
+  return { app: manifest.app, name: manifest.name, tag: manifest.install.tag, origin: { project, release }, manifest, mode: field(body, 'mode') === 'require' ? 'require' : 'suggest', by, time, ...(files ? { files } : {}), ...(channel ? { channel } : {}) };
 }
 
 const DEFAULT_BOARDS: Record<SpaceKind, Array<Omit<Board, 'pinned'>>> = {

@@ -48,7 +48,8 @@ export class Membership {
   // ---------------------------------------------------------------- groups and projects
 
   async spaces(kind?: SpaceKind): Promise<SpaceInfo[]> {
-    return [...this.core.spaces.values()].filter((s) => (!kind || s.kind === kind) && !this.core.kernel.hiddenHere(s)).map((s) => this.core.kernel.spaceInfo(s));
+    // A release channel isn't one of anyone's places: a guest only reads it, its maintainers see it in its project's settings (channels.ts).
+    return [...this.core.spaces.values()].filter((s) => (!kind || s.kind === kind) && !s.reader && !this.core.kernel.state(s).releasesOf && !this.core.kernel.hiddenHere(s)).map((s) => this.core.kernel.spaceInfo(s));
   }
 
   async createGroup(name: string): Promise<SpaceInfo> {
@@ -191,7 +192,7 @@ export class Membership {
   }
 
   async knocks(): Promise<KnockInfo[]> {
-    return this.#openKnocks().map(({ id, event, space, note, rights }) => ({
+    return this.#openKnocks().map(({ id, event, space, note, rights, reader }) => ({
       id,
       space: { id: space.id, kind: space.kind, name: space.name },
       did: event.author,
@@ -199,6 +200,7 @@ export class Membership {
       note,
       time: event.time,
       access: rights,
+      ...(reader ? { guest: true as const } : {}),
     }));
   }
 
@@ -208,8 +210,10 @@ export class Membership {
       throw matches.length
         ? new WeaveError('daemon.request.ambiguous', undefined, 'that id is ambiguous — use more characters')
         : new WeaveError('daemon.request.none', undefined, 'no such request (maybe already answered)');
-    const { id, event, space, invite, rights } = matches[0];
-    if (input.accept) {
+    const { id, event, space, invite, rights, reader } = matches[0];
+    // A guest of a release channel is let in to read it, never into the space (channels.ts).
+    if (input.accept && reader) this.node.letGuestIn(space.id, event.author, true);
+    else if (input.accept) {
       const member = event.author;
       this.node.replica.write(this.node.identity, sealFor(this.core.managed.cipher(space), { kind: KIND_ADMIT, body: { member, invite } }));
       const boardKeys = this.core.kernel.boardKeysFor(space, rights);
@@ -219,9 +223,9 @@ export class Membership {
   }
 
   /** Knocks with my live links that I haven't answered and whose senders aren't in yet. */
-  #openKnocks(): Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> {
+  #openKnocks(): Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[]; reader?: true }> {
     const handled = new Set(this.core.selfBodies(KIND_KNOCK_HANDLED).map((b) => b.knock));
-    const out: Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[] }> = [];
+    const out: Array<{ id: string; event: WeaveRecord; space: StoredSpace; invite: string; note: string; rights: BoardRight[]; reader?: true }> = [];
     for (const event of this.node.replica.events((e) => e.kind === KIND_KNOCK && e.author !== this.node.identity.author)) {
       const id = event.id;
       if (handled.has(id)) continue;
@@ -231,9 +235,12 @@ export class Membership {
       const state = this.core.kernel.state(space);
       if (state.members.has(event.author)) continue;
       const entries = this.core.kernel.entries(space);
-      const live = entries.some((e) => e.kind === KIND_INVITE && e.event.author === this.node.identity.author && (e.body as { invite?: unknown; expires?: unknown; accept?: unknown })?.invite === opened.invite && (e.body as { accept?: unknown }).accept === true && String((e.body as { expires?: unknown }).expires) >= new Date().toISOString());
-      if (!live) continue;
-      out.push({ id, event, space, invite: opened.invite, note: opened.note, rights: inviteRightsOf(entries, state).get(opened.invite) ?? [] });
+      const link = entries.find((e) => e.kind === KIND_INVITE && e.event.author === this.node.identity.author && (e.body as { invite?: unknown; expires?: unknown; accept?: unknown })?.invite === opened.invite && (e.body as { accept?: unknown }).accept === true && String((e.body as { expires?: unknown }).expires) >= new Date().toISOString());
+      if (!link) continue;
+      // A reader link's knock (a guest of a release channel): only for us to answer when we said to ask first.
+      const reader = (link.body as { reader?: unknown }).reader === true;
+      if (reader && (!state.releasesOf || !this.node.guestsAskFirst(space.id))) continue;
+      out.push({ id, event, space, invite: opened.invite, note: opened.note, rights: reader ? [] : (inviteRightsOf(entries, state).get(opened.invite) ?? []), ...(reader ? { reader: true as const } : {}) });
     }
     return out.sort((x, y) => x.event.time.localeCompare(y.event.time));
   }

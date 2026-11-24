@@ -1,4 +1,4 @@
-import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_WIDGET, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts, holdMessage, publicKeyFromDid, sign, verify } from '@weave/core';
+import { type Access, type Board, type BoardRight, type BoardRule, type Did, EDGE_KINDS, type EdgeEvent, type Entry, type EventFields, type Inner, type Invite, type Issue, type Json, KEY_KINDS, KIND_ADMIT, KIND_AGENT_APPROVE, KIND_BOARD_KEY, KIND_BOARD_SEALED, KIND_CARRY, KIND_GIFT, KIND_HISTORY, KIND_INVITE, KIND_JOIN, KIND_KMS, KIND_KNOCK_PENDING, KIND_LEAVE, KIND_MAINTAINER, KIND_MANAGED, KIND_MEMBERSHIP_PENDING, KIND_MSG, KIND_REKEY, KIND_WIDGET, KIND_REMOVE, KIND_REPLY, KIND_ROSTER, KIND_SAVE, KIND_SEALED, KIND_SETTLE, KIND_SHRED, KIND_SPACE_CREATE, KIND_VISITORS, type Member, type Message, type Post, type Proposal, type Reaction, type Reply, SERVICE_PREFIX, type SaveMode, type Score, type Sealed, type SessionStamp, type SpaceKeys, type SpaceKind, type SpaceState, type Thread, type VisitorRule, WeaveError, type WeaveRecord, type WireItemV2, accessOf, b64u, boardKeyFor, boardName, boardOfEvents, boardOfInner, boardRulesOf, boardsOf, boxTo, canonicalIdV2, canonicalJson, canonicalKind, classOf, coauthorsOf, currentEpoch, epochsToShare, friendsOf, gift, innerHash, inviteRightsOf, isDid, isWellFormedV2, isWireItemV2, issuesOf, keyHolders, lifetimeOf, managersOf, mayDo, mayDoAt, mayUse, newBoardKey, open, openBoard, openBoardKey, openGift, openIn, openRekey, overBudget, parseBlobRef, parseScope, permits, postUrl, postsOf, proposalsOf, readersOf, recordOfV2, rekey, savesOf, scoresOf, seal, sealFor, sealForBoard, selfKey, shortPrefixes, socialGraph, spaceScope, spaceState, tooLong, verifyEventV2, visibleIn, visitorCounts, holdMessage, publicKeyFromDid, sign, verify, KIND_LENS_GUEST, openGuestNote, guestsOf, type GuestNote } from '@weave/core';
 import type { HeldSpace, PeerIdentity, SpaceAccess, SwarmNode } from '@weave/net';
 import { type Actor, type Admission, type BoardInfo, type FeedItem, type HomeSource, type IssueInfo, type MessageInfo, PROJECT_STATUSES, type PostInfo, type ProjectPage, type ProjectStatus, type ProposalInfo, type ReactionInfo, type ReplyInfo, type SpaceInfo, type SpaceRef, type ThreadInfo } from './backend.ts';
 import type { People } from './people.ts';
@@ -107,7 +107,7 @@ export class Kernel {
   #boardKeysSeen = new Set<string>();
   /** A space's keys as shared with a newcomer: never the board keys (those go only to their readers). */
   keysOnly(space: StoredSpace): SpaceKeys {
-    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, devicesOnly: _devicesOnly, quiet: _quiet, ...keys } = space;
+    const { entry: _entry, boards: _boards, via: _via, shredded: _shredded, devicesOnly: _devicesOnly, quiet: _quiet, reader: _reader, ...keys } = space;
     return keys;
   }
 
@@ -621,6 +621,7 @@ export class Kernel {
       identity: () => ({ key: this.node.identity.did, sign: (message) => sign(message, this.node.identity.keys.secretKey) }),
       // A space goes only to those who may have it: its members (any live key of theirs), not whoever shows its key.
       mayReceive: (scope, peer) => this.mayReceive(scope, peer),
+      readOnly: (scope, peer) => this.readOnlyFor(scope, peer),
       deliverTo: (scope) => this.deliverTo(scope),
     };
   }
@@ -643,7 +644,45 @@ export class Kernel {
     if (!state.members.size) return undefined;
     // Held for others by its maintainers alone: a member's holder gives it only to them.
     if (state.serving === 'maintainers' && !state.maintainers.has(me)) return [...new Set([me, ...[...state.maintainers].filter((did) => state.members.has(did))])];
+    // A release channel: a maintainer's holder gives it to its guests too (they only read).
+    if (state.releasesOf && state.maintainers.has(me)) return [...new Set([...state.members.keys(), ...this.guests(space).keys()])];
     return [...state.members.keys()];
+  }
+
+  /** Guest notes opened here, per project: kept while its entries stay the same. */
+  #guestNotes = new Map<string, { entries: unknown; notes: GuestNote[] }>();
+
+  /**
+   * A release channel's guests let in now (lensguests.ts), as this node reads them: from the notes its project's
+   * maintainers boxed to us. Only a maintainer of the project can read them; to anyone else, nobody is.
+   */
+  guests(channel: StoredSpace): Map<Did, GuestNote> {
+    const state = this.state(channel);
+    const project = state.releasesOf ? this.core.spaces.get(state.releasesOf) : undefined;
+    if (!project) return new Map();
+    const entries = this.entries(project);
+    let cached = this.#guestNotes.get(project.id);
+    if (cached?.entries !== entries) {
+      const maintainers = this.state(project).maintainers;
+      const notes = entries.filter((e) => e.kind === KIND_LENS_GUEST && maintainers.has(e.event.author)).flatMap((e) => this.core.tryOpen((me) => openGuestNote({ ...e.event, kind: e.kind, body: e.body } as never, me)) ?? []);
+      cached = { entries, notes };
+      this.#guestNotes.set(project.id, cached);
+    }
+    return new Map([...guestsOf(cached.notes, channel.id)].filter(([, note]) => note.on));
+  }
+
+  /**
+   * Does what this peer sends in this space go unread: a guest of a release channel only reads (its maintainers take
+   * nothing of it, so no guest's events reach another guest through them).
+   */
+  readOnlyFor(scope: string, peer: PeerIdentity | undefined): boolean {
+    const parsed = parseScope(scope);
+    const space = parsed && this.core.spaces.get(parsed.id);
+    if (!space) return false;
+    const state = this.state(space);
+    if (!state.releasesOf) return false;
+    const person = this.peerPerson(peer);
+    return !person || (person !== this.node.identity.author && !state.members.has(person));
   }
 
   /**
@@ -686,7 +725,8 @@ export class Kernel {
     // give, only our join: we can't tell its members yet, and they can't let us in without it. Whoever shows its key may
     // exchange with us until its history is here; from then on only its members.
     if (!state.members.size) return true;
-    if (!state.members.has(person)) return false;
+    // A release channel's guests get it from its maintainers (who alone know them), and send nothing (readOnlyFor).
+    if (!state.members.has(person)) return !!state.releasesOf && state.maintainers.has(this.node.identity.author) && this.guests(space).has(person);
     // Held for others by its maintainers alone: members meet only them, never one another.
     if (state.serving === 'maintainers' && !state.maintainers.has(this.node.identity.author) && !state.maintainers.has(person)) return false;
     return true;
@@ -698,7 +738,7 @@ export class Kernel {
    */
   serves(space: StoredSpace): boolean {
     if (space.kind === 'direct' || this.directs.has(space.id)) return true;
-    if (space.quiet || this.node.config.quiet) return false;
+    if (space.quiet || space.reader || this.node.config.quiet) return false;
     const state = this.state(space);
     return state.serving !== 'maintainers' || state.maintainers.has(this.node.identity.author);
   }
@@ -1088,6 +1128,8 @@ export class Kernel {
       ...(space.devicesOnly ? { devicesOnly: true as const } : {}),
       ...(state.serving ? { serving: state.serving } : {}),
       ...(space.quiet ? { quiet: true as const } : {}),
+      ...(state.releasesOf ? { releasesOf: state.releasesOf } : {}),
+      ...(space.reader ? { reader: true as const } : {}),
     };
   }
 
@@ -1281,6 +1323,8 @@ export class Kernel {
 
   /** A project shown as a post: its id is the event that created it. */
   projectPost(project: StoredSpace): PostInfo | undefined {
+    // A release channel is a project's releases again, not a project to show (channels.ts).
+    if (project.reader || this.state(project).releasesOf) return undefined;
     const entries = this.entries(project);
     const created = entries.find((e) => canonicalKind(e.kind) === KIND_SPACE_CREATE && e.event.author === project.founder);
     if (!created) return undefined;

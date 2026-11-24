@@ -133,6 +133,7 @@ import {
   type KeyvaultInfo,
   type Preferences,
   type LensShareInfo,
+  type LensGuestsInfo,
 } from './backend.ts';
 import { loadConfig, saveConfig, type Config } from './config.ts';
 import { FileStore } from './filestore.ts';
@@ -197,6 +198,7 @@ export interface BrowserHandover {
 /** How much of its spaces' content a computer puts in a browser's handover: the storage node takes 8 MB sealed. */
 const LINK_RECENT_BYTES = 4 * 1024 * 1024;
 import { Website } from './website.ts';
+import { Channels } from './channels.ts';
 import { Lenses } from './lenses.ts';
 import { Widgets } from './widgets.ts';
 import { Marks } from './marks.ts';
@@ -916,7 +918,9 @@ export class WeaveNode implements Backend {
   /** Websites (rooms) of the room service, and the app API that tells them who is visiting (see website.ts). */
   #website: Website = new Website(WeaveNode.websiteHost(this), () => this.#services);
   /** Boards' client services, run here for this member. */
-  #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services);
+  #lenses: Lenses = new Lenses(WeaveNode.servicesHost(this), () => this.#services, () => this.#channels);
+  /** Release channels: a project's lens releases for guests who use it on boards elsewhere (channels.ts). */
+  #channels: Channels = new Channels(this, WeaveNode.membershipCore(this), () => ({ carry: (a, platform) => this.#services.carryRelease(a as never, platform, 64 * 1024 * 1024) }));
   /** Group widgets: mini-apps sent into chats, run here for this member once they approved the release (docs/group-widgets.md). */
   #widgets: Widgets = this.#lensesSeeWidgets(new Widgets(WeaveNode.servicesHost(this), () => this.#services));
   /** Mark services: what shows next to names, from issuers you or a space chose (stage 19). */
@@ -974,6 +978,11 @@ export class WeaveNode implements Backend {
     const store = this.#openStore(home);
     mark('the store');
     this.replica = new Replica(store);
+    // A release channel a guest only reads: nothing of theirs goes in it, whatever asks (channels.ts).
+    this.replica.writeGuard = (fields) => {
+      const id = fields.scope ? parseScope(fields.scope)?.id : undefined;
+      if (id && this.#spaces.get(id)?.reader) throw new Error('that release channel is only read here: nothing is written in it');
+    };
     mark('the log');
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
     if (loadConfig(home).standby) this.#companies.refuseWrites();
@@ -1544,6 +1553,41 @@ export class WeaveNode implements Backend {
     }
   }
 
+  // Release channels (channels.ts): the node delegates.
+
+  async lensGuests(projectRef: string): Promise<LensGuestsInfo> {
+    const project = this.#kernel.project(projectRef);
+    this.#kernel.maintainerState(project);
+    const channel = this.#channels.channelOf(project.id);
+    return { ...(channel ? { channel: channel.id } : {}), askFirst: channel ? this.#channels.asksFirst(channel) : false, guests: this.#channels.guests(project.id) };
+  }
+
+  async setLensGuest(input: { project: string; did: string; on: boolean }): Promise<LensGuestsInfo> {
+    const project = this.#kernel.project(input.project);
+    const channel = this.#channels.channelOf(project.id);
+    if (!channel) throw new Error(`${project.name} hands out no releases to guests yet`);
+    this.#channels.letIn(channel, this.resolve(input.did), input.on);
+    return this.lensGuests(project.id);
+  }
+
+  async setGuestsAskFirst(input: { project: string; ask: boolean }): Promise<LensGuestsInfo> {
+    const project = this.#kernel.project(input.project);
+    this.#channels.setAsksFirst(project.id, input.ask);
+    return this.lensGuests(project.id);
+  }
+
+  /** For Membership: a guest let in to (or taken off) a release channel, answering their knock. */
+  letGuestIn(channelId: string, did: Did, on: boolean): void {
+    const channel = this.#spaces.get(channelId);
+    if (channel) this.#channels.letIn(channel, did, on);
+  }
+
+  /** For Membership: do we ask before letting a channel's guests in? */
+  guestsAskFirst(channelId: string): boolean {
+    const channel = this.#spaces.get(channelId);
+    return !!channel && this.#channels.asksFirst(channel);
+  }
+
   setServing(...args: Parameters<Membership['setServing']>): ReturnType<Membership['setServing']> {
     return this.#membership.setServing(...args).then((info) => (this.#applyServing(), info));
   }
@@ -1692,6 +1736,8 @@ export class WeaveNode implements Backend {
       if (hidden.has(decoded.event.author)) continue;
       if (decoded.space) {
         if (!states.has(decoded.space.id)) states.set(decoded.space.id, this.#kernel.state(decoded.space));
+        // A release channel is nobody's place (channels.ts): its releases again aren't news on Home.
+        if (!onlySpace && (decoded.space.reader || states.get(decoded.space.id)!.releasesOf)) continue;
         if (!this.#kernel.mine(decoded.event) && !visibleIn(states.get(decoded.space.id)!, decoded.event, decoded.inner)) continue;
       }
       items.push(this.#kernel.toItem(decoded));
@@ -2441,6 +2487,9 @@ export class WeaveNode implements Backend {
       }
     }
     mark('boards and groups');
+    // Release channels: a project's lens releases restated for its guests, their knocks answered; a guest's channels read.
+    changed += await this.#channels.duties().catch((error) => (console.warn(`weave: release channels: ${(error as Error).message}`), 0));
+    mark('release channels');
     const took = performance.now() - began;
     if (took >= 2000) console.warn(`weave: duties took ${Math.round(took)} ms: ${spent.filter(([, ms]) => ms >= 100).sort((a, b) => b[1] - a[1]).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
     return changed;

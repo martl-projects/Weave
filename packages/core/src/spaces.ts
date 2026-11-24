@@ -23,10 +23,12 @@ import { mayDo } from './authz.ts';
  * replaces this later.
  *
  * Membership events, sealed inside the space:
- *   weave.space.create      {name, tier}       the founder, first event; tier: a membership tier (see memberships.ts)
- *   weave.invite            {invite, expires, access?, accept?}  group, community: any member · project: maintainers;
+ *   weave.space.create      {name, tier, releasesOf}  the founder, first event; tier: a membership tier (see memberships.ts);
+ *                                              releasesOf: a project's release channel (channels.ts)
+ *   weave.invite            {invite, expires, access?, accept?, reader?}  group, community: any member · project: maintainers;
  *                                              access: board rights it gives (access.ts); accept: the link
- *                                              carries no keys, the inviter lets each person in
+ *                                              carries no keys, the inviter lets each person in; reader: a release
+ *                                              channel's, whoever knocks only reads (a guest, channels.ts)
  *   weave.space.join        {invite}           the newcomer, citing an invite link
  *   weave.space.remove      {member}           group: founder · project, community: maintainers (moderators)
  *   weave.project.maintainer {member, on}      projects and communities: maintainers (moderators) appoint or drop others
@@ -512,6 +514,11 @@ export interface SpaceState {
   declined: Map<Did, string>;
   /** Groups that are a creator's membership tier: only the founder lets people in. */
   tier?: true;
+  /**
+   * A project's release channel (channels.ts): its releases again, for guests who use a lens of it elsewhere and
+   * only read here. The id of the project whose maintainers keep it.
+   */
+  releasesOf?: string;
   /** People who left on their own (they may come back with a new invite). */
   left: Set<Did>;
   /** Closed by its owner or maintainers: kept, but read-only. */
@@ -793,6 +800,7 @@ function foldSpace(kind: SpaceKind, founder: Did, placed: Placed[], firstCs: Map
           admit(founder, at);
           if (typeof body.name === 'string') state.name = body.name;
           if (kind === 'group' && body.tier === true) state.tier = true;
+          if (kind === 'project' && typeof body.releasesOf === 'string') state.releasesOf = body.releasesOf;
         }
         break;
       case KIND_INVITE:

@@ -233,6 +233,7 @@ export {
   type Board,
   type BoardType,
   type CarriedFile,
+  type LensChannel,
   parseCarriedFiles,
   type Post,
   type PostSort,
@@ -464,6 +465,7 @@ export {
   type Grantee,
 } from './access.ts';
 export { decodeKnock, encodeKnock, isKnockLink, KIND_KNOCK, KIND_KNOCK_HANDLED, KIND_KNOCK_PENDING, knockFor, openKnock, peekKnock, type KnockLink } from './knock.ts';
+export { guestNote, guestsOf, KIND_LENS_GUEST, openGuestNote, type GuestNote } from './lensguests.ts';
 export { KIND_SESSION, MAX_ABOUT, MAX_DESCRIPTION, MAX_NAME, MAX_STACK, nameProblem, pushOnto, reorder, sameName, SESSION_NAME, SESSION_ROLES, sessionKey, sessionsOf, sessionTitle, takeOff, sessionStampOf, type SessionRecord, type SessionRole, type SessionStamp, type StackItem } from './sessions.ts';
 export { dayKey, dueOccurrence, KIND_ROUTINE, nextRun, parseCreate, parseTrigger, renderTitle, routinesOf, type Routine, type RoutineCreate, type RoutineTrigger } from './routines.ts';
 export {

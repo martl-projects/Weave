@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { NoticeSwitch } from './notify.tsx';
 import type { MembershipRequestInfo, PermissionRequest, ReachInfo } from '@weave/node/client';
 import { PermissionCard } from './agents.tsx';
-import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
+import type { Actor, Admission, BoardInfo, CoauthorRequest, CommunityInfo, FeedItem, GranteeInfo, KnockInfo, LensGuestsInfo, MemberInfo, PostInfo, Profile, ProjectInfo, ProjectStatus, Social, SpaceInfo, Theme } from '@weave/node/client';
 import { ChatView } from './chat.tsx';
 import { TEXT_LIMITS } from '@weave/core/limits';
 import { ImagePicker, RichEditor } from './editor.tsx';
@@ -1090,6 +1090,7 @@ export function ProjectSettings({ project, spaces, members, meDid, tab: asked }:
           <SpacePhotoSettings space={project} members={members} canSet={info.maintainer} />
           <NewcomerHistory space={project} canSet={info.maintainer} />
           <WhoHolds space={project} canSet={info.maintainer} />
+          {info.maintainer && <LensGuests project={project} />}
           <OnlyOnComputers space={project} />
           <VisitorsSettings space={project} canSet={info.maintainer} />
         </>
@@ -1243,6 +1244,44 @@ export function OnlyOnComputers({ space }: { space: SpaceInfo }) {
  * Who holds a space for others (sync protocol 4): everyone, or its maintainers alone, as those who manage it decide
  * (everyone sees it); and this device's own choice to hand nothing out, only to look its meeting points up.
  */
+/**
+ * A project's guests (channels.ts): who gets its releases through the lenses of it pinned elsewhere. Its maintainers
+ * alone see them; nobody else, not the guests themselves, learns who they are.
+ */
+function LensGuests({ project }: { project: SpaceInfo }) {
+  const { t } = useTexts();
+  const { data } = useApi(() => api<LensGuestsInfo>('lensGuests', project.id), [project.id]);
+  if (!data?.channel) return null;
+  const set = (did: string, on: boolean, name?: string) => attempt(() => api('setLensGuest', { project: project.id, did, on }).then(bump), t(on ? 'guests.back' : 'guests.off', { name: name ?? shortDid(did) }));
+  const ask = (on: boolean) => attempt(() => api('setGuestsAskFirst', { project: project.id, ask: on }).then(bump));
+  return (
+    <fieldset>
+      <legend>{t('guests.legend')}</legend>
+      <p className="small muted">{t('guests.about')}</p>
+      {data.guests.length === 0 ? (
+        <p className="small">{t('guests.none')}</p>
+      ) : (
+        <ul className="plain">
+          {data.guests.map((g) => (
+            <li key={g.did} className="field-row">
+              <span className={g.on ? 'grow' : 'grow muted'}>
+                {g.name ?? shortDid(g.did)} {!g.on && <span className="small">· {t('guests.taken.off')}</span>}
+              </span>
+              <button className="small-btn" onClick={() => void set(g.did, !g.on, g.name)}>
+                {t(g.on ? 'guests.take.off' : 'guests.let.back')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="field-row">
+        <input id={`guests-ask-${project.id}`} type="checkbox" checked={data.askFirst} onChange={(e) => void ask(e.target.checked)} />
+        <label htmlFor={`guests-ask-${project.id}`}>{t('guests.ask.first')}</label>
+      </div>
+    </fieldset>
+  );
+}
+
 export function WhoHolds({ space, canSet }: { space: SpaceInfo; canSet: boolean }) {
   const { t } = useTexts();
   const set = (who: 'everyone' | 'maintainers') => attempt(() => api('setServing', { space: space.id, who }).then(bump), t(`serving.set.${who}`, { space: space.name }));

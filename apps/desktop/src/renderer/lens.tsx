@@ -511,6 +511,13 @@ export function LensView({ space, board, meDid, onOpen, full = false, setFull = 
           ✕
         </button>
       )}
+      {!full && (view.lens.official || view.lens.unchecked) && (
+        <div className="lens-net">
+          <span className="muted" title={view.lens.official ? t('lens.official.more', { name: view.lens.name, tag: view.lens.tag, project: view.lens.official.project }) : t('lens.unchecked.more')}>
+            {view.lens.official ? `✓ ${t('lens.official', { name: view.lens.name, tag: view.lens.tag, project: view.lens.official.project, by: view.lens.official.by.name ?? '' })}` : t('lens.unchecked', { name: view.lens.name, tag: view.lens.tag })}
+          </span>
+        </div>
+      )}
       {net && !net.allowed && (
         <div className="lens-net ask">
           <span>

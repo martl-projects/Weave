@@ -252,6 +252,10 @@ export interface SpaceInfo extends SpaceRef {
   devicesOnly?: true;
   /** Held for others by its maintainers alone (setServing): its members meet only them. Absent: by everyone. */
   serving?: 'maintainers';
+  /** A release channel (channels.ts): the project whose releases it holds again. */
+  releasesOf?: string;
+  /** Only read here: a release channel this person is a guest of. */
+  reader?: true;
   /** This node doesn't hold it for others (setQuiet): it only looks up its meeting points. */
   quiet?: true;
 }
@@ -961,7 +965,7 @@ export interface BoardViewInfo {
   space: { id: string; kind: string; name: string };
   board: { name: string; title: string };
   /** `writes`: the kinds its actions propose (its contract); whoever takes an action signs them, an agent only those its person allowed. */
-  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; writes: string[]; site?: boolean; problem?: string; net?: LensNetInfo; location?: LensLocationInfo; /** Its site may ask how the device is tilted (its manifest's "tilt"). */ tilt?: boolean; /** Its site may ask about the tickets of its project's shows (its manifest's "tickets"). */ tickets?: boolean };
+  lens?: { name: string; tag: string; mode: 'suggest' | 'require'; release: string; by: Actor; writes: string[]; site?: boolean; problem?: string; net?: LensNetInfo; location?: LensLocationInfo; /** Its site may ask how the device is tilted (its manifest's "tilt"). */ tilt?: boolean; /** Its site may ask about the tickets of its project's shows (its manifest's "tickets"). */ tickets?: boolean; /** Its project's own release: the file its maintainers published (in the project, or its release channel for a guest), and who did. */ official?: { by: Actor; project: string }; /** Nothing to check it against yet (a guest not let in yet, or before its channel is here). */ unchecked?: true };
   state?: Json;
   actions?: Json[];
 }
@@ -998,6 +1002,17 @@ export interface KnockInfo {
   time: string;
   /** Board rights the link gives. */
   access: Array<{ board: string; read?: boolean; write?: boolean }>;
+  /** A guest asking for a project's releases (its release channel's reader link): let in, they only read them. */
+  guest?: true;
+}
+
+/** Who gets a project's releases as a guest (channels.ts): known to its maintainers alone. */
+export interface LensGuestsInfo {
+  /** The id of the project's release channel, once there is one (made when a maintainer pins one of its lenses outside it). */
+  channel?: string;
+  /** Guests wait for a maintainer's OK rather than being let in as they knock (this maintainer's choice). */
+  askFirst: boolean;
+  guests: Array<{ did: Did; name?: string; on: boolean; at: string }>;
 }
 
 /**
@@ -2269,6 +2284,12 @@ export interface Backend {
   setDevicesOnly(input: { space: string; on: boolean }): Promise<SpaceInfo>;
   /** Who holds a space for others: everyone, or its maintainers alone (those who manage it decide; everyone sees it). */
   setServing(input: { space: string; who: 'everyone' | 'maintainers' }): Promise<SpaceInfo>;
+  /** Maintainers: who gets the project's releases as a guest, through the lenses of it pinned elsewhere (channels.ts). */
+  lensGuests(project: string): Promise<LensGuestsInfo>;
+  /** Maintainers: let a guest in to the project's releases, or take them off (no new key: they get nothing new). */
+  setLensGuest(input: { project: string; did: string; on: boolean }): Promise<LensGuestsInfo>;
+  /** Maintainers: guests wait for an OK (ask) or are let in as they knock. */
+  setGuestsAskFirst(input: { project: string; ask: boolean }): Promise<LensGuestsInfo>;
   /** Whether this node holds a space (or, without one, every space) for others, or only looks up its meeting points. */
   setQuiet(input: { space?: string; on: boolean }): Promise<SpaceInfo | undefined>;
   /** Sign in with your company: hand an OIDC ID token to the space's attestor (and use it for the key service). */
@@ -2912,7 +2933,7 @@ export { LENS_CSP, lensCsp } from './lenscsp.ts';
 
 export const RPC_METHODS: readonly RpcMethod[] = [
   'whoami', 'publish', 'feed', 'addAgent', 'addNodeAgent', 'agentToken', 'agentTokens', 'revokeAgentMachine', 'agentScope', 'setAgentScope', 'updateAgent', 'join', 'status',
-  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'setServing', 'setQuiet', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
+  'spaces', 'createGroup', 'createProject', 'invite', 'joinSpace', 'lookAtInvite', 'createOnboardLink', 'onboardLinks', 'revokeOnboardLink', 'lookAtOnboardLink', 'followOnboardLink', 'playLinks', 'removePlayLink', 'pairPhone', 'phones', 'unpairPhone', 'setHomeVisibility', 'followBoard', 'leave', 'handOver', 'closeSpace', 'setHistory', 'setBoardRule', 'keepPost', 'fading', 'shred', 'fetchOlder', 'keepers', 'letCopiesGo', 'dropKept', 'manageSpace', 'unlockSpace', 'destroyCompanyKey', 'signIn', 'setHold', 'setDevicesOnly', 'setServing', 'setQuiet', 'lensGuests', 'setLensGuest', 'setGuestsAskFirst', 'approveAgent', 'setVisitors', 'agentBlocked', 'escrowRecovery', 'openEscrow', 'createCompany', 'company', 'companyAction', 'enrollLink', 'inviteByEmail', 'link', 'links', 'setScim', 'scim', 'setConsole', 'consoleInfo', 'companySignIn', 'signInStatus', 'consoleOperatorLink', 'backup', 'saveBackup', 'keystores', 'moveHomeKey', 'linkNode', 'linkBrowser', 'addAuditStream', 'removeAuditStream', 'auditStreams', 'exportSpace', 'audit', 'knocks', 'answerKnock', 'setBoardAccess', 'members', 'removeMember',
   'addService', 'artifacts', 'catalog', 'catalogArtifact', 'listInCatalog', 'unlistFromCatalog', 'openWebsite', 'services', 'setService', 'removeService', 'serviceProfiles', 'servicesIn', 'shippedServices', 'serviceActions', 'servicePanels', 'serviceLists', 'setServicePolicy', 'setArtifactAccess', 'withdrawArtifact', 'launchWebsite', 'programConsents', 'withdrawProgramConsent', 'releaseFile', 'getArtifactFile', 'artifactFileJob', 'fetchers', 'addFetcher', 'setFetcher', 'removeFetcher', 'keyvaults', 'addKeyvault', 'removeKeyvault', 'addClientApp', 'removeClientApp', 'setupPacks', 'startKeyvaultApp', 'keyvaultOwners', 'finishKeyvaultApp', 'keyvaultReachable', 'removeKeyvaultApp', 'handKeyvault', 'serviceSettings', 'setServiceSetting', 'startServiceSignIn', 'finishServiceSignIn', 'askService', 'serviceRequests', 'platforms', 'accountProof', 'linkAccount', 'startAccountProof', 'finishAccountProof', 'accounts', 'myAccounts',
   'createCommunity', 'community', 'setCommunity', 'setModerator',
   'agentBoards', 'closeBoardToAgents', 'posts', 'post', 'submit', 'confirmCoauthor', 'coauthorRequests', 'editPost', 'deletePost', 'upvote', 'save', 'share', 'boards', 'setBoard', 'curate', 'setBoardLens', 'shareLens', 'boardView', 'boardAction', 'lensFile', 'lensKinds', 'lensSite', 'lensNet', 'allowLensNet', 'allowLensLocation', 'widgetReleases', 'sendWidget', 'widgetView', 'widgetAction', 'approveWidget',

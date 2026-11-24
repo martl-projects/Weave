@@ -255,6 +255,8 @@ export class Content {
     const out: Array<{ posts: Post[]; entries: Entry[]; space?: StoredSpace }> = [];
     for (const space of this.core.spaces.values()) {
       if (space.kind !== 'project' && space.kind !== 'community' && space.kind !== 'group') continue;
+      // A release channel holds a project's releases again, no posts of its own (channels.ts).
+      if (space.reader || this.core.state(space).releasesOf) continue;
       const entries = this.core.entries(space);
       out.push({ posts: postsOf(space.kind, entries, this.core.state(space).maintainers), entries, space });
     }

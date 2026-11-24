@@ -20,6 +20,11 @@ export interface StoredSpace extends SpaceKeys {
   devicesOnly?: true;
   /** This node doesn't hold it for others: it only looks up its meeting points (config.quiet for every space). Its own. */
   quiet?: true;
+  /**
+   * Only read here: a release channel this node's person is a guest of (channels.ts), from the lens of a board they
+   * see. Nothing is written in it, it isn't listed among their places, and it isn't held for others.
+   */
+  reader?: true;
 }
 
 export function loadSpaces(home: Home): StoredSpace[] {

@@ -91,6 +91,8 @@ export class Replica {
 
   /** 1 writes as v0.3 did: for tests that build an older home. */
   writeVersion: 1 | 2 = 2;
+  /** Asked before anything is written here: throws to refuse it (a node's read-only spaces: a guest writes nothing in a release channel). */
+  writeGuard?: (fields: EventFields) => void;
 
   /** A store that already holds events (e.g. loaded from disk) is trusted as-is; delegations in it are re-applied. */
   constructor(store: LogStore = new MemoryStore()) {
@@ -191,6 +193,7 @@ export class Replica {
    * v1 chain makes that show as a gap instead of a second event numbered alike.
    */
   write(identity: SigningIdentity, fields: EventFields): WeaveRecord {
+    this.writeGuard?.(fields);
     const root = !this.authority.grant(identity.did);
     if (this.writeVersion === 1 || root || fields.kind === KIND_IDENTITY || fields.kind === KIND_ROTATE) return recordOfV1(this.append(identity, fields));
     const { scope, ...rest } = fields;
