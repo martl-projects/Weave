@@ -946,8 +946,10 @@ function CommunityRule({ community, canSet }: { community: SpaceInfo; canSet: bo
 
 const BOARD_TYPES = ['posts', 'issues', 'proposals'] as const;
 
+/** A project's boards, or a group's (its owner's: posts only, without access lists or rules for forgetting). */
 function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardInfo[] }) {
   const { t } = useTexts();
+  const group = project.kind === 'group';
   const add = useForm({ name: '', type: 'posts' });
   const [editing, setEditing] = useState<BoardInfo>();
   const [ruling, setRuling] = useState<BoardInfo>();
@@ -965,8 +967,8 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
           <tr className="small muted">
             <th />
             <th>{t('field.name')}</th>
-            <th>{t('boards.who')}</th>
-            <th>{t('boards.posts.stay')}</th>
+            {!group && <th>{t('boards.who')}</th>}
+            {!group && <th>{t('boards.posts.stay')}</th>}
             <th>{t('boards.sort')}</th>
             <th />
           </tr>
@@ -980,16 +982,20 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
               <td>
                 <input defaultValue={b.title} aria-label={t('boards.title.of', { board: b.name })} onBlur={(e) => e.target.value !== b.title && set(b.name, { title: e.target.value })} />
               </td>
-              <td>
-                <button className="small-btn access-btn" title={t('boards.who.may')} onClick={() => setEditing(b)}>
-                  {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
-                </button>
-              </td>
-              <td>
-                <button className="small-btn" title={b.rule ? ruleText(b.rule) : t('boardrule.none.short')} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
-                  <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? t('boardrule.for.good') : b.rule?.keepDays ? t('boards.days', { n: b.rule.keepDays }) : b.rule?.maxMB ? t('boards.mb', { n: b.rule.maxMB }) : t('boardrule.for.good')}
-                </button>
-              </td>
+              {!group && (
+                <td>
+                  <button className="small-btn access-btn" title={t('boards.who.may')} onClick={() => setEditing(b)}>
+                    {b.access?.read || b.access?.write ? <Icon name="lock" /> : null} {accessSummary(b)}
+                  </button>
+                </td>
+              )}
+              {!group && (
+                <td>
+                  <button className="small-btn" title={b.rule ? ruleText(b.rule) : t('boardrule.none.short')} onClick={() => setRuling(b)} disabled={b.type !== 'posts' || b.name === 'releases'}>
+                    <Icon name="clock" /> {b.type !== 'posts' || b.name === 'releases' ? t('boardrule.for.good') : b.rule?.keepDays ? t('boards.days', { n: b.rule.keepDays }) : b.rule?.maxMB ? t('boards.mb', { n: b.rule.maxMB }) : t('boardrule.for.good')}
+                  </button>
+                </td>
+              )}
               <td>
                 <select value={b.sort} aria-label={t('boards.default.sort')} onChange={(e) => set(b.name, { sort: e.target.value })}>
                   {(['hot', 'new', 'top'] as const).map((s) => (
@@ -1018,17 +1024,19 @@ function BoardSettings({ project, boards }: { project: SpaceInfo; boards: BoardI
         className="field-row"
         onSubmit={async (e: FormEvent) => {
           e.preventDefault();
-          if (await attempt(() => api('setBoard', { project: project.id, name: add.values.name, title: add.values.name, type: add.values.type, position: (boards.at(-1)?.position ?? 0) + 1 }).then(bump))) add.reset();
+          if (await attempt(() => api('setBoard', { project: project.id, name: add.values.name, title: add.values.name, type: group ? 'posts' : add.values.type, position: (boards.at(-1)?.position ?? 0) + 1 }).then(() => (bump(), true)))) add.reset();
         }}
       >
         <input placeholder={t('boards.new.placeholder')} required maxLength={32} {...add.field('name')} />
-        <select {...add.field('type')} aria-label={t('boards.type')}>
-          {BOARD_TYPES.map((type) => (
-            <option key={type} value={type}>
-              {t(`boards.type.${type}`)}
-            </option>
-          ))}
-        </select>
+        {!group && (
+          <select {...add.field('type')} aria-label={t('boards.type')}>
+            {BOARD_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {t(`boards.type.${type}`)}
+              </option>
+            ))}
+          </select>
+        )}
         <button>{t('boards.add')}</button>
       </form>
       {editing && <BoardAccessDialog project={project} board={editing} onClose={() => setEditing(undefined)} />}
@@ -1372,8 +1380,12 @@ export function SpaceOwnership({ space, members, meDid, canClose }: { space: Spa
 /** A group's settings: who owns it, leaving and closing. */
 export function GroupSettings({ group, members, meDid }: { group: SpaceInfo; members: MemberInfo[]; meDid: string }) {
   const { t } = useTexts();
+  // Its boards are its owner's to make (content.ts setBoard).
+  const owner = group.founder === meDid;
+  const { data: boards } = useApi(() => (owner ? api<BoardInfo[]>('boards', group.id) : Promise.resolve([] as BoardInfo[])), [group.id, owner]);
   return (
     <Page title={<><Icon name="gear" /> {t('nav.settings')} · g/{group.name}</>}>
+      {owner && boards && <BoardSettings project={group} boards={boards} />}
       <SpacePhotoSettings space={group} members={members} canSet={group.founder === meDid} />
       <NewcomerHistory space={group} canSet={group.founder === meDid} />
       <WhoHolds space={group} canSet={group.founder === meDid} />

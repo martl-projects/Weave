@@ -670,10 +670,12 @@ export function PostView({ id, space, members, meDid, meName, spaces, back, mode
 
 export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceInfo[]; space?: string; board?: string; onClose(): void }) {
   const { t } = useTexts();
-  const targets = spaces.filter((s) => s.kind !== 'group');
+  // Groups have chat; posts only on the boards their owner made, so a group is a target when this was opened on one of them.
+  const targets = spaces.filter((s) => s.kind !== 'group' || (s.id === space && board));
   const [where, setWhere] = useState(space ?? targets[0]?.id ?? '');
   const target = targets.find((s) => s.id === where);
-  const { data: boards } = useApi(() => (target?.kind === 'project' ? api<BoardInfo[]>('boards', target.id) : Promise.resolve([])), [target?.id]);
+  const hasBoards = target?.kind === 'project' || target?.kind === 'group';
+  const { data: boards } = useApi(() => (hasBoards ? api<BoardInfo[]>('boards', target.id) : Promise.resolve([])), [target?.id]);
   const [boardName, setBoardName] = useState(board ?? '');
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
@@ -685,7 +687,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
   const chosenBoard = writable?.find((b) => b.name === (boardName || 'ideas')) ?? writable?.[0];
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: target?.kind === 'project' ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, scene: scene || undefined, with: coauthors.length ? coauthors : undefined }), t('submit.posted'));
+    const post = await attempt(() => api<PostInfo>('submit', { space: where, board: hasBoards ? chosenBoard?.name : undefined, title, text, link: link || undefined, image: image || undefined, scene: scene || undefined, with: coauthors.length ? coauthors : undefined }), t('submit.posted'));
     if (post) {
       onClose();
       bump();
@@ -707,7 +709,7 @@ export function SubmitDialog({ spaces, space, board, onClose }: { spaces: SpaceI
                 </option>
               ))}
             </select>
-            {target?.kind === 'project' && boards && (
+            {hasBoards && boards && (
               <select aria-label={t('word.board')} value={chosenBoard?.name} onChange={(e) => setBoardName(e.target.value)}>
                 {boards
                   .filter((b) => b.canWrite !== false)

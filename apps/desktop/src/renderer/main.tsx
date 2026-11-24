@@ -1198,7 +1198,7 @@ function Shell() {
         <Menu
           label={t('menu.posts')}
           items={[
-            { label: t('menu.posts.submit'), onClick: () => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined }) },
+            { label: t('menu.posts.submit'), onClick: () => setDialog({ kind: 'submit', space: space?.kind !== 'group' || route[2] === 'b' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined }) },
             { label: t('menu.posts.invite'), disabled: !space, onClick: () => space && setDialog({ kind: 'invite', space }) },
           ]}
         />
@@ -1220,7 +1220,7 @@ function Shell() {
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={route[0] === 'space' && !route[1]} className="not-mobile" />
         <ToolButton icon="user" label={t('nav.hub')} href="#/space" on={(route[0] === 'me' || route[0] === 'keys' || (route[0] === 'space' && !route[1])) && !placesOpen} className="mobile-only" />
         <span className="tool-sep" />
-        <ToolButton icon="pencil" label={t('tool.submit')} className="not-mobile" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
+        <ToolButton icon="pencil" label={t('tool.submit')} className="not-mobile" onClick={() => setDialog({ kind: 'submit', space: space?.kind !== 'group' || route[2] === 'b' ? space?.id : undefined, board: route[2] === 'b' ? route[3] : undefined })} />
         <ToolButton icon="plus" label={t('tool.new')} onClick={() => setDialog({ kind: 'new' })} className="not-mobile" />
         {space && <ToolButton icon="userPlus" label={t('space.invite')} onClick={() => setDialog({ kind: 'invite', space })} className="not-mobile" />}
         {/* A link someone sent (an invite, a contact link, a post): one place for all of them, one click away. */}
