@@ -68,25 +68,74 @@ export class Replica {
   /**
    * Every valid event, as `events` reads them, kept between readings: only where this replica is its store's one
    * writer and reading is dear (a browser: half a second for 15000 events, and the page asks several things a
-   * second, each a reading). Let go whenever anything is taken in or a body leaves.
+   * second, each a reading). An event taken in is put in its place there, and a body that comes fills in the events
+   * that waited for it: letting go of it for each made a peer's 256 events 161 readings of the whole log (70 s in a
+   * browser, with nothing else answered meanwhile). Let go only when a key event changes which events count, a
+   * re-signed event takes an older one's place, or the store is written to past the replica (a body leaves).
    */
   #kept?: WeaveRecord[];
   #keeps = false;
+  /** The replica is writing to its store itself, and says what that does to #kept. */
+  #writing = false;
 
   /** Keep what `events` reads until something changes (see #kept). Only for a store nobody else writes to. */
   keepEvents(): void {
     if (this.#keeps) return;
     this.#keeps = true;
-    // Every write to the store lets go of it: events taken in (those that waited too, taken after listeners heard of
-    // the one they waited for), bodies that come, and bodies that leave past the replica (retention, releasing).
+    // Every write to the store past the replica lets go of it: bodies that leave (retention, releasing), whatever else.
     const store = this.store as unknown as Record<string, (...args: unknown[]) => unknown>;
     for (const method of ['append', 'add2', 'putBody', 'releaseBody', 'dropBody']) {
       const original = store[method].bind(this.store);
       store[method] = (...args: unknown[]) => {
-        this.#kept = undefined;
+        if (!this.#writing) this.#kept = undefined;
         return original(...args);
       };
     }
+  }
+
+  /** A write of the replica's own to its store: what is kept stays, and the caller brings it up to date. */
+  #write(fn: () => void): void {
+    const was = this.#writing;
+    this.#writing = true;
+    try {
+      fn();
+    } catch (error) {
+      this.#kept = undefined;
+      throw error;
+    } finally {
+      this.#writing = was;
+    }
+  }
+
+  /** An event just taken in, in its place in what is kept. */
+  #keep(record: WeaveRecord): void {
+    const kept = this.#kept;
+    if (!kept) return;
+    let lo = 0;
+    let hi = kept.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (recordOrder(kept[mid], record) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    kept.splice(lo, 0, record);
+  }
+
+  /** A body came: the kept events that stood without it are read with it. */
+  #bodyCame(hash: string): void {
+    const kept = this.#kept;
+    if (!kept) return;
+    for (let i = 0; i < kept.length; i++) {
+      const r = kept[i];
+      if (r.missing && isWireItemV2(r.wire) && r.wire.e.body === hash) kept[i] = this.#recordOf({ id: r.id, event: r.wire.e });
+    }
+  }
+
+  /** Whose key this is, by what it signed (Authority.vouch). Where that changes which grant counts, what is kept is read anew. */
+  #vouch(signer: Did, author: Did, n: number): void {
+    const before = this.#kept && this.authority.grant(signer);
+    this.authority.vouch(signer, author, n);
+    if (this.#kept && this.authority.grant(signer) !== before) this.#kept = undefined;
   }
 
   /** 1 writes as v0.3 did: for tests that build an older home. */
@@ -123,13 +172,19 @@ export class Replica {
   batch(fn: () => void): void {
     if (!this.store.transaction) return fn();
     let failed: { error: unknown } | undefined;
-    this.store.transaction(() => {
-      try {
-        fn();
-      } catch (error) {
-        failed = { error };
-      }
-    });
+    try {
+      this.store.transaction(() => {
+        try {
+          fn();
+        } catch (error) {
+          failed = { error };
+        }
+      });
+    } catch (error) {
+      // The write didn't happen: what is kept may hold events the store doesn't.
+      this.#kept = undefined;
+      throw error;
+    }
     if (failed) throw failed.error;
   }
 
@@ -215,12 +270,13 @@ export class Replica {
   /** Take a v1 event, a v2 wire item `{e, b?}`, or a record of either. */
   /** Take an event from a peer (or our own). Never throws on what a peer sends: whatever can't be read is rejected as malformed. */
   ingest(input: unknown): IngestResult {
-    this.#kept = undefined;
     let result: IngestResult;
     try {
       const item = isRecord(input) ? input.wire : input;
       result = isWireItemV2(item) ? this.#ingestV2(item.e, item.b) : this.#ingestOne(item);
     } catch {
+      // Whatever threw may have left the store ahead of what is kept.
+      this.#kept = undefined;
       return { status: 'rejected', reason: 'malformed' };
     }
     if (result.status === 'accepted') timed('events that waited', () => this.#drainPending(this.#about(isRecord(input) ? input.wire : input)));
@@ -269,7 +325,7 @@ export class Replica {
     if (!isWellFormedEvent(input)) return { status: 'rejected', reason: 'malformed event' };
     const event = input;
     if (!verifyEventSignature(event)) return { status: 'rejected', reason: 'bad signature' };
-    this.authority.vouch(event.signer, event.author, event.seq);
+    this.#vouch(event.signer, event.author, event.seq);
 
     const head = this.store.head(event.signer);
     const expected = (head?.seq ?? 0) + 1;
@@ -288,10 +344,14 @@ export class Replica {
     const check = this.authority.check(event);
     if (!check.ok) return check.retry ? this.#park(pendingKey(event), event, check.reason, 'auth') : { status: 'rejected', reason: check.reason };
 
-    this.store.append(event);
+    this.#write(() => this.store.append(event));
     this.#taken1.set(eventId(event), this.#taken1.size + 1);
     this.#unpark(pendingKey(event));
-    if (KEY_KINDS.has(event.kind)) this.authority.apply(event);
+    if (KEY_KINDS.has(event.kind)) {
+      // Which events count may have changed with it.
+      this.authority.apply(event);
+      this.#kept = undefined;
+    } else if (!taken) this.#keep(recordOfV1(event)); // re-signed already: the v2 event stands for it
     if (this.#listeners.size) this.#notify(recordOfV1(event));
     return { status: 'accepted' };
   }
@@ -301,7 +361,7 @@ export class Replica {
     const event = input;
     if (event.kind === KIND_IDENTITY || event.kind === KIND_ROTATE) return { status: 'rejected', reason: `${event.kind} stays v1` };
     if (!verifyEventV2(event)) return { status: 'rejected', reason: 'bad signature' };
-    this.authority.vouch(event.signer, event.author, event.n);
+    this.#vouch(event.signer, event.author, event.n);
     // A body that doesn't match is dropped; the event stands without it.
     const goodBody = event.class === 'content' && body !== undefined && !this.store.forgotten(event.body) && bodyMatches(event, body) ? body : undefined;
     const ownId = eventIdV2(event);
@@ -312,7 +372,9 @@ export class Replica {
       if (eventIdV2(sameNumber.event) !== ownId) return this.#fork(event.signer);
       if (event.class === 'content' && goodBody !== undefined && this.store.body(event.body) === undefined) {
         // The body of an event held without one.
-        this.store.putBody(event.body, goodBody);
+        const hash = event.body;
+        this.#write(() => this.store.putBody(hash, goodBody));
+        this.#bodyCame(hash);
         this.#notify(recordOfV2(sameNumber.id, event, goodBody));
         return { status: 'accepted' };
       }
@@ -344,10 +406,23 @@ export class Replica {
     const refused = timed('admitting', () => this.admit?.(event, goodBody));
     if (refused) return { status: 'rejected', reason: refused };
 
-    this.store.add2({ id, event });
-    if (goodBody !== undefined) this.store.putBody(event.body as string, goodBody);
+    this.#write(() => {
+      this.store.add2({ id, event });
+      if (goodBody !== undefined) this.store.putBody(event.body as string, goodBody);
+    });
     this.#unpark(`v2 ${ownId}`);
-    if (isKeyEventV2(event)) this.authority.apply(record);
+    if (isKeyEventV2(event)) {
+      // Which events count may have changed with it.
+      this.authority.apply(record);
+      this.#kept = undefined;
+    } else if (event.was !== undefined) {
+      // It takes the place of the v1 event it restates.
+      this.#kept = undefined;
+    } else {
+      if (goodBody !== undefined) this.#bodyCame(event.body as string);
+      // As a reading gives it: with its body where the store held that already.
+      this.#keep(this.#recordOf({ id, event }));
+    }
     this.#notify(record);
     return { status: 'accepted' };
   }

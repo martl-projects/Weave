@@ -287,11 +287,22 @@ export class Sessions {
     // In order, one at a time: working out a notice may need to read the Inbox.
     let queue = Promise.resolve();
     const unsubscribe = this.node.replica.onAppend((event) => {
-      const item = this.node.itemFor(event);
-      if (item && this.core.marks.reads(item.kind)) this.core.marksChanged();
-      if (item && this.core.hints.reads(item.kind)) this.core.hintsChanged();
-      if (!item || this.core.hiddenAuthors().has(item.author)) return;
+      // Looked at once everything that came with it is taken in, not while it is: an item needs names and who is
+      // hidden, which is everything decoded, and that is decoded anew after each event that changes keys or rights.
+      // A peer's 256 events were 161 times everything decoded that way: three minutes in which a browser's node
+      // answered nothing.
       queue = queue.then(async () => {
+        let item: FeedItem | undefined;
+        try {
+          item = this.node.itemFor(event);
+          if (item && this.core.marks.reads(item.kind)) this.core.marksChanged();
+          if (item && this.core.hints.reads(item.kind)) this.core.hintsChanged();
+          if (item && this.core.hiddenAuthors().has(item.author)) item = undefined;
+        } catch {
+          // closed in the meantime
+          return;
+        }
+        if (!item) return;
         const notice = await this.core.noticeFor(item).catch(() => undefined);
         // A notice counts (Unread folds them): what the hint services say may have changed.
         if (notice) this.core.hintsChanged();
