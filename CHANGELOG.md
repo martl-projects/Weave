@@ -2,6 +2,24 @@
 
 Every release of Weave, newest first. Versions follow semantic versioning; while it is 0.x, any minor release may change the protocol.
 
+## v0.38.0 · 2026-11-24
+
+- Sessions by machine: short sentences, and the connect steps as a list (4Vxe)
+- Sessions by machine: the rights texts say plainly what a key may do (4Vxe)
+- Sessions by machine: the spaces below a frame's projects line up with them (4Vxe)
+- Rights board by board, the direct way for Remote Control, and icons (4Vxe, step 4)
+- Sessions by machine and agent key, with the spaces each key may use (4Vxe, step 3)
+- Machines for sessions, and VM sessions through their token (4Vxe, step 2)
+- Agent keys with a scope, and tokens per machine (4Vxe, step 1)
+- A lens taken along to a group carries its release file too, so the group needn't be in its project
+- A lens pinned outside its project carries its release file along, as blobs
+- Sync protocol 4: a space goes only to its members, not to whoever holds its key
+- A lens can be taken along: a board of its own in a group of yours, and a link to invite to it
+- Newcomers arrive in focus: a link into a project, board or lens folds Weave's other things away (places and members to their strips, no toolbar or status bar) until they go elsewhere; a board's lens and Live's website start filling Weave's window. Full screen now means Weave's window, inside its border and below its title bar, for lenses, mini-apps and websites: maximized it is the screen, and it follows the window's size
+- Creating a project shows that it's working and takes no second click: one click, one project
+- Weave Web's lock screen: the first screen's layout (logo, name, tagline, one big way in) inside the chosen look's window; the browser check shoots it in every look
+- Weave Web's lock screen keeps the chosen look: its window again, with the passkey first and the words and ways out folded below
+
 ## v0.37.0 · 2026-11-23
 
 - Texts: the lock screen's old window title and its 'something else' box are gone
