@@ -384,6 +384,8 @@ function embedLonePostLinks(root: DocumentFragment): void {
 // ---------------------------------------------------------------- images
 
 const blobUrls = new Map<string, Promise<string>>();
+/** After how long a picture that didn't come is asked for again. */
+const BLOB_RETRIES = [10_000, 30_000, 90_000];
 
 /** A local object URL for a wblob: image, fetched once (from disk or peers) and cached. */
 export function blobUrl(ref: string): Promise<string> {
@@ -402,9 +404,21 @@ export function useBlobUrl(ref?: string): string | undefined {
     setUrl(undefined);
     if (!ref) return;
     let alive = true;
-    blobUrl(ref).then((u) => alive && setUrl(u), () => {});
+    let again: ReturnType<typeof setTimeout> | undefined;
+    // A picture nobody online had in time is asked for again, a few times, further apart: it may come once the
+    // connection is back (in a browser it comes from the storage node alone).
+    const load = (tries: number): void => {
+      blobUrl(ref).then(
+        (u) => alive && setUrl(u),
+        () => {
+          if (alive && tries < BLOB_RETRIES.length) again = setTimeout(() => load(tries + 1), BLOB_RETRIES[tries]);
+        },
+      );
+    };
+    load(0);
     return () => {
       alive = false;
+      clearTimeout(again);
     };
   }, [ref]);
   return url;

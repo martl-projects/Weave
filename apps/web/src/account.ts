@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { b64u, KEY_KINDS, newRecoveryWords, normalizeWords, randomBytes, type Json, type Sealed } from '@weave/core';
+import { b64u, timed, KEY_KINDS, newRecoveryWords, normalizeWords, randomBytes, type Json, type Sealed } from '@weave/core';
 import { readSecretJson, resolveHome, saveSpace, useHomeKey, vaultOf, WeaveNode, writeSecretJson, loadSpaces, type BrowserHandover, type RecoveredKeys, type StoredSpace } from '@weave/node';
 import { accountOf, accountRecord, handOnAgain, socketTo, StorageClient, type StorageLink } from './host/net.ts';
 import { openBox, openHomeKey, openingFromWords, sealBox, sealHomeKey, type Opening } from './lock.ts';
@@ -263,9 +263,9 @@ export function storageLink(dir: string, node: WeaveNode, url: string, options: 
         const { words, ...rest } = before;
         writeSecretJson(node.home, keepingFile(dir), { ...rest, keys: keptKeys(node.currentKeys(words)) } as unknown as Json);
       }
-      const box = boxOf(dir, node);
+      const box = timed('the box of keys', () => boxOf(dir, node));
       // A linked browser keeps no box: the next browser is linked by the person's computer too.
-      if (box.keeping.keys) for (const way of box.keeping.ways.map(openingOf)) await client.putBox(way.token, sealBox(way, box as unknown as Json));
+      if (box.keeping.keys) for (const way of box.keeping.ways.map(openingOf)) await client.putBox(way.token, timed('sealing the box', () => sealBox(way, box as unknown as Json)));
       for (const token of box.keeping.gone ?? []) await client.removeBox(b64u.decode(token));
       if (box.keeping.gone?.length) writeSecretJson(node.home, keepingFile(dir), { ...keeping(dir, node), gone: [] });
     },

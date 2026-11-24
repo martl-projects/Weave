@@ -244,7 +244,8 @@ export class People {
     return { ...this.#profile(did), ...(accounts.length ? { accounts } : {}) };
   }
 
-  #profile(did: Did): Profile {
+  /** `posts`: their public posts counted already, for many people at once (counting reads the whole log). */
+  #profile(did: Did, posts?: number): Profile {
     const graph = this.core.graph();
     const me = this.node.identity.author;
     const mine = graph.get(me);
@@ -262,7 +263,7 @@ export class People {
       blocked: mine?.blocked.has(did) ?? false,
       muted: mine?.muted.has(did) ?? false,
       contact: this.contacts().has(did),
-      posts: this.node.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
+      posts: posts ?? this.node.replica.events((e) => e.author === did && e.kind === 'weave.post').length,
       projects: this.publicProjectsOf(did),
       ...((claim) => (claim && claim.vouched !== false ? { company: { ...this.core.companies.companyOfPerson(did), ...(claim.vouched ? {} : { unconfirmed: true as const }) } } : {}))(this.core.companies.companyClaim(did)),
       links: this.core.companies.linksOf(did).filter((l) => l.state === 'linked'),
@@ -312,11 +313,18 @@ export class People {
   }
 
   async directory(query?: string): Promise<Profile[]> {
-    const authors = new Set([...this.node.replica.events((e) => e.kind === KIND_PROFILE).map((e) => e.author), ...this.contacts().keys()]);
+    // One reading of the log for everyone: who has a profile, and how many public posts each made (a reading a
+    // person held a browser's node for 17 seconds).
+    const authors = new Set<Did>(this.contacts().keys());
+    const posts = new Map<Did, number>();
+    for (const e of this.node.replica.events((e) => e.kind === KIND_PROFILE || e.kind === 'weave.post')) {
+      if (e.kind === KIND_PROFILE) authors.add(e.author);
+      else posts.set(e.author, (posts.get(e.author) ?? 0) + 1);
+    }
     authors.delete(this.node.identity.author);
     const key = query && personTargetOf(query);
     const q = query?.trim().toLowerCase();
-    const profiles = [...authors].map((did) => this.#profile(did));
+    const profiles = [...authors].map((did) => this.#profile(did, posts.get(did) ?? 0));
     return profiles
       .filter((p) => (key ? personKeyOf(p.did).startsWith(key) : !q || (p.name ?? '').toLowerCase().includes(q) || (q.length >= 8 && p.did.toLowerCase().includes(q))))
       .sort((a, b) => (a.name ?? a.did).localeCompare(b.name ?? b.did));

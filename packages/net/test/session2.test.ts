@@ -37,6 +37,26 @@ async function settle(...peers: Peer[]): Promise<void> {
 const say = (p: Peer, space: string, text: string, time?: string) => p.replica.append2(p.me, { kind: 'weave.msg', space, body: { text }, ...(time ? { time } : {}) });
 const texts = (p: Peer, space: string) => p.replica.events((r) => r.scope === space).map((r) => (r.body as { text?: string } | null)?.text ?? null).sort();
 
+describe('PeerSession2: blobs pushed', () => {
+  it('holds a blob pushed before the peer was let in, and sends it once it is', async () => {
+    const a = peer('group:a');
+    const b = peer('group:a');
+    const [sa, sb] = duplexPair();
+    // Behind the firewall a peer is let in when its hello showed a shared space: not yet when the session is made.
+    const left = new PeerSession2(a.replica, sa, { access: { spaces: () => a.spaces, firewall: true } });
+    const got: string[] = [];
+    const right = new PeerSession2(b.replica, sb, { access: { spaces: () => b.spaces, firewall: true }, blobs: { get: () => undefined, wanted: () => [], receive: (hash) => void got.push(hash) } });
+    left.pushBlob('early', new Uint8Array([1, 2, 3]));
+    await settle(a, b);
+    expect(got).toEqual(['early']);
+    left.pushBlob('later', new Uint8Array([4]));
+    await settle(a, b);
+    expect(got).toEqual(['early', 'later']);
+    left.close();
+    right.close();
+  });
+});
+
 describe('PeerSession2: members-only sync', () => {
   it('shares only the spaces both hold, and public with everyone', async () => {
     const a = peer('group:a', 'group:b');

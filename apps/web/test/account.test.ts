@@ -266,6 +266,26 @@ describe('an account in a browser', { timeout: 60_000 }, () => {
     }
   });
 
+  it('keeps a picture made before the storage node was reached', async () => {
+    const { storage, dir: storageDir, url, stop } = await world();
+    try {
+      const dir = temp('early');
+      const { node } = createAccount(dir, 'Web', passkey(1));
+      useStorage(storageLink(dir, node, url, { invite: storage.invite() }));
+      // Made while the connection is still being set up: it goes to the node all the same (the session's own test, in
+      // packages/net, covers a push before the peer was let in).
+      const online = node.goOnline();
+      const mine = await node.putBlob({ data: Buffer.alloc(40_000, 3).toString('base64'), type: 'image/png' });
+      const hash = /^wblob:([^.]+)\./.exec(mine)![1];
+      expect((await node.status()).peers).toBe(0);
+      await online;
+      await until(() => existsSync(join(storageDir, 'accounts')) && readdirSync(join(storageDir, 'accounts')).some((f) => existsSync(join(storageDir, 'accounts', f, 'blobs', hash))));
+      await node.close();
+    } finally {
+      await stop();
+    }
+  });
+
   it('takes a second passkey, and lets one go', async () => {
     const { storage, url, stop } = await world();
     try {

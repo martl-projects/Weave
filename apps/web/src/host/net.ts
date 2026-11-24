@@ -1,4 +1,4 @@
-import { b64u, blobHash, createIdentity, deliverTag, holdMessage, isWireItemV2, type Did, type Replica, type SigningIdentity } from '@weave/core';
+import { b64u, blobHash, createIdentity, deliverTag, holdMessage, isWireItemV2, timed, type Did, type Replica, type SigningIdentity } from '@weave/core';
 import { authKey, StorageClient, type BlobSource, type HeldByNode, type PeerSession2, type SpaceAccess, type TextSocket } from '@weave/net/browser';
 
 export * from '@weave/net/browser';
@@ -168,7 +168,7 @@ export class SwarmNode {
       };
       socket.onClose(dropped);
       const client = await this.#signedIn(socket);
-      const held = this.#held();
+      const held = timed('what the storage node holds', () => this.#held());
       await client.hold(held, this.#vouch(client));
       await link.afterHold?.(client);
       this.#sent = JSON.stringify(held);

@@ -99,7 +99,7 @@ import {
   boardName,
   lensNotify,
 } from '@weave/core';
-import { WeaveError, type AppAsset } from '@weave/core';
+import { WeaveError, timed, type AppAsset } from '@weave/core';
 import { shippedPacks, SHIPPED_DIR } from './shipped.ts';
 import { SwarmNode, type SpaceAccess } from '@weave/net';
 import { Onboarding } from './onboard.ts';
@@ -954,14 +954,27 @@ export class WeaveNode implements Backend {
   }
 
 
+  /** How long each part of opening took (ms), for open() to say when it was long. */
+  #opening: Array<[string, number]> = [];
+
   private constructor(home: Home, identity: SigningIdentity) {
     this.home = home;
     this.#identity = identity;
+    let last = performance.now();
+    const mark = (what: string): void => {
+      const now = performance.now();
+      this.#opening.push([what, now - last]);
+      last = now;
+    };
     // Homes from before separate encryption keys use the root key for encryption.
     const stored = loadEncryptionKeys(home);
     this.#encryption = stored.length ? stored : [{ did: identity.did, keys: identity.keys }];
     this.#releaseLock = acquireLock(home);
-    this.replica = new Replica(this.#openStore(home));
+    mark('keys and lock');
+    const store = this.#openStore(home);
+    mark('the store');
+    this.replica = new Replica(store);
+    mark('the log');
     // A standby server follows the active one and signs nothing: it shares the active one's device key (stage 14).
     if (loadConfig(home).standby) this.#companies.refuseWrites();
     this.blobs = new BlobStore(home.blobs);
@@ -971,37 +984,46 @@ export class WeaveNode implements Backend {
     // Weave's own GitHub sign-in is gone (services have their own access): its token isn't kept.
     rmSync(joinPath(home.dir, 'github.json'), { force: true });
     for (const file of [this.#payments.gumroadFile, joinPath(home.dir, 'remote.json'), joinPath(home.dir, 'services.json')]) readSecretJson(home, file);
+    mark('settings and secrets');
     for (const space of loadSpaces(home)) this.#spaces.set(space.id, space);
     this.#managed.loadHalves();
+    mark('spaces');
     // A newer server of this identity took over while we were away: stand down (nQ9JHlUV).
     for (const r of this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author)) this.#companies.seeGeneration(r);
 
     // Pick up keys handed to us — new epochs and whole spaces — now and whenever they arrive.
     const isKeys = (e: WeaveRecord) => canonicalKind(e.kind) === KIND_REKEY || e.kind === KIND_GIFT;
-    for (const event of this.replica.events(isKeys)) this.#kernel.takeKeys(event);
+    mark('generations');
+    const keyEvents = this.replica.events(isKeys);
+    mark('reading key events');
+    for (const event of keyEvents) this.#kernel.takeKeys(event);
+    mark(`taking ${keyEvents.length} key events, of that ${Math.round(this.#kernel.giftChecks.ms)} ms in ${this.#kernel.giftChecks.n} checks of gifted keys and ${Math.round(this.#kernel.decodes.ms)} ms decoding everything ${this.#kernel.decodes.n}×`);
     this.replica.admit = this.#holding.admit;
     this.replica.onAppend((event) => {
       if (event.kind === KIND_GENERATION && event.author === this.identity.author) this.#companies.seeGeneration(event);
       // When it arrived: where a notice period must not depend on the date its author claims (#seenAt).
       if (event.kind === KIND_SEALED || canonicalKind(event.kind) === KIND_REKEY) this.#arrivals.set(event.id, new Date(this.clock()).toISOString());
       const scoped = event.kind === KIND_SEALED && !event.missing ? (parseScope(event.scope)?.id ?? '') : '';
+      // What is kept of the sealed events by space is from before this one.
+      this.#managed.forgetSealed();
       const kept = scoped ? this.#managed.rawCache.get(scoped) : undefined;
       const space = scoped ? (this.#spaces.get(scoped) ?? this.#kernel.directs.get(scoped)?.space) : undefined;
       // A company half or setting arriving changes which key opens what: decode again.
-      if (kept && space && this.#managed.takeRaw(space, kept, event)) this.#kernel.invalidateDecoded();
-      if (isKeys(event)) this.#kernel.takeKeys(event);
-      this.#kernel.decodedAdd(event);
+      if (kept && space && timed('company keys', () => this.#managed.takeRaw(space, kept, event))) this.#kernel.invalidateDecoded();
+      // Where the time goes while events arrive (a browser's node says so when it was busy for seconds).
+      if (isKeys(event)) timed('taking keys', () => this.#kernel.takeKeys(event));
+      timed('decoding it', () => this.#kernel.decodedAdd(event));
       // Someone may have come in with one of our friendly onboarding links: follow them back, after the batch.
       if (scoped && this.#onboarding.watched().has(scoped)) this.#scheduleFollowBack();
       // A new encryption key (mine or a peer's) adds an epoch to direct chats.
-      if (event.kind === KIND_ROTATE) this.#forgetDirects();
+      if (event.kind === KIND_ROTATE) timed('direct chats again', () => this.#forgetDirects());
       // Key events change whose events count for whom; anything else joins its author's list, in order.
       if (KEY_KINDS.has(event.kind)) this.#kernel.personEvents.clear();
       // A place, its managers or a rule may have changed: this browser's push addresses follow (a moment later).
       if (this.#push.on) this.#push.changed();
       if (event.kind === KIND_ORG_FREEZE) this.#kernel.invalidateDecoded();
       if (event.kind === KIND_ORG_POLICY && event.scope === 'public' && this.#companies.policyCache) this.#companies.takePolicy(event);
-      else this.#personEventsAdd(event);
+      else timed('its author\'s list', () => this.#personEventsAdd(event));
     });
   }
 
@@ -1010,11 +1032,24 @@ export class WeaveNode implements Backend {
     const home = resolveHome(dir);
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
+    // Where opening spends its time, said when it was long (a browser's node opens with its person waiting).
+    const began = performance.now();
     const node = new WeaveNode(home, identity);
+    const made = performance.now();
+    let migrated = made;
     if (options.migrate !== false) {
       node.#migrate();
+      migrated = performance.now();
       node.#moveToProtocol3();
     }
+    const done = performance.now();
+    if (done - began >= 2000)
+      console.warn(
+        `weave: opening took ${Math.round(done - began)} ms: the node ${Math.round(made - began)} ms (${node.#opening
+          .filter(([, ms]) => ms >= 50)
+          .map(([what, ms]) => `${what} ${Math.round(ms)} ms`)
+          .join(', ')}), older homes ${Math.round(migrated - made)} ms, protocol 3 ${Math.round(done - migrated)} ms`,
+      );
     return node;
   }
 
@@ -2326,21 +2361,40 @@ export class WeaveNode implements Backend {
     if (generation && !this.replica.events((e) => e.kind === KIND_GENERATION && e.author === this.identity.author && (e.body as { generation?: unknown } | null)?.generation === generation).length) {
       this.replica.write(this.identity, { kind: KIND_GENERATION, body: { generation } });
     }
+    // Where the time goes, said when it was long (a page's node has one thread: nothing else moves meanwhile).
+    const spent: Array<[string, number]> = [];
+    const began = performance.now();
+    let last = began;
+    const mark = (what: string): void => {
+      const now = performance.now();
+      spent.push([what, now - last]);
+      last = now;
+    };
     this.#content.prefetchBlobs();
     // Who holds which space for others follows its maintainers' setting (and our own choice): found there, or not.
     this.#applyServing();
     let changed = (await this.#payments.expireMemberships()) + (await this.#payments.grantAutomatic()) + (await this.#payments.checkContractWallets()) + (await this.#payments.grantPaid()) + (await this.#payments.grantTickets()) + (await this.#payments.renewPaid()) + (await this.#payments.sendQueuedRequests()) + this.#people.tellContacts() + (await this.#onboarding.collectHellos().catch(() => 0));
+    mark('payments and contacts');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.settleEpochKeys(space);
+    mark('epoch keys');
     changed += await this.#content.closeProposals();
+    mark('proposals');
     for (const space of [...this.#spaces.values()]) changed += this.#closeInvites(space);
+    mark('invites');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateAfterLeaving(space, this.#kernel.state(space));
-    for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space));
+    mark('keys after leaving');
+    const rekeys = this.#kernel.rekeysByScope();
+    for (const space of [...this.#spaces.values()]) changed += this.#kernel.handMissedKeys(space, this.#kernel.state(space), rekeys);
+    mark('missed keys');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.recarry(space, this.#kernel.state(space));
+    mark('carried state');
     for (const space of [...this.#spaces.values()]) changed += this.#kernel.rotateMonthly(space);
+    mark('monthly keys');
     changed += this.#retention.applyShreds();
     changed += this.#retention.forget();
     changed += this.#holding.release();
     this.#holding.purgeKept();
+    mark('retention and holding');
     changed += await this.#companies.renewSignIn();
     for (const space of [...this.#spaces.values()]) if (this.#kernel.state(space).managed) await this.#managed.unlock(space);
     // Company halves of new keys: published (or tried again) before anything else uses them.
@@ -2355,6 +2409,7 @@ export class WeaveNode implements Backend {
     // Bookkeeping, not a change to anyone's spaces: the audit to the company's security tools.
     await this.#companies.streamAudit();
     await Promise.all([...this.#managed.halves.keys()].map((id) => this.#managed.publishHalf(id)));
+    mark('companies');
     // Bookkeeping for our own devices, not a change to anyone's spaces. What the lists name comes here first, so the list
     // this device writes after has it too, rather than hiding it. A node writes none of its person's.
     this.#holding.recoverSpaces();
@@ -2366,6 +2421,7 @@ export class WeaveNode implements Backend {
     changed += await this.#services.takeHandovers();
     // And agents handed to it: their keys, rights, or that they're gone.
     changed += this.#nodeAgents.take();
+    mark('own devices, handovers');
     for (const project of [...this.#spaces.values()].filter((s) => s.kind === 'project')) {
       const state = this.#kernel.state(project);
       if (!state.members.has(this.identity.author)) continue;
@@ -2384,6 +2440,9 @@ export class WeaveNode implements Backend {
         changed += dids.length;
       }
     }
+    mark('boards and groups');
+    const took = performance.now() - began;
+    if (took >= 2000) console.warn(`weave: duties took ${Math.round(took)} ms: ${spent.filter(([, ms]) => ms >= 100).sort((a, b) => b[1] - a[1]).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
     return changed;
   }
 

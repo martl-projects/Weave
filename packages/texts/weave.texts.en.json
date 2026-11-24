@@ -536,6 +536,7 @@
     "browser.revoke.ask": "Revoke the browser {name}? What it signs from now on counts nowhere.",
     "web.unlock.title": "Weave is locked",
     "web.unlock.intro": "Your account on this browser is sealed. Open it with your passkey or your recovery words.",
+    "web.unlock.opening": "Once you have confirmed, your account opens. With much in it, this takes up to half a minute.",
     "web.unlock.passkey": "Open with my passkey",
     "web.unlock.words": "Your recovery words",
     "web.unlock.open": "Open",

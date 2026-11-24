@@ -362,6 +362,29 @@ describe('GitHub releases, shipped with Weave', { timeout: 120_000 }, () => {
       const his = await ben.boardView({ space: 'Woods', board: 'finds' });
       expect(his.lens?.problem).toBeUndefined();
       expect(his.state).toEqual(mine.state);
+
+      // Cleo's page reaches neither GitHub nor anyone who holds the blobs (the computer that kept them is off): her
+      // board says so in time, instead of waiting on, and her node answers other things meanwhile.
+      const cleo = person('Cleo', github, shipped);
+      cleo.githubSetup = { fetch: (async () => new Response('', { status: 403 })) as unknown as Fetch };
+      cleo.locateWait = 1_500;
+      cleo.blobWait = 1_500;
+      await cleo.joinSpace(await martl.invite('Woods'));
+      const events = setInterval(() => sync([martl, cleo]), 100);
+      try {
+        await vi.waitFor(() => expect(cleo.replica.events().length).toBeGreaterThanOrEqual(martl.replica.events().length), { timeout: 10_000, interval: 100 });
+        const started = Date.now();
+        const opening = cleo.boardView({ space: 'Woods', board: 'finds' });
+        const meanwhile = await cleo.boards('Woods');
+        expect(meanwhile.map((b) => b.name)).toContain('finds');
+        expect(Date.now() - started).toBeLessThan(1_000);
+        const hers = await opening;
+        expect(hers.lens?.problem).toMatch(/./);
+        expect(Date.now() - started).toBeLessThan(15_000);
+        console.log('cleo:', Date.now() - started, 'ms,', hers.lens?.problem);
+      } finally {
+        clearInterval(events);
+      }
     } finally {
       clearInterval(syncing);
       await martl.removeService('github-releases').catch(() => {});

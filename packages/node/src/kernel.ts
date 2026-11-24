@@ -15,7 +15,7 @@ import type { Services } from './services.ts';
 import type { Decoded, WeaveNode } from './node.ts';
 import { replicaOrder, photoOrderOf, photoPosesOf, DEFAULT_PAGE, carriedItem, meetTopic, summary, KIND_PAGE, KIND_SPACE_PHOTO } from './shared.ts';
 import { newSpace, directSpace } from '@weave/core';
-import { channelsOf } from '@weave/core';
+import { channelsOf, timed } from '@weave/core';
 /*
  * The kernel: the spaces this node holds and their keys, epochs, rekeys and
  * carries, decoding what it can read (once, cached), each space's state, the
@@ -75,6 +75,8 @@ export class Kernel {
   /** Decoded views go stale: keys came or went, bodies were dropped. */
   invalidateDecoded(): void {
     this.decoded = undefined;
+    // Bodies may have been dropped: what is kept of the sealed events is read again.
+    this.core.managed.forgetSealed();
   }
 
   /** Everything this node can read, decrypted once; dropped whenever an event arrives or keys change. */
@@ -409,17 +411,31 @@ export class Kernel {
   }
 
   /**
+   * Every rekey this node holds, by the space it is in: read once for all spaces (handMissedKeys), since reading the
+   * whole log once per space took a page's node, whose database is slower, seconds per round.
+   */
+  rekeysByScope(): Map<string, ReturnType<Kernel['node']['replica']['events']>> {
+    const by = new Map<string, ReturnType<Kernel['node']['replica']['events']>>();
+    for (const e of this.node.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY)) {
+      const list = by.get(e.scope);
+      if (list) list.push(e);
+      else by.set(e.scope, [e]);
+    }
+    return by;
+  }
+
+  /**
    * Keys someone missed because their join came in after them: made after their invite, while their join was still
    * on its way, so boxed only to the members known then (Julian, 1.11.2026). A node that may rotate the key hands each
    * of those keys to them, boxed as a rekey of the same epoch. Never a key from before their invite, unless the
    * space now lets everyone read everything after it once didn't: then every member gets every key they lack.
    */
-  handMissedKeys(space: StoredSpace, state: SpaceState): number {
+  handMissedKeys(space: StoredSpace, state: SpaceState, rekeys: ReturnType<Kernel['rekeysByScope']> = this.rekeysByScope()): number {
     if (space.kind === 'direct' || !mayDo(state, this.node.identity.author, 'manage').ok) return 0;
     const scope = spaceScope(space);
     // Who each epoch's key was boxed to, by rekeys that count.
     const boxed = new Map<number, Set<Did>>();
-    for (const e of this.node.replica.events((r) => canonicalKind(r.kind) === KIND_REKEY && r.scope === scope)) {
+    for (const e of rekeys.get(scope) ?? []) {
       const body = e.body as { epoch?: unknown; boxes?: Record<string, unknown> } | null;
       if (!Number.isSafeInteger(body?.epoch) || !mayDoAt(state, e, 'manage').ok) continue;
       const to = boxed.get(body!.epoch as number) ?? new Set<Did>();
@@ -930,9 +946,31 @@ export class Kernel {
 
   /** Does a key we're handed open something sealed with it in this space (an epoch's events, or a board's)? */
   #opensSomething(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
+    const began = performance.now();
+    try {
+      return this.#opens(space, epoch, key, board);
+    } finally {
+      this.giftChecks.ms += performance.now() - began;
+      this.giftChecks.n++;
+    }
+  }
+
+  /** How long checking gifted keys took, and how often: opening a node says so when it was long. */
+  readonly giftChecks = { ms: 0, n: 0 };
+
+  /**
+   * The sealed events this node holds whose bodies are here, by their space: read once for every gifted key checked
+   * (reading the whole log for each took a browser's node half a second a key, at every start). Dropped when an event
+   * arrives (decodedAdd).
+   */
+  #sealedIn(scope: string): WeaveRecord[] {
+    return this.core.managed.sealedIn(scope);
+  }
+
+  #opens(space: StoredSpace, epoch: string, key: string, board?: string): boolean {
     const scope = spaceScope(space);
     const withKey = { ...space, keys: { ...space.keys, [epoch]: key } };
-    for (const e of this.node.replica.events((r) => r.kind === KIND_SEALED && r.scope === scope && !r.missing)) {
+    for (const e of this.#sealedIn(scope)) {
       if (board === undefined) {
         if ((e.body as { epoch?: unknown } | null)?.epoch === Number(epoch) && openIn(withKey, e)) return true;
         continue;
@@ -1409,7 +1447,9 @@ export class Kernel {
       // An always-on node passes its person's direct chats on, sealed, but opens them only for an agent there that reads them.
       if (space?.kind === 'direct' && !this.node.takesDirectChats) return undefined;
       const raw = space ? openIn(space, event) : undefined;
-      const inner = space && (openIn(this.core.managed.cipher(space), event) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
+      // A space that isn't managed is opened with its own keys: once, not twice.
+      const cipher = space && this.core.managed.cipher(space);
+      const inner = space && ((cipher === space ? raw : openIn(cipher!, event)) ?? (raw && (raw.kind === KIND_KMS || raw.kind === KIND_MANAGED) ? raw : undefined));
       if (!inner) return undefined;
       decoded = { event, inner, space };
       // An event of a read-limited board: readable only with that board's key.
@@ -1430,19 +1470,47 @@ export class Kernel {
   }
 
   decodeAll(): Decoded[] {
+    return this.decoded && this.node.clock() < this.core.managed.decodedValidUntil ? this.decoded : timed('decoding everything', () => this.#decodeAll());
+  }
+
+  #decodeAll(): Decoded[] {
     // A managed key used for these views ran out: decode again without it.
     if (this.decoded && this.node.clock() >= this.core.managed.decodedValidUntil) this.decoded = undefined;
     if (!this.decoded) this.core.managed.decodedValidUntil = Infinity;
     // Board keys arrive inside the project: taking one makes more events readable, so decode again. Keys of what is
     // decoded already were taken when it was (and decodedAdd takes those that arrive): a kept view isn't scanned again.
     for (let round = 0; round < 4 && !this.decoded; round++) {
+      const began = performance.now();
+      // Its parts, said when the whole was long: a browser's node does this with its person waiting.
+      const parts: Array<[string, number]> = [];
+      let last = began;
+      const mark = (what: string): void => {
+        const now = performance.now();
+        parts.push([what, now - last]);
+        last = now;
+      };
       {
         this.ensureDirects();
-        const plain = this.node.replica.events().flatMap((event) => {
+        mark('direct chats');
+        const events = this.node.replica.events();
+        mark(`reading ${events.length} events`);
+        // By what they are in (own space, direct chats, groups…): where opening them spends its time.
+        const byScope = new Map<string, { ms: number; n: number }>();
+        const plain = events.flatMap((event) => {
+          const at = performance.now();
           const d = this.decode(event);
+          const where = event.kind !== KIND_SEALED ? 'open' : event.scope === SELF_SCOPE ? 'own' : (parseScope(event.scope)?.kind ?? 'other');
+          const spent = byScope.get(where) ?? { ms: 0, n: 0 };
+          spent.ms += performance.now() - at;
+          spent.n++;
+          byScope.set(where, spent);
           return d ? [d] : [];
         });
-        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...this.#trustedCarries(plain)]);
+        mark(`opening them (${[...byScope].map(([where, s]) => `${where} ${Math.round(s.ms)} ms/${s.n}`).join(', ')})`);
+        const carries = this.#trustedCarries(plain);
+        mark('carries');
+        const decoded = this.#approvedOnly([...plain.filter((d) => d.inner.kind !== KIND_CARRY), ...carries]);
+        mark('approvals');
         // What a carry restates and we can read ourselves counts once, as read.
         // (and restated by several carries, once).
         const read = new Set(decoded.filter((d) => !d.carried).map((d) => d.id));
@@ -1459,10 +1527,22 @@ export class Kernel {
           else this.#bySpace.set(d.space.id, [d]);
         }
       }
-      if (!this.#takeBoardKeys(this.decoded)) break;
+      mark('putting in order');
+      const again = this.#takeBoardKeys(this.decoded);
+      mark('board keys');
+      const took = performance.now() - began;
+      this.decodes.ms += took;
+      this.decodes.n++;
+      if (took >= 2000) console.warn(`weave: decoding everything took ${Math.round(took)} ms: ${parts.filter(([, ms]) => ms >= 50).map(([what, ms]) => `${what} ${Math.round(ms)} ms`).join(', ')}`);
+      if (!again) break;
     }
+    // Every space's managed setting is kept now: the sealed events by space aren't held on to (as much again in memory).
+    this.core.managed.forgetSealed();
     return this.decoded!;
   }
+
+  /** How long decoding everything took, and how often it was done over: opening a node says so when it was long. */
+  readonly decodes = { ms: 0, n: 0 };
 
   /**
    * A new event: decode just it and put it in its place (replica order: time,
@@ -1472,6 +1552,7 @@ export class Kernel {
    * have already dropped the decoded events.
    */
   decodedAdd(event: WeaveRecord): void {
+    this.core.managed.forgetSealed();
     const decoded = this.decoded;
     if (!decoded) return;
     // A v2 event standing for a v1 event already decoded (same id, re-signed): decode again, so it replaces it (rare).

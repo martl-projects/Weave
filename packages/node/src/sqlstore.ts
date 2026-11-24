@@ -72,7 +72,7 @@ export class SqlStore implements LogStore {
   readonly #get: SqlStatement;
   readonly #range: SqlStatement;
   readonly #insert: SqlStatement;
-  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'order' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll' | 'keepDrop' | 'keepStreams', SqlStatement>;
+  readonly #v2: Record<'insert' | 'byId' | 'byNumber' | 'chainAt' | 'contentAt' | 'order' | 'all' | 'bySigner' | 'inSpace' | 'body' | 'hasBody' | 'putBody' | 'drop' | 'forget' | 'forgotten' | 'keepPut' | 'keepTags' | 'keepItems' | 'keepBytes' | 'keepAll' | 'keepDrop' | 'keepStreams', SqlStatement>;
   readonly #heads = new Map<Did, WeaveEvent>();
   /** Each key's highest v2 n, and its latest control event per space. */
   readonly #numbers = new Map<Did, number>();
@@ -105,6 +105,7 @@ export class SqlStore implements LogStore {
       bySigner: this.db.prepare('SELECT id, json FROM events2 WHERE signer = ? ORDER BY n'),
       inSpace: this.db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time'),
       body: this.db.prepare('SELECT json FROM bodies WHERE hash = ?'),
+      hasBody: this.db.prepare('SELECT 1 AS held FROM bodies WHERE hash = ?'),
       putBody: this.db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)'),
       drop: this.db.prepare('DELETE FROM bodies WHERE hash = ?'),
       forget: this.db.prepare('INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)'),
@@ -216,6 +217,10 @@ export class SqlStore implements LogStore {
   body(hash: string): Json | undefined {
     const row = this.#v2.body.get(hash) as { json: string } | undefined;
     return row ? (JSON.parse(row.json) as Json) : undefined;
+  }
+
+  hasBody(hash: string): boolean {
+    return !!this.#v2.hasBody.get(hash);
   }
 
   putBody(hash: string, body: Json): void {

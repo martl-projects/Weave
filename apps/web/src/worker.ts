@@ -1,5 +1,5 @@
 import './host/globals.ts';
-import { b64u, errorToWire } from '@weave/core';
+import { b64u, errorToWire, takeSpent } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
 import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from './host/net.ts';
@@ -7,6 +7,7 @@ import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { webMethods } from './methods.ts';
+import { called, measure, measured, measureWaiting, watchBusy } from './slow.ts';
 /** What Weave ships with for newcomers (martl's contact, through martl's front door), as `weave init` applies it. */
 import bundle from '../../../weave.bundle.json' with { type: 'json' };
 import { openWasmDatabase, wipeDatabases } from './wasmdb.ts';
@@ -53,6 +54,13 @@ const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, open
 /** A node that's open does what the daemon has it do on a computer. */
 async function ready(opened: WeaveNode): Promise<void> {
   node = opened;
+  // What keeps this Worker busy, said in the console when it was (slow.ts): events taken in, and the node's duties.
+  // This Worker is the store's one writer: what a reading of the whole log gives is kept until something changes.
+  opened.replica.keepEvents();
+  measure(opened.replica, 'ingest', 'events taken in');
+  measure(opened.replica, 'events', 'reading the whole log');
+  measureWaiting(opened, 'reconcile', 'duties');
+  measureWaiting(opened, 'goOnline', 'going online');
   stopReconciling = (await import('@weave/node')).keepReconciling(opened);
   node.wasmSetup.shippedDir = SHIPPED;
   // As the daemon's /events: everything new, with what it means for this person.
@@ -150,7 +158,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 
   async unlock(given: GivenWay) {
-    await ready(account.unlockAccount(HOME, wayIn(given)));
+    await ready(measured('the account opens', () => account.unlockAccount(HOME, wayIn(given))));
   },
 
   /** This browser has nothing: bring the account here from the storage node. */
@@ -267,17 +275,21 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 };
 
+// From the Worker's start: what holds it up before the account is open is said too.
+watchBusy(takeSpent);
+
 self.onmessage = async ({ data: { id, method, args } }) => {
   try {
     const own = lifecycle[method] as ((...a: unknown[]) => unknown) | undefined;
-    if (own) return self.postMessage({ id, answer: { result: await own(...args) } });
+    // The account's own steps (opening, unlocking, going online) are named when slow, like the node's calls.
+    if (own) return self.postMessage({ id, answer: { result: await called(method, () => own(...args) as Promise<unknown>) } });
     if (!allowed.has(method)) {
       console.warn(`${method} isn't on the web`);
       throw new Error(`${method} isn't on the web`);
     }
     if (!node) throw new Error('this account is locked');
     const call = (node as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    self.postMessage({ id, answer: { result: await call.apply(node, args) } });
+    self.postMessage({ id, answer: { result: await called(method, () => call.apply(node, args) as Promise<unknown>) } });
   } catch (error) {
     self.postMessage({ id, answer: errorToWire(error) });
   }
