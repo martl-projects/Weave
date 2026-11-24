@@ -34,7 +34,7 @@
           });
           return parts.join('/');
         }
-        function build(files) {
+        function build(files, log) {
           var byPath = {};
           files.forEach(function (f) {
             byPath[f.path] = f;
@@ -70,7 +70,18 @@
           tell.textContent =
             "(function(){function say(text){try{parent.postMessage({weave:'log',level:'error',text:String(text).slice(0,2000)},'*')}catch(e){}}" +
             "addEventListener('error',function(e){say((e.message||'error')+' at '+(e.filename||'')+':'+e.lineno+':'+e.colno+(e.error&&e.error.stack?' '+e.error.stack:''))});" +
-            "addEventListener('unhandledrejection',function(e){var r=e.reason;say('unhandled rejection: '+(r&&(r.stack||r.message)||r))});})();";
+            "addEventListener('unhandledrejection',function(e){var r=e.reason;say('unhandled rejection: '+(r&&(r.stack||r.message)||r))});" +
+            // Where its person has this browser write down what is said: the view's console, and what held its page up
+            // (tasks of 200 ms and more, where the browser tells). A few hundred lines at most: a view that logs every
+            // frame must not push everything else out.
+            (log
+              ? "var left=300;function line(level,text){if(left-->0)try{parent.postMessage({weave:'log',level:level,text:String(text).slice(0,2000)},'*')}catch(e){}}" +
+                "function text(a){try{return a instanceof Error?(a.stack||a.message):typeof a==='string'?a:JSON.stringify(a)}catch(e){return String(a)}}" +
+                "['log','info','warn','error'].forEach(function(level){var said=console[level];console[level]=function(){said.apply(console,arguments);line(level==='log'?'info':level,Array.prototype.map.call(arguments,text).join(' '))}});" +
+                "try{new PerformanceObserver(function(list){list.getEntries().forEach(function(e){if(e.duration>=200)line('warn','the view was held up for '+Math.round(e.duration)+' ms, '+Math.round(e.startTime)+' ms after it opened')})}).observe({type:'longtask',buffered:true})}catch(e){}" +
+                "addEventListener('load',function(){line('info','the view loaded '+Math.round(performance.now())+' ms after it opened')});"
+              : '') +
+            '})();';
           doc.head.insertBefore(tell, doc.head.firstChild);
           // After everything the view's page runs as it loads: it listens now.
           var done = doc.createElement('script');
@@ -84,7 +95,7 @@
           if (event.source !== window.parent || asked || !event.data || event.data.weave !== 'files' || !Array.isArray(event.data.files)) return;
           asked = true;
           try {
-            build(event.data.files);
+            build(event.data.files, event.data.log === true);
           } catch (error) {
             document.body.textContent = String((error && error.message) || error);
           }

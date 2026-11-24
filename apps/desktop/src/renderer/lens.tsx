@@ -35,6 +35,11 @@ import { fillWindow } from './windowfill.ts';
  *                                                                  says "tilt"; on: false, no longer)
  *   to the frame    {weave: 'tilt', x, y}                           again and again while it is asked and in sight:
  *                                                                  degrees to the side and forward (screenTilt)
+ *   from the frame  {weave: 'log', level?, text}                    something to write down (a step, how long it took):
+ *                                                                  kept only in Weave Web, only where its person
+ *                                                                  turned Diagnosis on, and sent to nobody but them.
+ *                                                                  There the view's console, its errors and what held
+ *                                                                  it up 200 ms or more are written down by themselves
  *   from the frame  {weave: 'picture', id, ref}                     the bytes of a picture (wblob:…) that its view names
  *   to the frame    {weave: 'picture', id, type, data} / {…, error}  data: an ArrayBuffer. Nothing its view doesn't name
  *   from the frame  {weave: 'attach', id, name, type, data}         keep this picture (LENS_FILES: which, how large)
@@ -389,10 +394,12 @@ export function LensFrame({ title, release, base, net, location, tilt, tickets, 
       }
       if (m?.weave === 'files')
         api<Array<{ path: string; type: string; data: string }>>('lensSite', { release: latest.current.release }).then(
-          (files) => send({ weave: 'files', files }),
+          // Where its person has this browser write down what is said (Diagnosis), the view's console is written down too.
+          (files) => send({ weave: 'files', files, ...(bridge.web?.diagnose.on() ? { log: true } : {}) }),
           (e: Error) => toast(e.message, 'error'),
         );
-      // Something went wrong in the view (Weave Web's frame passes its errors on): kept where the person turned that on.
+      // Something went wrong in the view, or it said something (Weave Web's frame passes its errors on, its console and
+      // its long tasks too where asked; a view may say {weave: 'log', text} itself): kept where the person turned that on.
       if (m?.weave === 'log' && typeof (m as { text?: unknown }).text === 'string') bridge.web?.diagnose.said('lens', String((m as { level?: unknown }).level ?? 'error').slice(0, 10), (m as unknown as { text: string }).text.slice(0, 2000));
       if (m?.weave === 'loaded') {
         frame.current.dataset.loaded = '1';

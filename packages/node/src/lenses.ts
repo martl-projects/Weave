@@ -151,6 +151,9 @@ export function proposedEvents(name: string, result: unknown): unknown[] {
   return proposed;
 }
 
+/** A lens's fold or action that took this long is said in the console (and so in what a browser writes down). */
+const SLOW_LENS_MS = 300;
+
 /** The largest release file of a pure component Weave fetches, and what it may unpack to. */
 const PURE_MAX = 64 * 1024 * 1024;
 
@@ -572,7 +575,11 @@ export class Lenses {
     let state = this.#folded.get(key)?.from === from ? this.#folded.get(key)!.state : undefined;
     if (state === undefined) {
       try {
+        const began = performance.now();
         state = JSON.parse(String(await this.h.runtime.callWasm(ready.key, 'fold', [JSON.stringify({ name: board.name, title: board.title }), JSON.stringify(items)]))) as Json;
+        // Said when it was long: a board that opens slowly says whether its lens folding is why.
+        const took = performance.now() - began;
+        if (took >= SLOW_LENS_MS) console.warn(`weave: ${lens.name} ${lens.tag} folded ${items.length} events of ${board.title} in ${Math.round(took)} ms`);
       } catch (error) {
         return { ...base, lens: { ...about, problem: `its fold failed: ${(error as Error).message}` } };
       }
@@ -595,9 +602,12 @@ export class Lenses {
     const ready = await this.#prepare(lens);
     const me = this.h.identity.author as Did;
     const asked = [input.action, JSON.stringify(input.input ?? null), JSON.stringify(view.state ?? null), JSON.stringify({ did: me, name: this.h.actor(me, me).name ?? null })];
+    const began = performance.now();
     const result = await this.h.runtime.callWasm(ready.key, 'act', asked).catch((error: Error) => {
       throw new Error(`${lens.name} won't: ${error.message}`);
     });
+    const took = performance.now() - began;
+    if (took >= SLOW_LENS_MS) console.warn(`weave: ${lens.name} ${lens.tag} took ${Math.round(took)} ms for its action ${input.action}`);
     const proposed = proposedEvents(lens.name, result);
     const posts = this.#posts(space, board.name);
     const writes = lens.manifest.client!.writes;
