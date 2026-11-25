@@ -557,6 +557,7 @@
     "web.diagnose.why": "When Weave stalls or crashes in this browser, it can write down what happens: messages and errors of the page, of your account and of the views on boards. The lines stay in this browser until you send them to yourself. Then they are in a group of your own, “Weave Diagnose”, which only you are in, and you read them on your computer. The lines name your places and people.",
     "web.diagnose.on": "Write down in this browser",
     "web.diagnose.kept": "Written down so far: about {size} kB. When the page ends without being closed, Weave sends you the lines by itself the next time it opens.",
+    "web.diagnose.ask": "This device is called “{device}” here. When you or one of your agents write a message in “Weave Diagnose” that starts with “diagnose?”, every device that writes down sends its lines as soon as it gets the message. “diagnose? {device}” asks only this one.",
     "web.diagnose.send": "Send to me now",
     "web.diagnose.sent": "Sent: {messages} messages in “Weave Diagnose”.",
     "web.diagnose.nothing": "Nothing is written down yet.",

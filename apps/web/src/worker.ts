@@ -6,7 +6,7 @@ import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from '.
 import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
-import { diagnosePieces } from './diagnose.ts';
+import { diagnoseAsked, diagnosePieces } from './diagnose.ts';
 import { heapMB, memoryTeller } from './memory.ts';
 import { webMethods } from './methods.ts';
 import { called, measure, measured, measureWaiting, watchBusy } from './slow.ts';
@@ -66,7 +66,17 @@ async function ready(opened: WeaveNode): Promise<void> {
   stopReconciling = (await import('@weave/node')).keepReconciling(opened);
   node.wasmSetup.shippedDir = SHIPPED;
   // As the daemon's /events: everything new, with what it means for this person.
-  void node.watch((item) => self.postMessage({ event: item }), new AbortController().signal);
+  void node.watch((item) => {
+    self.postMessage({ event: item });
+    // A message in the person's own group for it that asks for this browser's lines (diagnose.ts): the page sends them.
+    const asked = item.kind === 'weave.msg' && item.author === opened.identity.author && item.space?.kind === 'group' && item.space.name === DIAGNOSE_GROUP ? diagnoseAsked(String((item.body as { text?: unknown } | null)?.text ?? '')) : undefined;
+    if (asked)
+      void opened.members(item.space!.id).then(
+        // Only where nobody else is in it: anyone else there could ask for what this browser said.
+        (members) => members.length === 1 && members[0].did === opened.identity.author && self.postMessage({ event: 'diagnose-asked', id: item.id, device: asked.device, time: item.time }),
+        () => {},
+      );
+  }, new AbortController().signal);
   void startPushes(opened).catch((error: Error) => console.warn('weave: pushes:', error.message));
   // How much memory the node takes, said once the account is open and whenever it is 25 MB more or less (looked at
   // every ten seconds): with what it holds of the log, and decoded. Only where the browser tells (memory.ts).
@@ -256,7 +266,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
    * What this browser kept of what was said in it (diagnose.ts), sent to the person themselves: messages in a group
    * of their own that nobody else is in, which their other devices read. Made the first time.
    */
-  async diagnose(text: string): Promise<{ space: string; messages: number }> {
+  async diagnose(text: string, device = ''): Promise<{ space: string; messages: number }> {
     if (!node) throw new Error('this account is locked');
     const me = node.identity.author;
     let space: { id: string } | undefined;
@@ -267,7 +277,7 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
     }
     space ??= await node.createGroup(DIAGNOSE_GROUP);
     const pieces = diagnosePieces(text, 6000);
-    for (const piece of pieces) await node.say({ space: space.id, text: `\`\`\`\n${piece}\n\`\`\`` });
+    for (const piece of pieces) await node.say({ space: space.id, text: `${device ? `**${device}**\n` : ''}\`\`\`\n${piece}\n\`\`\`` });
     return { space: space.id, messages: pieces.length };
   },
 

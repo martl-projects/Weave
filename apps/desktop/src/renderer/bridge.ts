@@ -178,6 +178,11 @@ export interface Bridge {
       set(on: boolean): void;
       /** How much is kept, in characters. */
       size(): number;
+      /**
+       * This browser's name among its person's devices ("iPhone k3f9"). A message in "Weave Diagnose" that starts with
+       * "diagnose?" has every device with this on send its lines; "diagnose? iPhone k3f9" only this one.
+       */
+      device(): string;
       /** Something a view said (its frame passes its errors on). */
       said(source: 'lens', level: string, text: string): void;
       /** Send what is kept; how many messages that was. */

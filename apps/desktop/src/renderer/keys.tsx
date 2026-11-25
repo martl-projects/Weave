@@ -584,6 +584,7 @@ function DiagnoseBox() {
       {on && (
         <>
           <p className="small muted">{t('web.diagnose.kept', { size: Math.ceil(size / 1000) })}</p>
+          <p className="small muted">{t('web.diagnose.ask', { device: diagnose.device() })}</p>
           <div className="buttons">
             <AsyncButton
               onClick={() =>

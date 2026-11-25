@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Diagnose, DIAGNOSE_LINE_MAX, DIAGNOSE_MAX, diagnosePieces, type DiagnoseStore } from '../src/diagnose.ts';
+import { deviceAsked, deviceKind, Diagnose, DIAGNOSE_LINE_MAX, DIAGNOSE_MAX, diagnoseAsked, diagnosePieces, type DiagnoseStore } from '../src/diagnose.ts';
 
 function storage(): DiagnoseStore & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -76,6 +76,50 @@ describe('what a browser keeps of what was said in it', () => {
     diagnose.set(true);
     diagnose.line('page', 'info', 'one');
     expect(diagnose.text()).toBe('');
+  });
+
+  it('gives a browser a name of its own that stays, turned off too', () => {
+    const store = storage();
+    const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1';
+    const diagnose = new Diagnose(store);
+    const name = diagnose.device(iphone, () => 'k3f9');
+    expect(name).toBe('iPhone k3f9');
+    diagnose.set(true);
+    diagnose.set(false);
+    expect(new Diagnose(store).device(iphone, () => 'zzzz')).toBe('iPhone k3f9');
+    expect(new Diagnose(storage()).device(iphone)).toMatch(/^iPhone [a-z0-9]{4}$/);
+    expect(deviceKind('Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/140 Mobile')).toBe('Android');
+    expect(deviceKind('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140')).toBe('Windows');
+    expect(deviceKind('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605')).toBe('Mac');
+    expect(deviceKind('Mozilla/5.0 (iPad; CPU OS 18_7 like Mac OS X) Safari/604')).toBe('iPad');
+    expect(deviceKind('something else')).toBe('Browser');
+  });
+
+  it('knows a message that asks for the lines, and which device it asks', () => {
+    expect(diagnoseAsked('diagnose?')).toEqual({ device: '' });
+    expect(diagnoseAsked('  Diagnose?  iPhone   k3f9 ')).toEqual({ device: 'iPhone k3f9' });
+    // Not what a browser sent itself, nor talk about it.
+    expect(diagnoseAsked('**iPhone k3f9**\n```\n10:00:00.000 node warn diagnose? no\n```')).toBeUndefined();
+    expect(diagnoseAsked('did the diagnose? arrive')).toBeUndefined();
+    expect(diagnoseAsked('diagnose')).toBeUndefined();
+    expect(deviceAsked('iPhone k3f9', '')).toBe(true);
+    expect(deviceAsked('iPhone k3f9', 'iphone')).toBe(true);
+    expect(deviceAsked('iPhone k3f9', 'K3F9')).toBe(true);
+    expect(deviceAsked('iPhone k3f9', 'iPhone k3f9.')).toBe(true);
+    expect(deviceAsked('iPhone k3f9', 'Android')).toBe(false);
+    expect(deviceAsked('iPhone k3f9', 'iPhone a1b2')).toBe(false);
+  });
+
+  it('answers a message that asks once', () => {
+    const store = storage();
+    const diagnose = new Diagnose(store);
+    expect(diagnose.answers('one')).toBe(true);
+    expect(diagnose.answers('one')).toBe(false);
+    expect(new Diagnose(store).answers('one')).toBe(false);
+    for (let i = 0; i < 40; i++) diagnose.answers(`more ${i}`);
+    expect(diagnose.answers('more 39')).toBe(false);
+    // Long ago: forgotten (a message older than a day isn't answered anyway).
+    expect(diagnose.answers('one')).toBe(true);
   });
 
   it('cuts a text into pieces at line ends', () => {

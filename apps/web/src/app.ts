@@ -3,7 +3,7 @@ import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge, WebProgress } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { Diagnose } from './diagnose.ts';
+import { deviceAsked, Diagnose } from './diagnose.ts';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { b64u, openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { clearPushKey, loadPushKey, makePushKey, saveBadge, savePushKey, sealNotice } from './pushkey.ts';
@@ -92,6 +92,8 @@ const diagnose = new Diagnose(
     }
   })(),
 );
+/** This browser's name among its person's devices: it heads what is sent, and a message asking for the lines can name it. */
+const deviceName = diagnose.device(navigator.userAgent);
 /** The page before this one ended without closing: what it said is sent once the account is open. */
 let endedBefore = false;
 let diagnosing = false;
@@ -113,7 +115,7 @@ const startDiagnose = () => {
   window.addEventListener('unhandledrejection', (event) => diagnose.line('page', 'error', `unhandled rejection: ${String((event.reason as { stack?: unknown; message?: unknown } | null)?.stack ?? (event.reason as { message?: unknown } | null)?.message ?? event.reason)}`));
   const nav = navigator as Navigator & { deviceMemory?: number; standalone?: boolean };
   const home = nav.standalone || matchMedia('(display-mode: standalone)').matches;
-  endedBefore = diagnose.started(`${nav.userAgent}; screen ${screen.width}×${screen.height} at ${devicePixelRatio}; ${nav.hardwareConcurrency ?? '?'} cores; ${nav.deviceMemory ?? '?'} GB${home ? '; from the home screen' : ''}`);
+  endedBefore = diagnose.started(`${deviceName}: ${nav.userAgent}; screen ${screen.width}×${screen.height} at ${devicePixelRatio}; ${nav.hardwareConcurrency ?? '?'} cores; ${nav.deviceMemory ?? '?'} GB${home ? '; from the home screen' : ''}`);
   setInterval(() => document.visibilityState === 'visible' && diagnose.alive(whereNow()), 5000);
   window.addEventListener('hashchange', () => diagnose.alive(whereNow()));
   // Put away, a page may be taken by the system without a word: that is no crash.
@@ -233,6 +235,7 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
     return void services.delete(data.key!);
   }
   if (data.event === 'log') return void diagnose.line('node', data.level ?? 'info', data.text ?? '');
+  if (data.event === 'diagnose-asked') return void diagnoseAskedFor(data as unknown as { id: string; device: string; time: string });
   if (data.event === 'waiting') return taking ? tabs.postMessage('take') : showElsewhere();
   if (data.event === 'status' && data.state === 'start') return void (startStage = data.detail ?? startStage);
   if (data.event === 'status') {
@@ -411,10 +414,20 @@ void navigator.serviceWorker?.register('/sw.js').catch((error: Error) => console
 const sendDiagnose = async (): Promise<number> => {
   const text = diagnose.text();
   if (!text) return 0;
-  const { messages } = await own<{ space: string; messages: number }>('diagnose', text);
+  const { messages } = await own<{ space: string; messages: number }>('diagnose', text, deviceName);
   diagnose.sent(text);
   return messages;
 };
+
+/**
+ * A message in the person's own group asked for this browser's lines (worker.ts): sent, where they turned writing down
+ * on, the device asked for is this one (or none was named), and the message isn't older than a day or answered already.
+ */
+function diagnoseAskedFor(asked: { id: string; device: string; time: string }): void {
+  if (!diagnose.on || !deviceAsked(deviceName, asked.device) || Date.now() - Date.parse(asked.time) > 24 * 3600 * 1000 || !diagnose.answers(asked.id)) return;
+  diagnose.line('page', 'info', `asked for by a message${asked.device ? ` naming ${asked.device}` : ''}, at ${whereNow()}`);
+  void sendDiagnose().catch((error: Error) => console.warn('the lines asked for were not sent:', error.message));
+}
 
 const goOnline = async (invite?: string) => {
   open = true;
@@ -613,6 +626,7 @@ const web: Bridge['web'] = {
       if (on) startDiagnose();
     },
     size: () => diagnose.text().length,
+    device: () => deviceName,
     said: (source, level, text) => diagnose.line(source, level, text),
     send: sendDiagnose,
   },

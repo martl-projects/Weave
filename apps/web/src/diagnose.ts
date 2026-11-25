@@ -21,6 +21,8 @@ export type DiagnoseSource = 'page' | 'node' | 'lens';
 const ON = 'weave.diagnose';
 const LOG = 'weave.diagnose.log';
 const OPEN = 'weave.diagnose.open';
+const DEVICE = 'weave.diagnose.device';
+const ANSWERED = 'weave.diagnose.answered';
 /** How much is kept, in characters: the oldest lines go first. A phone's storage holds a few million. */
 export const DIAGNOSE_MAX = 60_000;
 /** A line longer than this is cut: one line listing a hundred open calls must not push the others out. */
@@ -105,6 +107,33 @@ export class Diagnose {
     this.#set(OPEN, undefined);
   }
 
+  /**
+   * This browser's name among its person's devices: what it is and four characters of its own ("iPhone k3f9"), made
+   * once and kept, turned off too. It heads what is sent, and a message that asks for the lines can name it.
+   */
+  device(userAgent: string, random: () => string = fourCharacters): string {
+    let own = this.#get(DEVICE);
+    if (!own || !/^[a-z0-9]{4}$/.test(own)) {
+      own = random();
+      this.#set(DEVICE, own);
+    }
+    return `${deviceKind(userAgent)} ${own}`;
+  }
+
+  /** A message asked for the lines: true the first time it is seen here, so it is answered once (the last 30 are remembered). */
+  answers(id: string): boolean {
+    let answered: string[] = [];
+    try {
+      const kept = JSON.parse(this.#get(ANSWERED) ?? '[]') as unknown;
+      if (Array.isArray(kept)) answered = kept.filter((x): x is string => typeof x === 'string');
+    } catch {
+      // not a list: none remembered
+    }
+    if (answered.includes(id)) return false;
+    this.#set(ANSWERED, JSON.stringify([...answered, id].slice(-30)));
+    return true;
+  }
+
   /** Everything kept, oldest first. */
   text(): string {
     return this.#get(LOG) ?? '';
@@ -134,4 +163,33 @@ export function diagnosePieces(text: string, max: number): string[] {
   }
   if (piece) pieces.push(piece);
   return pieces;
+}
+
+const fourCharacters = (): string => [...crypto.getRandomValues(new Uint8Array(4))].map((byte) => (byte % 36).toString(36)).join('');
+
+/** What a browser says it runs on (its user agent), in a word. */
+export function deviceKind(userAgent: string): string {
+  if (/iPhone/.test(userAgent)) return 'iPhone';
+  if (/iPad/.test(userAgent)) return 'iPad';
+  if (/Android/.test(userAgent)) return 'Android';
+  if (/Windows/.test(userAgent)) return 'Windows';
+  if (/Macintosh|Mac OS X/.test(userAgent)) return 'Mac';
+  if (/Linux|CrOS/.test(userAgent)) return 'Linux';
+  return 'Browser';
+}
+
+/**
+ * A message that asks a browser for its lines: it starts with "diagnose?", and what follows names the device (words
+ * of its name), or nothing: every device with this turned on answers. Written by the person or one of their agents in
+ * their own group, where the lines go. `undefined`: not such a message.
+ */
+export function diagnoseAsked(text: string): { device: string } | undefined {
+  const asked = /^\s*diagnose\?(.*)$/is.exec(text);
+  return asked ? { device: asked[1].replace(/\s+/g, ' ').trim() } : undefined;
+}
+
+/** Is it this device that was asked: every word asked for is in its name (none asked for: yes). */
+export function deviceAsked(name: string, wanted: string): boolean {
+  const mine = name.toLowerCase();
+  return wanted.toLowerCase().split(/[\s,.;:!]+/).filter(Boolean).every((word) => mine.includes(word));
 }

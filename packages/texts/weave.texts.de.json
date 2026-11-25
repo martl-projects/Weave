@@ -557,6 +557,7 @@
     "web.diagnose.why": "Wenn Weave in diesem Browser hakt oder abstürzt, kann er mitschreiben, was dabei passiert: Meldungen und Fehler der Seite, deines Kontos und der Ansichten auf Boards. Die Zeilen bleiben in diesem Browser, bis du sie dir schickst. Dann stehen sie in deiner eigenen Gruppe „Weave Diagnose“, in der nur du bist, und du liest sie an deinem Computer. In den Zeilen stehen Namen deiner Orte und Personen.",
     "web.diagnose.on": "In diesem Browser mitschreiben",
     "web.diagnose.kept": "Bisher mitgeschrieben: etwa {size} kB. Endet die Seite, ohne geschlossen zu werden, schickt Weave dir die Zeilen beim nächsten Öffnen von selbst.",
+    "web.diagnose.ask": "Dieses Gerät heißt hier „{device}“. Schreibst du oder einer deiner Agenten in „Weave Diagnose“ eine Nachricht, die mit „diagnose?“ beginnt, schickt jedes Gerät mit eingeschaltetem Mitschreiben seine Zeilen, sobald es die Nachricht bekommt. „diagnose? {device}“ fragt nur dieses.",
     "web.diagnose.send": "Jetzt an mich schicken",
     "web.diagnose.sent": "Geschickt: {messages} Nachrichten in „Weave Diagnose“.",
     "web.diagnose.nothing": "Es ist noch nichts mitgeschrieben.",
