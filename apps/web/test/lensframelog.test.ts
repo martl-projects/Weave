@@ -42,8 +42,36 @@ function run(script: string) {
     }
     observe() {}
   }
-  new Function('parent', 'addEventListener', 'console', 'PerformanceObserver', 'performance', script)({ postMessage: (m: (typeof told)[number]) => told.push(m) }, (type: string, listener: (event: unknown) => void) => listeners.set(type, listener), quiet, Observer, { now: () => 1234 });
-  return { told, listeners, console: quiet, tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
+  // Just enough of a page: canvases made and found, an OffscreenCanvas, bitmaps, pictures, and the timer that counts.
+  const onPage: Array<{ width: number; height: number; getContext(): void }> = [];
+  const pictures: Array<{ complete: boolean; naturalWidth: number; naturalHeight: number }> = [];
+  const document = {
+    createElement: (tag: string) => (tag === 'canvas' ? { width: 300, height: 150, getContext() {} } : {}),
+    querySelectorAll: () => onPage,
+    images: pictures,
+  };
+  class Offscreen {
+    width: number;
+    height: number;
+    constructor(width: number, height: number) {
+      this.width = width;
+      this.height = height;
+    }
+    getContext() {}
+  }
+  const window = { OffscreenCanvas: Offscreen, createImageBitmap: async (_from: unknown, width: number, height: number) => ({ width, height, close() {} }) };
+  let count = () => {};
+  new Function('parent', 'addEventListener', 'console', 'PerformanceObserver', 'performance', 'document', 'window', 'setInterval', script)(
+    { postMessage: (m: (typeof told)[number]) => told.push(m) },
+    (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
+    quiet,
+    Observer,
+    { now: () => 1234 },
+    document,
+    window,
+    (tick: () => void) => (count = tick),
+  );
+  return { told, listeners, console: quiet, document, window, onPage, pictures, count: () => count(), tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
 }
 
 describe("what a view's frame tells Weave", () => {
@@ -82,5 +110,40 @@ describe("what a view's frame tells Weave", () => {
     // What goes wrong is still told.
     view.listeners.get('error')!({ message: 'late', filename: '', lineno: 1, colno: 1 });
     expect(view.told.at(-1)!.text).toContain('late');
+  });
+
+  it('tells how many pixels a view holds: canvases on the page and off it, bitmaps, pictures; again when that changed', async () => {
+    const view = run(firstScript(true));
+    view.count();
+    expect(view.told.at(-1)!.text).toBe('the view holds about 0 MB of pixels: 0 canvases 0 MB, 0 bitmaps 0 MB, 0 pictures 0 MB');
+    // Held by the view, as a view holds them: a canvas it made and kept off the page, one on the page, an
+    // OffscreenCanvas, a bitmap, a picture.
+    const kept = view.document.createElement('canvas') as { width: number; height: number };
+    kept.width = 2048;
+    kept.height = 2048;
+    view.onPage.push({ width: 1170, height: 2532, getContext() {} });
+    const off = new view.window.OffscreenCanvas(1000, 1000);
+    const bitmap = await view.window.createImageBitmap(null, 500, 500);
+    view.pictures.push({ complete: true, naturalWidth: 3000, naturalHeight: 2000 }, { complete: false, naturalWidth: 9000, naturalHeight: 9000 });
+    view.count();
+    expect(view.told.at(-1)!.text).toBe('the view holds about 58 MB of pixels: 3 canvases 33 MB (largest 2048x2048), 1 bitmaps 1 MB, 1 pictures 24 MB');
+    // Nothing changed much: nothing is said.
+    const said = view.told.length;
+    view.count();
+    off.width = 1100;
+    view.count();
+    expect(view.told).toHaveLength(said);
+    kept.width = 4096;
+    view.count();
+    expect(view.told.at(-1)!.text).toContain('the view holds about 75 MB of pixels');
+    expect(bitmap.width).toBe(500);
+  });
+
+  it("leaves a view's canvases alone unless asked", () => {
+    const view = run(firstScript(false));
+    const made = view.document.createElement;
+    view.count();
+    expect(view.document.createElement).toBe(made);
+    expect(view.told).toEqual([]);
   });
 });
