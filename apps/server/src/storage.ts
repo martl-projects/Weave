@@ -7,6 +7,9 @@
 //   weave-storage invites   the invitations not used up yet
 //   weave-storage planner <did> [--off]   let a Weave identity make onboarding links here (or no longer); * lets anyone,
 //                           within limits; no did: the list
+//   weave-storage open      new accounts without an invitation: --per-day 50, --per-address 3; --off: by invitation
+//                           again; neither: what it is now
+//   weave-storage stats-token   a new token for GET /stats (the old one stops working); it's shown once
 //
 // Its folder is WEAVE_STORAGE_DIR, or --dir. TLS is a proxy's in front of it (see deploy/Caddyfile): --behind-proxy
 // then counts connections by the address the proxy names. Setting one up: docs/web-deploy.md.
@@ -27,6 +30,8 @@ const { values, positionals } = parseArgs({
     'behind-proxy': { type: 'boolean', default: false },
     accounts: { type: 'string', default: '1' },
     off: { type: 'boolean', default: false },
+    'per-day': { type: 'string' },
+    'per-address': { type: 'string', default: '3' },
   },
 });
 
@@ -54,6 +59,12 @@ if (command === 'invite') {
   }
   const list = did ? PlanStore.allowIn(resolve(dir), did as `did:key:z${string}` | '*', !values.off) : PlanStore.plannersIn(resolve(dir));
   console.log(list.length ? list.join('\n') : '(nobody makes onboarding links here yet)');
+} else if (command === 'open') {
+  const settings = values.off ? undefined : values['per-day'] ? { perDay: Number(values['per-day']), perAddress: Number(values['per-address']) } : StorageNode.openSettingsIn(resolve(dir));
+  const now = values.off || values['per-day'] ? StorageNode.openIn(resolve(dir), settings) : settings;
+  console.log(now ? `new accounts without an invitation: ${now.perDay} a day, ${now.perAddress} a day from one address` : 'new accounts come by invitation');
+} else if (command === 'stats-token') {
+  console.log(StorageNode.statsTokenIn(resolve(dir)));
 } else if (command === 'run') {
   if (!values.origin.length) {
     console.error('say where pages may connect from: --origin https://…');
@@ -72,6 +83,6 @@ if (command === 'invite') {
   process.once('SIGINT', () => void stop());
   process.once('SIGTERM', () => void stop());
 } else {
-  console.error('weave-storage run | invite | invites | planner');
+  console.error('weave-storage run | invite | invites | planner | open | stats-token');
   process.exit(1);
 }

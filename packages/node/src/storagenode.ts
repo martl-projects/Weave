@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statfsSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { b64u, blobHash, deliverTag, didFromPublicKey, generateKeyPair, holdMessage, isDid, MAX_BLOB, publicKeyFromDid, Replica, sign, verify, type Did } from '@weave/core';
 import { LineChannel, PeerSession2, planMessage, sharedDht, signinMessage, SwarmNode, wsPeerStream, type BlobSource, type HeldSpace, type PeerIdentity, type SpaceAccess, type TextSocket } from '@weave/net';
@@ -14,7 +14,8 @@ import type { PushSubscriptionData, VapidKeys } from './webpush.ts';
  * account has its own log, its own place on the network and a quota; deleting an account deletes a folder. It gets
  * auth keys and topics, never a key: its protocol is in @weave/net (storageclient.ts).
  *
- * Accounts come by invitation. An account's id is a key of its own, not the person's identity.
+ * Accounts come by invitation, or, where its operator opens it (`weave-storage open`), without one: so many a day, and a
+ * few a day from one address. An account's id is a key of its own, not the person's identity.
  *
  * Sync protocol 4: peers prove who they are, and a space goes only to who may have it. The node shows peers a key it
  * holds for each account (`holder`), which one of the person's keys vouches for; and it gives a space only to the keys
@@ -46,6 +47,31 @@ const CONTROL_MS = 60_000;
 const SELF_SCOPE = 'self';
 /** Blobs looked for at once, per account. */
 const MAX_ASKED = 512;
+const DAY_MS = 86_400_000;
+
+/** What a browser gives as its invitation where this node takes new accounts without one. */
+export const OPEN_INVITE = 'open';
+
+/** Sign-up without an invitation: new accounts a day in all, and a day from one address. */
+export interface OpenSignup {
+  perDay: number;
+  perAddress: number;
+}
+
+/** What a node holds, in numbers (`GET /stats` with its token): for whoever runs it, nothing of anyone's. */
+export interface StorageStats {
+  at: string;
+  accounts: number;
+  /** Accounts made in the last day and week. */
+  created: { day: number; week: number };
+  /** Accounts that connected in the last day, week and month (by the day they last did). */
+  seen: { day: number; week: number; month: number };
+  /** Bytes the accounts take, in all and the largest; how many are over their quota. */
+  storage: { used: number; largest: number; quota: number; over: number };
+  disk: { free: number; size: number };
+  invites: { single: number; shared: Array<{ id: string; left: number }> };
+  open?: OpenSignup & { today: number };
+}
 
 /** A place on the network for one account: Hyperswarm in production. */
 export interface StorageNetwork {
@@ -105,6 +131,8 @@ function topicsOf(spaces: HeldRecord[]): Map<string, boolean> {
 interface AccountFile {
   id: Did;
   created: string;
+  /** The day it last connected (YYYY-MM-DD): only the day, for the operator's numbers. */
+  seen?: string;
   /** The key this node shows peers as, holding for this account (made once). */
   holder?: { did: Did; secret: string };
   /** One of the person's keys saying the holder holds for them (holdMessage). */
@@ -201,6 +229,8 @@ export class StorageNode {
   readonly #tickets = new Map<string, { id: Did; until: number; again?: boolean }>();
   /** Relayed connections open, per account. */
   readonly #relays = new Map<Did, number>();
+  /** Accounts made without an invitation today, in all (kept in its folder) and per address (in memory only). */
+  #opened = { day: '', count: 0, byAddress: new Map<string, number>() };
 
   private constructor(options: StorageOptions) {
     this.#options = options;
@@ -438,6 +468,116 @@ export class StorageNode {
     };
   }
 
+  /** Open sign-up, or not (undefined): new accounts without an invitation, so many a day, a few from one address. */
+  static openIn(dir: string, settings?: OpenSignup): OpenSignup | undefined {
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'open.json');
+    if (!settings) rmSync(path, { force: true });
+    else {
+      if (![settings.perDay, settings.perAddress].every((n) => Number.isInteger(n) && n > 0)) throw new Error('new accounts a day, and from one address, are whole numbers above 0');
+      writeJson(path, settings);
+    }
+    return StorageNode.openSettingsIn(dir);
+  }
+
+  /** Whether this folder's node takes new accounts without an invitation: read each time, another process may change it. */
+  static openSettingsIn(dir: string): OpenSignup | undefined {
+    const path = join(dir, 'open.json');
+    if (!existsSync(path)) return undefined;
+    const read = JSON.parse(readFileSync(path, 'utf8')) as Partial<OpenSignup>;
+    return typeof read.perDay === 'number' && typeof read.perAddress === 'number' ? { perDay: read.perDay, perAddress: read.perAddress } : undefined;
+  }
+
+  /** Whether new accounts come without an invitation here: what `GET /open` says, so a page asks for none. */
+  get open(): boolean {
+    return !!StorageNode.openSettingsIn(this.#dir);
+  }
+
+  /** Today's count of accounts made without an invitation (it survives a restart; the addresses don't). */
+  #openToday(): { day: string; count: number; byAddress: Map<string, number> } {
+    const day = new Date().toISOString().slice(0, 10);
+    if (this.#opened.day !== day) {
+      const path = join(this.#dir, 'opened.json');
+      const kept = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as { day?: string; count?: number }) : {};
+      this.#opened = { day, count: kept.day === day && typeof kept.count === 'number' ? kept.count : 0, byAddress: new Map() };
+    }
+    return this.#opened;
+  }
+
+  /** A new account without an invitation, from this address: undefined if it may, else why not. */
+  #takeOpen(address: string): string | undefined {
+    const settings = StorageNode.openSettingsIn(this.#dir);
+    if (!settings) return 'that invitation is not valid';
+    const today = this.#openToday();
+    if (today.count >= settings.perDay) return 'Weave on the web has made all the new accounts it may today: try again tomorrow, or come with an invitation';
+    const fromHere = today.byAddress.get(address) ?? 0;
+    if (fromHere >= settings.perAddress) return 'enough new accounts from here today: try again tomorrow';
+    today.count++;
+    today.byAddress.set(address, fromHere + 1);
+    writeJson(join(this.#dir, 'opened.json'), { day: today.day, count: today.count });
+    return undefined;
+  }
+
+  /** The token `GET /stats` asks for, made new (only its hash is kept): `weave-storage stats-token`. */
+  static statsTokenIn(dir: string): string {
+    mkdirSync(dir, { recursive: true });
+    const token = randomBytes(32).toString('base64url');
+    writeJson(join(dir, 'stats-token.json'), { hash: tokenHash(token) });
+    return token;
+  }
+
+  /** Whether this is the stats token. */
+  statsToken(token: string): boolean {
+    const path = join(this.#dir, 'stats-token.json');
+    if (!existsSync(path)) return false;
+    const { hash } = JSON.parse(readFileSync(path, 'utf8')) as { hash?: string };
+    const given = Buffer.from(tokenHash(token));
+    return typeof hash === 'string' && hash.length === given.length && timingSafeEqual(Buffer.from(hash), given);
+  }
+
+  /** What this node holds, in numbers. */
+  stats(): StorageStats {
+    const now = Date.now();
+    const days = (iso: string | undefined) => (iso ? (now - Date.parse(iso.length === 10 ? `${iso}T00:00:00Z` : iso)) / DAY_MS : Infinity);
+    const quota = this.#options.quota ?? QUOTA;
+    const stats: StorageStats = {
+      at: new Date(now).toISOString(),
+      accounts: this.#accounts.size,
+      created: { day: 0, week: 0 },
+      seen: { day: 0, week: 0, month: 0 },
+      storage: { used: 0, largest: 0, quota, over: 0 },
+      disk: { free: 0, size: 0 },
+      invites: StorageNode.invitesIn(this.#dir),
+    };
+    for (const account of this.#accounts.values()) {
+      const used = this.#usedBy(account);
+      stats.storage.used += used;
+      stats.storage.largest = Math.max(stats.storage.largest, used);
+      if (used > (account.file.quota ?? quota)) stats.storage.over++;
+      const made = days(account.file.created);
+      if (made < 1) stats.created.day++;
+      if (made < 7) stats.created.week++;
+      // By the day it was last seen, counted from that day's start: today and yesterday are within a day.
+      const seen = days(account.file.seen);
+      if (seen < 2) stats.seen.day++;
+      if (seen < 8) stats.seen.week++;
+      if (seen < 31) stats.seen.month++;
+    }
+    const disk = statfsSync(this.#dir);
+    stats.disk = { free: disk.bavail * disk.bsize, size: disk.blocks * disk.bsize };
+    const open = StorageNode.openSettingsIn(this.#dir);
+    if (open) stats.open = { ...open, today: this.#openToday().count };
+    return stats;
+  }
+
+  /** It connected today: the day is kept, once a day. */
+  #seen(account: Account): void {
+    const day = new Date().toISOString().slice(0, 10);
+    if (account.file.seen === day) return;
+    account.file.seen = day;
+    this.#save(account);
+  }
+
   #takeInvite(code: string): boolean {
     const hash = Buffer.from(tokenHash(code));
     const invites = readInvites(this.#dir);
@@ -519,8 +659,11 @@ export class StorageNode {
     };
   }
 
-  /** Serve a WebSocket just accepted. Who may connect is anyone: what they get depends on what they prove. */
-  async accept(socket: TextSocket): Promise<void> {
+  /**
+   * Serve a WebSocket just accepted. Who may connect is anyone: what they get depends on what they prove. `address`: where
+   * it comes from, for the limit on new accounts without an invitation (never kept).
+   */
+  async accept(socket: TextSocket, address = '?'): Promise<void> {
     const stream = await wsPeerStream(socket, false);
     let account: Account | undefined;
     let tries = 0;
@@ -558,15 +701,18 @@ export class StorageNode {
         case 'register': {
           if (!proved(m.id, m.sig)) return no('that proof is not from this key');
           if (this.#accounts.has(m.id)) return no('that account exists');
-          if (!isText(m.invite, 200) || !this.#takeInvite(m.invite)) return no('that invitation is not valid');
-          account = await this.#start({ id: m.id, created: new Date().toISOString(), spaces: [], boxes: {} });
+          if (!isText(m.invite, 200)) return no('that invitation is not valid');
+          const refused = m.invite === OPEN_INVITE ? this.#takeOpen(address) : this.#takeInvite(m.invite) ? undefined : 'that invitation is not valid';
+          if (refused) return no(refused);
+          account = await this.#start({ id: m.id, created: new Date().toISOString(), seen: new Date().toISOString().slice(0, 10), spaces: [], boxes: {} });
           this.#save(account);
           return channel.send({ t: 'ok', holder: account.file.holder!.did });
         }
         case 'signin': {
           if (!proved(m.id, m.sig) || !this.#accounts.has(m.id)) return no('no such account, or the wrong key');
-          account = this.#accounts.get(m.id);
-          return channel.send({ t: 'ok', ...(account?.file.holder ? { holder: account.file.holder.did } : {}) });
+          account = this.#accounts.get(m.id)!;
+          this.#seen(account);
+          return channel.send({ t: 'ok', ...(account.file.holder ? { holder: account.file.holder.did } : {}) });
         }
         // Onboarding links: anyone with a code may look and take; only a planner, as themselves, puts and revokes.
         case 'plan.get': {

@@ -63,6 +63,10 @@ declare const STORAGE_ORIGIN: string;
 const STORAGE_AT = STORAGE_ORIGIN || location.origin;
 const STORAGE = `${STORAGE_AT.replace(/^http/, 'ws')}/storage`;
 const INVITE_KEY = 'weave.invite';
+/** What the storage node takes as the invitation where it needs none (packages/node/src/storagenode.ts, OPEN_INVITE). */
+const OPEN_INVITE = 'open';
+/** Whether it needs none: asked before the screens start. */
+let openSignup = false;
 
 /*
  * One tab at a time has the account (the Worker's Web Lock). A tab that finds it taken says so and can take it over: it
@@ -269,7 +273,7 @@ async function own<T>(method: string, ...args: unknown[]): Promise<T> {
 
 /** An invitation to the storage node comes with the address the person was given, or from the page itself (dev.ts). */
 function invitation(): string | undefined {
-  return sessionStorage.getItem(INVITE_KEY) ?? document.querySelector<HTMLMetaElement>('meta[name="weave-invite"]')?.content;
+  return sessionStorage.getItem(INVITE_KEY) ?? document.querySelector<HTMLMetaElement>('meta[name="weave-invite"]')?.content ?? (openSignup ? OPEN_INVITE : undefined);
 }
 
 /*
@@ -713,5 +717,11 @@ navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type
   if (open && typeof open === 'object') return void window.dispatchEvent(new CustomEvent('weave-open', { detail: open }));
   if (typeof open === 'string' && open) location.hash = open.startsWith('#') ? open : `#${open}`;
 });
+
+// Whether the storage node takes new accounts without an invitation (`weave-storage open`): then nobody is asked for one.
+try {
+  const answer = await fetch(`${STORAGE_AT}/open`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+  openSignup = answer.ok && ((await answer.json()) as { open?: unknown }).open === true;
+} catch {}
 
 await import('../../desktop/src/renderer/main.tsx');

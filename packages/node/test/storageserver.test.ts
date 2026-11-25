@@ -170,6 +170,19 @@ describe('a storage node on the internet', { timeout: 20_000 }, () => {
     expect((await get(port, '/health')).status).toBe(200);
   });
 
+  it('says whether new accounts need an invitation, and shows its numbers only for its token', async () => {
+    const { port, dir } = await start();
+    expect(JSON.parse((await get(port, '/open')).text)).toEqual({ open: false });
+    StorageNode.openIn(join(dir, 'node'), { perDay: 10, perAddress: 2 });
+    expect(JSON.parse((await get(port, '/open')).text)).toEqual({ open: true });
+    expect((await get(port, '/stats')).status).toBe(401);
+    const token = StorageNode.statsTokenIn(join(dir, 'node'));
+    expect((await fetch(`http://127.0.0.1:${port}/stats`, { headers: { authorization: 'Bearer wrong-but-long-enough-token' } })).status).toBe(401);
+    const res = await fetch(`http://127.0.0.1:${port}/stats`, { headers: { authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ accounts: 0, open: { perDay: 10, perAddress: 2, today: 0 } });
+  });
+
   it('takes an invitation made by another process while it runs', async () => {
     const { node, dir } = await start();
     const first = StorageNode.inviteIn(join(dir, 'node'));

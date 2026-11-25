@@ -87,7 +87,7 @@ export function storageUpgrades(node: StorageNode, options: StorageServerOptions
     }
     const text = textSocket(req, socket, head, { idleMs: options.idleMs ?? IDLE_MS, maxQueued: options.maxQueued ?? MAX_QUEUED });
     if (!text) return refuse('400 Bad Request');
-    node.accept(text).catch(() => text.close());
+    node.accept(text, address).catch(() => text.close());
   };
 }
 
@@ -283,6 +283,14 @@ export function storageServer(node: StorageNode, options: StorageServerOptions):
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://here');
     if (url.pathname === '/health') return res.writeHead(200, { 'content-type': 'text/plain' }).end('ok\n');
+    // Whether new accounts need an invitation here: open to any page, which then asks for none.
+    if (url.pathname === '/open') return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'access-control-allow-origin': '*' }).end(JSON.stringify({ open: node.open }));
+    // The operator's numbers, for the token `weave-storage stats-token` made: nothing of anyone's, only counts and sizes.
+    if (url.pathname === '/stats') {
+      const token = /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(String(req.headers.authorization ?? ''))?.[1];
+      if (!token || !node.statsToken(token)) return res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer' }).end('{}');
+      return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(node.stats()));
+    }
     if (url.pathname.startsWith('/link/')) return handover(req, res, url.pathname.slice('/link/'.length));
     if (url.pathname.startsWith('/push/')) return pushTo(node, req, res, url.pathname.slice('/push/'.length));
     // An onboarding link's preview: open by design, and nothing of the sealed plan. Fetching it counts no use.

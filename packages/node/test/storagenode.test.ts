@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { b64u, createIdentity, deliverTag, holdMessage, Replica, sign, spaceTopics, type Did } from '@weave/core';
 import { authKey, duplexPair, PeerSession2, StorageClient, type HeldByNode, type SpaceAccess } from '@weave/net';
 import type { WeaveNode } from '../src/index.ts';
-import { StorageNode, type StorageNetwork } from '../src/storagenode.ts';
+import { OPEN_INVITE, StorageNode, type StorageNetwork } from '../src/storagenode.ts';
 import { textSocket } from '../src/websocket.ts';
 import { people, stored } from './helpers/people.ts';
 
@@ -124,6 +124,38 @@ describe('a storage node', { timeout: 60_000 }, () => {
     await (await connect()).register(createIdentity(), shared);
     await expect((await connect()).register(createIdentity(), shared)).rejects.toThrow('that invitation is not valid');
     expect(StorageNode.invitesIn(dir)).toEqual({ single: 0, shared: [] });
+  });
+
+  it('takes accounts without an invitation where it is open: so many from one address, so many a day', async () => {
+    const { connect, dir } = await start();
+    await expect((await connect()).register(createIdentity(), OPEN_INVITE)).rejects.toThrow('that invitation is not valid');
+    StorageNode.openIn(dir, { perDay: 3, perAddress: 2 });
+    await (await connect()).register(createIdentity(), OPEN_INVITE);
+    await (await connect()).register(createIdentity(), OPEN_INVITE);
+    await expect((await connect()).register(createIdentity(), OPEN_INVITE)).rejects.toThrow('enough new accounts from here today');
+    StorageNode.openIn(dir, { perDay: 3, perAddress: 5 });
+    await (await connect()).register(createIdentity(), OPEN_INVITE);
+    await expect((await connect()).register(createIdentity(), OPEN_INVITE)).rejects.toThrow('all the new accounts it may today');
+    // The day's count is kept in the folder, so a restart doesn't start it over; addresses are never written down.
+    expect(JSON.parse(readFileSync(join(dir, 'opened.json'), 'utf8'))).toEqual({ day: new Date().toISOString().slice(0, 10), count: 3 });
+    expect(StorageNode.openIn(dir)).toBeUndefined();
+    await expect((await connect()).register(createIdentity(), OPEN_INVITE)).rejects.toThrow('that invitation is not valid');
+  });
+
+  it('counts what it holds for whoever runs it, and shows that only for its token', async () => {
+    const { node, connect, dir } = await start();
+    await (await connect()).register(createIdentity(), node.invite());
+    node.invite(5);
+    const stats = node.stats();
+    expect(stats).toMatchObject({ accounts: 1, created: { day: 1, week: 1 }, seen: { day: 1, week: 1, month: 1 }, invites: { single: 0, shared: [{ left: 5 }] } });
+    expect(stats.storage.used).toBeGreaterThan(0);
+    expect(stats.disk.size).toBeGreaterThan(0);
+    expect(stats.open).toBeUndefined();
+    expect(node.statsToken('a'.repeat(43))).toBe(false);
+    const token = StorageNode.statsTokenIn(dir);
+    expect(node.statsToken(token)).toBe(true);
+    expect(node.statsToken(StorageNode.statsTokenIn(dir))).toBe(true);
+    expect(node.statsToken(token)).toBe(false);
   });
 
   it('signs in only with the account key, on this very connection', async () => {

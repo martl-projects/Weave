@@ -133,7 +133,7 @@ export { WeaveNode, type Bundle, type BrowserHandover, type RecoveredKeys } from
 export { BROWSER_PREFIX, browserLinkUrl, LINK_MS, linkToken, openLink, sealLink } from './browserlink.ts';
 export { KIND_PAGE, KIND_PROFILE, KIND_PUBLIC_PROJECT } from './shared.ts';
 export { DEFAULT_THEME, FONTS, KIND_THEME, PATTERNS, sanitizeTheme, type Theme } from './theme.ts';
-export { StorageNode, swarmNetwork, type StorageNetwork, type StorageNetworks, type StorageOptions } from './storagenode.ts';
+export { OPEN_INVITE, StorageNode, swarmNetwork, type OpenSignup, type StorageNetwork, type StorageNetworks, type StorageOptions, type StorageStats } from './storagenode.ts';
 export { previewTags } from '@weave/core';
 export { linkHandovers, originMatches, relayUpgrade, storageServer, storageUpgrades, type StorageServerOptions } from './storageserver.ts';
 export { PLAN_CODE, PlanStore, type PlanInfo, type PlanPreview, type PlanPreviewInfo } from './storageplans.ts';

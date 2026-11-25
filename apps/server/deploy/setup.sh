@@ -87,6 +87,18 @@ exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /u
 EOF
 chmod 755 /usr/local/bin/weave-storage-planner
 
+# `weave-storage-open --per-day 50`: new accounts without an invitation (`--off`: by invitation again).
+# `weave-storage-stats-token`: a token for https://<domain>/stats, the node's numbers; shown once.
+cat > /usr/local/bin/weave-storage-open <<EOF
+#!/bin/sh
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs open "\$@"
+EOF
+cat > /usr/local/bin/weave-storage-stats-token <<EOF
+#!/bin/sh
+exec runuser -u weave-storage -- env WEAVE_STORAGE_DIR=/var/lib/weave-storage /usr/local/bin/node /opt/weave-storage/weave-storage.mjs stats-token
+EOF
+chmod 755 /usr/local/bin/weave-storage-open /usr/local/bin/weave-storage-stats-token
+
 # A firewall: of TCP only SSH and the web come in. UDP stays open, since the DHT is UDP on ports a node picks as it
 # starts: the storage node's own, and a Weave node's next to it (a front door), are found by being reachable.
 ufw default deny incoming >/dev/null
