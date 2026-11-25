@@ -7,6 +7,7 @@ import { useServices } from './host/services.ts';
 import { useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { diagnosePieces } from './diagnose.ts';
+import { heapMB, memoryTeller } from './memory.ts';
 import { webMethods } from './methods.ts';
 import { called, measure, measured, measureWaiting, watchBusy } from './slow.ts';
 /** What Weave ships with for newcomers (martl's contact, through martl's front door), as `weave init` applies it. */
@@ -67,6 +68,16 @@ async function ready(opened: WeaveNode): Promise<void> {
   // As the daemon's /events: everything new, with what it means for this person.
   void node.watch((item) => self.postMessage({ event: item }), new AbortController().signal);
   void startPushes(opened).catch((error: Error) => console.warn('weave: pushes:', error.message));
+  // How much memory the node takes, said once the account is open and whenever it is 25 MB more or less (looked at
+  // every ten seconds): with what it holds of the log, and decoded. Only where the browser tells (memory.ts).
+  const memory = memoryTeller(
+    (mb) => console.info(`weave: the node's memory: ${mb} MB of JavaScript objects, with ${opened.replica.events().length} events held`),
+    () => (node === opened ? heapMB() : undefined),
+    25,
+  );
+  if (heapMB() === undefined) console.info("weave: this browser doesn't tell how much memory the node takes");
+  memory.look();
+  setInterval(() => memory.look(), 10_000);
 }
 
 /** The relay this browser's addresses are at: its storage node, as an https address. */

@@ -33,7 +33,8 @@ function firstScript(log: boolean): string {
 function run(script: string) {
   const told: Array<{ weave: string; level: string; text: string }> = [];
   const listeners = new Map<string, (event: unknown) => void>();
-  const quiet = { log: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const silent = (..._said: unknown[]): void => {};
+  const quiet = { log: silent, info: silent, warn: silent, error: silent };
   let observed: ((list: { getEntries(): Array<{ duration: number; startTime: number }> }) => void) | undefined;
   class Observer {
     constructor(callback: typeof observed) {

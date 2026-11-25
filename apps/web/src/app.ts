@@ -221,6 +221,11 @@ worker.onmessage = ({ data }: MessageEvent<FromWorker>) => {
   if (data.event === 'service') {
     const service = new Worker('/service.js', { type: 'module' });
     services.set(data.key!, service);
+    // What a component's Worker says of itself (its memory): written down where the person asked, with whose it is.
+    const whose = data.key!.length > 28 ? `${data.key!.slice(0, 28)}…` : data.key!;
+    service.onmessage = ({ data: said }: MessageEvent<{ event?: string; level?: string; text?: string }>) => {
+      if (said?.event === 'log' && typeof said.text === 'string') diagnose.line('node', said.level ?? 'info', `weave: ${whose}: ${said.text}`);
+    };
     return service.postMessage({ base: data.base, net: data.net, component: data.component, port: data.port }, [data.port!]);
   }
   if (data.event === 'service-stop') {

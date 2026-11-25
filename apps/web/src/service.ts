@@ -4,6 +4,7 @@ import * as filesystem from '@bytecodealliance/preview2-shim/filesystem';
 import * as http from '@bytecodealliance/preview2-shim/http';
 import * as io from '@bytecodealliance/preview2-shim/io';
 import * as random from '@bytecodealliance/preview2-shim/random';
+import { heapMB, memoryTeller } from './memory.ts';
 
 /*
  * One of Weave's own components in a Worker of its own: what packages/node/src/wasmworker.ts is on a computer, for what
@@ -14,7 +15,7 @@ import * as random from '@bytecodealliance/preview2-shim/random';
  * by jco's bindgen (transpile.ts, loaded only then), and given exactly what Weave's own pure services get.
  */
 
-declare const self: { onmessage: ((event: { data: { base?: string; component?: Uint8Array; net?: string[]; port: MessagePort } }) => void) | null };
+declare const self: { onmessage: ((event: { data: { base?: string; component?: Uint8Array; net?: string[]; port: MessagePort } }) => void) | null; postMessage(message: unknown): void };
 
 /** The part of wasi:http's outgoing-request looked at here (preview2-shim's class). */
 interface OutgoingRequest {
@@ -68,11 +69,34 @@ const imports = new Proxy(
 type Component = Record<string, (...args: unknown[]) => unknown>;
 let component: Component | undefined;
 
-type Instantiate = { instantiate(getCoreModule: (file: string) => Promise<WebAssembly.Module>, imports: object): Promise<Component> };
+type Instantiate = { instantiate(getCoreModule: (file: string) => Promise<WebAssembly.Module>, imports: object, instantiateCore?: (module: WebAssembly.Module, importObject?: WebAssembly.Imports) => Promise<WebAssembly.Instance>): Promise<Component> };
+
+/*
+ * How much memory this component takes (memory.ts): its WebAssembly memories, which every browser lets a page read,
+ * and this Worker's JavaScript objects where the browser tells. Said to the page once it is ready and whenever it is
+ * 16 MB more or less after a call (a fold of a large board grows it): the page writes it down where its person asked.
+ */
+const memories: WebAssembly.Memory[] = [];
+/** As the glue instantiates its core modules, with their memories noted. */
+const instantiateCore = async (module: WebAssembly.Module, importObject?: WebAssembly.Imports): Promise<WebAssembly.Instance> => {
+  const instance = await WebAssembly.instantiate(module, importObject);
+  for (const exported of Object.values(instance.exports)) if (exported instanceof WebAssembly.Memory) memories.push(exported);
+  return instance;
+};
+const wasmMB = () => Math.round(memories.reduce((sum, memory) => sum + memory.buffer.byteLength, 0) / 1e6);
+let transpiledMB = 0;
+const memory = memoryTeller(
+  (mb) => {
+    const heap = heapMB();
+    self.postMessage({ event: 'log', level: 'info', text: `memory: ${mb} MB of its own (WebAssembly)${transpiledMB ? `, ${transpiledMB} MB transpiled` : ''}${heap === undefined ? '' : `, ${heap} MB of JavaScript objects in its Worker`}` });
+  },
+  wasmMB,
+  16,
+);
 
 async function start(base: string): Promise<void> {
   const { instantiate } = (await import(/* @vite-ignore */ `${base}/component.js`)) as Instantiate;
-  component = await instantiate((file) => WebAssembly.compileStreaming(fetch(`${base}/${file}`)), imports);
+  component = await instantiate((file) => WebAssembly.compileStreaming(fetch(`${base}/${file}`)), imports, instantiateCore);
 }
 
 /** Where the page's transpiler is (build.ts): a name, so the bundler leaves it for the browser to load. */
@@ -82,6 +106,7 @@ const TRANSPILER = '/lens-transpile.js';
 async function startRelease(bytes: Uint8Array): Promise<void> {
   const { transpileComponent } = (await import(/* @vite-ignore */ TRANSPILER)) as { transpileComponent(component: Uint8Array): Promise<Map<string, Uint8Array>> };
   const files = await transpileComponent(bytes);
+  transpiledMB = Math.round([...files.values()].reduce((sum, file) => sum + file.byteLength, 0) / 1e6);
   const glue = URL.createObjectURL(new Blob([files.get('component.js')! as Uint8Array<ArrayBuffer>], { type: 'text/javascript' }));
   try {
     const { instantiate } = (await import(/* @vite-ignore */ glue)) as Instantiate;
@@ -89,7 +114,7 @@ async function startRelease(bytes: Uint8Array): Promise<void> {
       const core = files.get(file);
       if (!core) throw new Error(`it has no ${file}`);
       return WebAssembly.compile(core as Uint8Array<ArrayBuffer>);
-    }, imports);
+    }, imports, instantiateCore);
   } finally {
     URL.revokeObjectURL(glue);
   }
@@ -104,6 +129,7 @@ self.onmessage = async ({ data: { base, component: release, net: hosts, port } }
       if (typeof fn !== 'function') throw new Error(`it has no ${data.fn}`);
       // A verifier's answer comes once its requests have; a service's at once.
       port.postMessage({ type: 'done', id: data.id, value: await fn(...data.args) });
+      memory.look();
     } catch (error) {
       const why = (error as { payload?: unknown })?.payload ?? (error as Error)?.message ?? error;
       port.postMessage({ type: 'done', id: data.id, error: String(why) });
@@ -115,6 +141,7 @@ self.onmessage = async ({ data: { base, component: release, net: hosts, port } }
     if (release) await startRelease(release);
     else await start(base!);
     port.postMessage({ type: 'ready' });
+    memory.look();
   } catch (error) {
     port.postMessage({ type: 'failed', error: String((error as Error)?.message ?? error) });
   }
