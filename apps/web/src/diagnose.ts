@@ -193,3 +193,39 @@ export function deviceAsked(name: string, wanted: string): boolean {
   const mine = name.toLowerCase();
   return wanted.toLowerCase().split(/[\s,.;:!]+/).filter(Boolean).every((word) => mine.includes(word));
 }
+
+/**
+ * How smoothly something draws: told of every frame (requestAnimationFrame's time), it says every `every` ms how many
+ * frames there were and how long the longest pause between two was, when that was bad: fewer than 40 a second, or a
+ * pause of 200 ms and more. A pause longer than `away` isn't one: the page was put away. Safari tells of no long tasks,
+ * so this is what says there how a view stutters. The same counting is in the frame of a view (lens-frame.html).
+ */
+export function frameMeter(say: (text: string) => void, every = 5000, away = 4000): (now: number) => void {
+  let began: number | undefined;
+  let last = 0;
+  let frames = 0;
+  let longest = 0;
+  let pauses = 0;
+  return (now) => {
+    if (began === undefined || now - last > away) {
+      began = now;
+      last = now;
+      frames = 0;
+      longest = 0;
+      pauses = 0;
+      return;
+    }
+    const gap = now - last;
+    last = now;
+    frames++;
+    if (gap > longest) longest = gap;
+    if (gap >= 100) pauses++;
+    if (now - began < every) return;
+    const fps = Math.round((frames * 1000) / (now - began));
+    if (fps < 40 || longest >= 200) say(`${fps} frames a second over ${Math.round((now - began) / 1000)} s, the longest pause ${Math.round(longest)} ms, ${pauses} of 100 ms and more`);
+    began = now;
+    frames = 0;
+    longest = 0;
+    pauses = 0;
+  };
+}

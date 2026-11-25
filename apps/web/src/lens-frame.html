@@ -90,14 +90,26 @@
                 "var Off=window.OffscreenCanvas;if(Off){window.OffscreenCanvas=function(w,h){return track(new Off(w,h))};window.OffscreenCanvas.prototype=Off.prototype}" +
                 "var bitmap=window.createImageBitmap;if(bitmap){window.createImageBitmap=function(){return bitmap.apply(window,arguments).then(track)}}" +
                 "var saidMB=-1,reports=200;function mb(px){return Math.round(px*4/1e6)}" +
-                "function count(){var seen=[],n=0,px=0,big=0,bigAt='',bn=0,bpx=0,im=0,ipx=0;" +
+                "function count(){var seen=[],n=0,px=0,sizes={},area={},bn=0,bpx=0,im=0,ipx=0;" +
                 "Array.prototype.forEach.call(document.querySelectorAll('canvas'),function(c){seen.push(c)});" +
                 "live=live.filter(function(r){var c=r.deref();if(!c)return false;if(seen.indexOf(c)<0)seen.push(c);return true});" +
-                "seen.forEach(function(c){var p=c.width*c.height;if(!p)return;if(typeof c.close==='function'&&!c.getContext){bn++;bpx+=p}else{n++;px+=p;if(p>big){big=p;bigAt=c.width+'x'+c.height}}});" +
+                "seen.forEach(function(c){var p=c.width*c.height;if(!p)return;if(typeof c.close==='function'&&!c.getContext){bn++;bpx+=p}else{n++;px+=p;var k=c.width+'x'+c.height;sizes[k]=(sizes[k]||0)+1;area[k]=p}});" +
+                // Which sizes, and how many of each: the six that take most, so one can tell a stage from thumbnails.
+                "var bigAt=Object.keys(sizes).sort(function(a,b){return area[b]*sizes[b]-area[a]*sizes[a]}).slice(0,6).map(function(k){return sizes[k]+' of '+k}).join(', ');" +
                 "Array.prototype.forEach.call(document.images||[],function(i){if(i.complete&&i.naturalWidth){im++;ipx+=i.naturalWidth*i.naturalHeight}});" +
                 "var all=mb(px+bpx+ipx);if(reports>0&&(saidMB<0||Math.abs(all-saidMB)>=Math.max(8,saidMB*0.1))){reports--;saidMB=all;" +
-                "try{parent.postMessage({weave:'log',level:'info',text:'the view holds about '+all+' MB of pixels: '+n+' canvases '+mb(px)+' MB'+(bigAt?' (largest '+bigAt+')':'')+', '+bn+' bitmaps '+mb(bpx)+' MB, '+im+' pictures '+mb(ipx)+' MB'},'*')}catch(e){}}}" +
-                "setInterval(count,700);"
+                "try{parent.postMessage({weave:'log',level:'info',text:'the view holds about '+all+' MB of pixels: '+n+' canvases '+mb(px)+' MB'+(bigAt?' ('+bigAt+')':'')+', '+bn+' bitmaps '+mb(bpx)+' MB, '+im+' pictures '+mb(ipx)+' MB'},'*')}catch(e){}}}" +
+                "setInterval(count,700);" +
+                // How smoothly the view draws (frameMeter in diagnose.ts, the same counting): said every five seconds
+                // when it was bad, fewer than 40 frames a second or a pause of 200 ms and more. Safari tells of no
+                // long tasks; this says there how a view stutters. 150 lines at most.
+                "var fb,fl=0,fn=0,fx=0,fp=0,fr=150;function frame(now){requestAnimationFrame(frame);" +
+                "if(fb===undefined||now-fl>4000){fb=now;fl=now;fn=0;fx=0;fp=0;return}" +
+                "var gap=now-fl;fl=now;fn++;if(gap>fx)fx=gap;if(gap>=100)fp++;if(now-fb<5000)return;" +
+                "var fps=Math.round(fn*1000/(now-fb));if(fr>0&&(fps<40||fx>=200)){fr--;" +
+                "try{parent.postMessage({weave:'log',level:'warn',text:'the view drew '+fps+' frames a second over '+Math.round((now-fb)/1000)+' s, the longest pause '+Math.round(fx)+' ms, '+fp+' of 100 ms and more'},'*')}catch(e){}}" +
+                "fb=now;fn=0;fx=0;fp=0}" +
+                "requestAnimationFrame(frame);"
               : '') +
             '})();';
           doc.head.insertBefore(tell, doc.head.firstChild);

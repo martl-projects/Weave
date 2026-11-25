@@ -61,7 +61,8 @@ function run(script: string) {
   }
   const window = { OffscreenCanvas: Offscreen, createImageBitmap: async (_from: unknown, width: number, height: number) => ({ width, height, close() {} }) };
   let count = () => {};
-  new Function('parent', 'addEventListener', 'console', 'PerformanceObserver', 'performance', 'document', 'window', 'setInterval', script)(
+  let frame: (now: number) => void = () => {};
+  new Function('parent', 'addEventListener', 'console', 'PerformanceObserver', 'performance', 'document', 'window', 'setInterval', 'requestAnimationFrame', script)(
     { postMessage: (m: (typeof told)[number]) => told.push(m) },
     (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
     quiet,
@@ -70,8 +71,9 @@ function run(script: string) {
     document,
     window,
     (tick: () => void) => (count = tick),
+    (next: (now: number) => void) => (frame = next),
   );
-  return { told, listeners, console: quiet, document, window, onPage, pictures, count: () => count(), tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
+  return { told, listeners, console: quiet, document, window, onPage, pictures, count: () => count(), frame: (now: number) => frame(now), tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
 }
 
 describe("what a view's frame tells Weave", () => {
@@ -126,7 +128,7 @@ describe("what a view's frame tells Weave", () => {
     const bitmap = await view.window.createImageBitmap(null, 500, 500);
     view.pictures.push({ complete: true, naturalWidth: 3000, naturalHeight: 2000 }, { complete: false, naturalWidth: 9000, naturalHeight: 9000 });
     view.count();
-    expect(view.told.at(-1)!.text).toBe('the view holds about 58 MB of pixels: 3 canvases 33 MB (largest 2048x2048), 1 bitmaps 1 MB, 1 pictures 24 MB');
+    expect(view.told.at(-1)!.text).toBe('the view holds about 58 MB of pixels: 3 canvases 33 MB (1 of 2048x2048, 1 of 1170x2532, 1 of 1000x1000), 1 bitmaps 1 MB, 1 pictures 24 MB');
     // Nothing changed much: nothing is said.
     const said = view.told.length;
     view.count();
@@ -134,9 +136,20 @@ describe("what a view's frame tells Weave", () => {
     view.count();
     expect(view.told).toHaveLength(said);
     kept.width = 4096;
+    view.onPage.push({ width: 1170, height: 2532, getContext() {} });
     view.count();
-    expect(view.told.at(-1)!.text).toContain('the view holds about 75 MB of pixels');
+    expect(view.told.at(-1)!.text).toContain('the view holds about 87 MB of pixels: 4 canvases 62 MB (1 of 4096x2048, 2 of 1170x2532, 1 of 1100x1000)');
     expect(bitmap.width).toBe(500);
+  });
+
+  it('tells how a view draws when that was bad', () => {
+    const view = run(firstScript(true));
+    let now = 0;
+    for (let i = 0; i < 400; i++) view.frame((now += 1000 / 60));
+    expect(view.told).toEqual([]);
+    for (let i = 0; i < 40; i++) view.frame((now += 300));
+    expect(view.told.at(-1)!.text).toMatch(/^the view drew 3 frames a second over 5 s, the longest pause 300 ms, \d+ of 100 ms and more$/);
+    expect(view.told.at(-1)!.level).toBe('warn');
   });
 
   it("leaves a view's canvases alone unless asked", () => {

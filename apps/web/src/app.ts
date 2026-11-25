@@ -3,7 +3,7 @@ import type { FeedItem } from '@weave/node/client';
 import type { AppState, Bridge, WebProgress } from '../../desktop/src/renderer/bridge.ts';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { deviceAsked, Diagnose } from './diagnose.ts';
+import { deviceAsked, Diagnose, frameMeter } from './diagnose.ts';
 import { askPasskey, makePasskey, passkeyLabel } from './passkey.ts';
 import { b64u, openPlan, parseOnboardLink, planCheck, type OnboardPlan } from '@weave/core';
 import { clearPushKey, loadPushKey, makePushKey, saveBadge, savePushKey, sealNotice } from './pushkey.ts';
@@ -121,6 +121,14 @@ const startDiagnose = () => {
   // Put away, a page may be taken by the system without a word: that is no crash.
   document.addEventListener('visibilitychange', () => (document.visibilityState === 'visible' ? diagnose.alive(whereNow()) : diagnose.closed()));
   window.addEventListener('pagehide', () => diagnose.closed());
+  // How smoothly the page itself draws, said when it was bad. In Safari a view shares the page's thread: what holds
+  // one up holds up the other.
+  const frame = frameMeter((text) => diagnose.line('page', 'warn', `the page drew ${text}, at ${whereNow()}`));
+  const drawn = (now: number) => {
+    frame(now);
+    requestAnimationFrame(drawn);
+  };
+  requestAnimationFrame(drawn);
 };
 if (diagnose.on) startDiagnose();
 

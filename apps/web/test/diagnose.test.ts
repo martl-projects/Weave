@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deviceAsked, deviceKind, Diagnose, DIAGNOSE_LINE_MAX, DIAGNOSE_MAX, diagnoseAsked, diagnosePieces, type DiagnoseStore } from '../src/diagnose.ts';
+import { deviceAsked, deviceKind, Diagnose, frameMeter, DIAGNOSE_LINE_MAX, DIAGNOSE_MAX, diagnoseAsked, diagnosePieces, type DiagnoseStore } from '../src/diagnose.ts';
 
 function storage(): DiagnoseStore & { map: Map<string, string> } {
   const map = new Map<string, string>();
@@ -120,6 +120,29 @@ describe('what a browser keeps of what was said in it', () => {
     expect(diagnose.answers('more 39')).toBe(false);
     // Long ago: forgotten (a message older than a day isn't answered anyway).
     expect(diagnose.answers('one')).toBe(true);
+  });
+
+  it('says how smoothly something draws only when it was bad, and not for a page that was put away', () => {
+    const said: string[] = [];
+    const frame = frameMeter((text) => said.push(text));
+    let now = 0;
+    const draw = (gap: number, times: number) => {
+      for (let i = 0; i < times; i++) frame((now += gap));
+    };
+    // Sixty a second for ten seconds: nothing to say.
+    draw(1000 / 60, 600);
+    expect(said).toEqual([]);
+    // Ten a second, with one long pause.
+    draw(100, 30);
+    draw(900, 1);
+    draw(100, 30);
+    expect(said[0]).toMatch(/^8 frames a second over 5 s, the longest pause \d+ ms, \d+ of 100 ms and more$/);
+    expect(said.some((text) => text.includes('the longest pause 900 ms'))).toBe(true);
+    // Put away for a minute: not a pause, and counting starts over.
+    const before = said.length;
+    draw(60_000, 1);
+    draw(1000 / 60, 400);
+    expect(said).toHaveLength(before);
   });
 
   it('cuts a text into pieces at line ends', () => {
