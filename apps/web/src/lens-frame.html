@@ -100,16 +100,29 @@
                 "var all=mb(px+bpx+ipx);if(reports>0&&(saidMB<0||Math.abs(all-saidMB)>=Math.max(8,saidMB*0.1))){reports--;saidMB=all;" +
                 "try{parent.postMessage({weave:'log',level:'info',text:'the view holds about '+all+' MB of pixels: '+n+' canvases '+mb(px)+' MB'+(bigAt?' ('+bigAt+')':'')+', '+bn+' bitmaps '+mb(bpx)+' MB, '+im+' pictures '+mb(ipx)+' MB'},'*')}catch(e){}}}" +
                 "setInterval(count,700);" +
-                // How smoothly the view draws (frameMeter in diagnose.ts, the same counting): said every five seconds
-                // when it was bad, fewer than 40 frames a second or a pause of 200 ms and more. Safari tells of no
-                // long tasks; this says there how a view stutters. 150 lines at most.
-                "var fb,fl=0,fn=0,fx=0,fp=0,fr=150;function frame(now){requestAnimationFrame(frame);" +
-                "if(fb===undefined||now-fl>4000){fb=now;fl=now;fn=0;fx=0;fp=0;return}" +
+                // Where the view's time goes, and how smoothly it draws (frameMeter in diagnose.ts, the same counting). No
+                // browser on a phone tells which script is slow, so the frame times what it can: how long the view's own
+                // frame callbacks and timers ran, and how long the calls took that are dear in Safari (reading a canvas
+                // back, turning one into a picture, WebGL's set-up). Said every five seconds when it was bad: fewer than
+                // 40 frames a second, a pause of 200 ms and more, or a second and more of scripts. 150 lines at most.
+                "var raf=requestAnimationFrame,cost={},calls={};function add(k,ms){cost[k]=(cost[k]||0)+ms;calls[k]=(calls[k]||0)+1}" +
+                "function timed(o,name,k){var f=o&&o[name];if(typeof f!=='function')return;o[name]=function(){var t=performance.now();try{return f.apply(this,arguments)}finally{add(k,performance.now()-t)}}}" +
+                "function proto(n){return window[n]&&window[n].prototype}" +
+                "['CanvasRenderingContext2D','OffscreenCanvasRenderingContext2D'].forEach(function(n){['getImageData','putImageData','drawImage'].forEach(function(m){timed(proto(n),m,m)})});" +
+                "['toDataURL','toBlob','getContext'].forEach(function(m){timed(proto('HTMLCanvasElement'),m,m)});" +
+                "['convertToBlob','transferToImageBitmap','getContext'].forEach(function(m){timed(proto('OffscreenCanvas'),m,m)});" +
+                "['WebGL2RenderingContext','WebGLRenderingContext'].forEach(function(n){['readPixels','texImage2D','texSubImage2D','compileShader','linkProgram','drawArrays','drawElements'].forEach(function(m){timed(proto(n),m,'gl.'+m)})});" +
+                "function calling(k,cb){return typeof cb!=='function'?cb:function(){var t=performance.now();try{return cb.apply(this,arguments)}finally{add(k,performance.now()-t)}}}" +
+                "if(window.requestAnimationFrame)window.requestAnimationFrame=function(cb){return raf.call(window,calling('frame callbacks',cb))};" +
+                "['setTimeout','setInterval'].forEach(function(n){var f=window[n];if(typeof f==='function')window[n]=function(cb){var a=Array.prototype.slice.call(arguments);a[0]=calling('timers',cb);return f.apply(window,a)}});" +
+                "var fb,fl=0,fn=0,fx=0,fp=0,fr=150;function frame(now){raf.call(window,frame);" +
+                "if(fb===undefined||now-fl>4000){fb=now;fl=now;fn=0;fx=0;fp=0;cost={};calls={};return}" +
                 "var gap=now-fl;fl=now;fn++;if(gap>fx)fx=gap;if(gap>=100)fp++;if(now-fb<5000)return;" +
-                "var fps=Math.round(fn*1000/(now-fb));if(fr>0&&(fps<40||fx>=200)){fr--;" +
-                "try{parent.postMessage({weave:'log',level:'warn',text:'the view drew '+fps+' frames a second over '+Math.round((now-fb)/1000)+' s, the longest pause '+Math.round(fx)+' ms, '+fp+' of 100 ms and more'},'*')}catch(e){}}" +
-                "fb=now;fn=0;fx=0;fp=0}" +
-                "requestAnimationFrame(frame);"
+                "var fps=Math.round(fn*1000/(now-fb)),scripts=(cost['frame callbacks']||0)+(cost.timers||0);if(fr>0&&(fps<40||fx>=200||scripts>=1000)){fr--;" +
+                "var where=Object.keys(cost).filter(function(k){return cost[k]>=20}).sort(function(a,b){return cost[b]-cost[a]}).slice(0,9).map(function(k){return k+' '+Math.round(cost[k])+' ms ('+calls[k]+')'}).join(', ');" +
+                "try{parent.postMessage({weave:'log',level:'warn',text:'the view drew '+fps+' frames a second over '+Math.round((now-fb)/1000)+' s, the longest pause '+Math.round(fx)+' ms, '+fp+' of 100 ms and more'+(where?'; in it: '+where:'')},'*')}catch(e){}}" +
+                "fb=now;fn=0;fx=0;fp=0;cost={};calls={}}" +
+                "raf.call(window,frame);"
               : '') +
             '})();';
           doc.head.insertBefore(tell, doc.head.firstChild);

@@ -59,7 +59,17 @@ function run(script: string) {
     }
     getContext() {}
   }
-  const window = { OffscreenCanvas: Offscreen, createImageBitmap: async (_from: unknown, width: number, height: number) => ({ width, height, close() {} }) };
+  // A clock the test moves: a call that takes time moves it itself.
+  let clock = 1234;
+  class Context2D {
+    getImageData() {
+      clock += 120;
+    }
+    drawImage() {
+      clock += 1;
+    }
+  }
+  const window = { OffscreenCanvas: Offscreen, CanvasRenderingContext2D: Context2D, createImageBitmap: async (_from: unknown, width: number, height: number) => ({ width, height, close() {} }) };
   let count = () => {};
   let frame: (now: number) => void = () => {};
   new Function('parent', 'addEventListener', 'console', 'PerformanceObserver', 'performance', 'document', 'window', 'setInterval', 'requestAnimationFrame', script)(
@@ -67,13 +77,13 @@ function run(script: string) {
     (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
     quiet,
     Observer,
-    { now: () => 1234 },
+    { now: () => clock },
     document,
     window,
     (tick: () => void) => (count = tick),
     (next: (now: number) => void) => (frame = next),
   );
-  return { told, listeners, console: quiet, document, window, onPage, pictures, count: () => count(), frame: (now: number) => frame(now), tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
+  return { told, listeners, console: quiet, document, window, onPage, pictures, Context2D, busy: (ms: number) => void (clock += ms), count: () => count(), frame: (now: number) => frame(now), tasks: (entries: Array<{ duration: number; startTime: number }>) => observed?.({ getEntries: () => entries }) };
 }
 
 describe("what a view's frame tells Weave", () => {
@@ -152,7 +162,31 @@ describe("what a view's frame tells Weave", () => {
     expect(view.told.at(-1)!.level).toBe('warn');
   });
 
+  it('tells where the time went: what reading canvases back took, with how often', () => {
+    const view = run(firstScript(true));
+    const context = new view.Context2D();
+    let now = 0;
+    view.frame(now);
+    // Five seconds at three frames a second, each frame reading a canvas back and drawing a little.
+    for (let i = 0; i < 17; i++) {
+      context.getImageData();
+      for (let j = 0; j < 5; j++) context.drawImage();
+      view.frame((now += 300));
+    }
+    expect(view.told.at(-1)!.text).toBe('the view drew 3 frames a second over 5 s, the longest pause 300 ms, 17 of 100 ms and more; in it: getImageData 2040 ms (17), drawImage 85 ms (85)');
+    // Counted anew for the next five seconds.
+    for (let i = 0; i < 17; i++) view.frame((now += 300));
+    expect(view.told.at(-1)!.text).toBe('the view drew 3 frames a second over 5 s, the longest pause 300 ms, 17 of 100 ms and more');
+  });
+
   it("leaves a view's canvases alone unless asked", () => {
+    const untouched = run(firstScript(false));
+    const read = untouched.Context2D.prototype.getImageData;
+    untouched.count();
+    expect(untouched.Context2D.prototype.getImageData).toBe(read);
+  });
+
+  it("leaves a view's page alone unless asked", () => {
     const view = run(firstScript(false));
     const made = view.document.createElement;
     view.count();
