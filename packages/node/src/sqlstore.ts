@@ -206,6 +206,16 @@ export class SqlStore implements LogStore {
     return [...this.#numbers.keys()];
   }
 
+  /**
+   * Every v2 event of one kind as it is stored, as text and not parsed, with its scope: a content event's body, or
+   * (`event`) the whole of an event whose body is in it. For handing them on to be opened elsewhere (core's preopen.ts).
+   */
+  rawOfKind(kind: string): Array<{ scope: string; json: string; event?: boolean }> {
+    const bodies = this.db.prepare('SELECT e.space AS scope, b.json AS json FROM events2 e JOIN bodies b ON b.hash = e.body WHERE e.kind = ?').all(kind) as Array<{ scope: string; json: string }>;
+    const whole = this.db.prepare('SELECT space AS scope, json FROM events2 WHERE kind = ? AND body IS NULL').all(kind) as Array<{ scope: string; json: string }>;
+    return [...bodies.map((row) => ({ scope: row.scope, json: row.json })), ...whole.map((row) => ({ scope: row.scope, json: row.json, event: true }))];
+  }
+
   inSpace2(space: string, since = '', until = '\uffff'): StoredV2[] {
     return (this.#v2.inSpace.all(space, since, until) as Array<{ id: string; json: string }>).map((row) => stored(row)!);
   }

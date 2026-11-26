@@ -195,7 +195,7 @@ const server = createServer(async (req, res) => {
   const file = url.pathname.slice(1);
   // Lenses' and widgets' views, with their own CSP as on Pages (pages.ts, functions/lens-frame.ts): the hosts in the address.
   if (file === 'lens-frame' || file === 'lens-frame.html') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': lensFrameCspFor(frameHosts(url)) }).end(readFileSync(join(dist, 'lens-frame.html')));
-  if (!['app.js', 'worker.js', 'service.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png', 'lens-transpile.js', 'js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
+  if (!['app.js', 'worker.js', 'service.js', 'preopen.js', 'sw.js', 'sqlite3.wasm', 'shipped-web.json', 'styles.css', 'manifest.json', 'icon.png', 'icon-192.png', 'lens-transpile.js', 'js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm'].includes(file) && !/^(services|avatar3d)\/[\w./-]+$/.test(file)) return res.writeHead(404).end();
   if (file.includes('..') || !existsSync(join(dist, file))) return res.writeHead(404).end();
   res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
   createReadStream(join(dist, file)).pipe(res);

@@ -57,7 +57,8 @@ export { Replica, type IngestResult } from './replica.ts';
 export { takeSpent, timed } from './spent.ts';
 export { sha256 } from '@noble/hashes/sha2.js';
 export { canManage, managersOf, mayDo, mayDoAt, rekeyCounts, type Decision, type SpaceAction } from './authz.ts';
-export { boxTo, ephemeralKeys, open, openBox, pairKey, randomBytes, seal, selfKey, sharedSecret, type Box, type Sealed } from './crypto.ts';
+export { boxTo, ephemeralKeys, open, openBox, pairKey, randomBytes, seal, selfKey, sharedSecret, usePreopened, type Box, type Sealed } from './crypto.ts';
+export { openMany, type Preopened, type PreopenWork } from './preopen.ts';
 export {
   canonicalKind,
   currentEpoch,
@@ -115,6 +116,7 @@ export {
   newSpace,
   openGift,
   openIn,
+  sealContext,
   openRekey,
   parseScope,
   rekey,

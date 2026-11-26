@@ -69,6 +69,8 @@ export async function buildWeb(dist: string, options: { minify?: boolean; avatar
   // The page's offline side, with a number of its own: a new one replaces the old caches.
   await build({ entryPoints: { sw: join(import.meta.dirname, 'src/sw.ts') }, outdir: dist, bundle: true, format: 'iife', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning', define: { BUILD: JSON.stringify(Date.now().toString(36)) } });
   await build({ entryPoints: { service: join(import.meta.dirname, 'src/service.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
+  // The Worker that opens an account's sealed events ahead of time and is ended after (src/preopen.ts): the ciphers only.
+  await build({ entryPoints: { preopen: join(import.meta.dirname, 'src/preopen.ts') }, outdir: dist, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: options.minify, logLevel: 'warning' });
   // Releases' pure components (lenses, widgets), transpiled in their Worker as they start: jco's bindgen, and its core
   // modules next to it (it finds them by its own address).
   // (Its node:fs is for Node only, behind a check: left out.)

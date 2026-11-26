@@ -1,10 +1,10 @@
 import './host/globals.ts';
-import { b64u, errorToWire, takeSpent } from '@weave/core';
+import { b64u, errorToWire, KIND_SEALED, takeSpent, usePreopened, type Preopened, type PreopenWork } from '@weave/core';
 import type { BrowserHandover, WeaveNode } from '@weave/node';
 import { mkdirSync, useFiles, writeFileSync } from './host/fs.ts';
 import { handOnAgain, relayTicket, storageUrl, useStorage, withStorage } from './host/net.ts';
 import { useServices } from './host/services.ts';
-import { useStore } from './host/sqlitestore.ts';
+import { openStore, useStore } from './host/sqlitestore.ts';
 import { openingFrom, openingFromWords } from './lock.ts';
 import { diagnoseAsked, diagnosePieces } from './diagnose.ts';
 import { heapMB, memoryTeller } from './memory.ts';
@@ -52,6 +52,40 @@ async function shipped(): Promise<void> {
 }
 
 const wayIn = (given: GivenWay) => ('words' in given ? { id: account.WORDS, opening: openingFromWords(given.words) } : { id: given.id, opening: openingFrom(given.secret) });
+
+/** A Worker a Worker starts: every browser Weave runs in has them, and where one doesn't the node opens everything itself. */
+declare const Worker: (new (url: string, options: { type: 'module' }) => { onmessage: ((event: { data: Preopened[] }) => void) | null; onerror: ((event: unknown) => void) | null; postMessage(message: unknown): void; terminate(): void }) | undefined;
+
+/**
+ * The account's sealed events opened ahead of time by a Worker that is ended after (preopen.ts, and core's): the node
+ * that opens next takes their plain texts and decrypts only what isn't among them. Decrypting 21 000 events left
+ * over a gigabyte behind in this Worker, which a phone's browser never gave back, and the phone ended the page for it.
+ * Whatever goes wrong here, the node opens everything itself, as it did.
+ */
+async function openedAhead(): Promise<void> {
+  const began = performance.now();
+  try {
+    if (typeof Worker === 'undefined') return console.info('weave: no Worker for opening events ahead of time here: the node opens them itself');
+    const work: PreopenWork = { keys: (await import('@weave/node')).preopenKeys(HOME), bodies: openStore().store.rawOfKind(KIND_SEALED) };
+    if (!work.bodies.length) return;
+    const helper = new Worker('/preopen.js', { type: 'module' });
+    let opened: Preopened[];
+    try {
+      opened = await new Promise<Preopened[]>((resolve, reject) => {
+        helper.onmessage = ({ data }) => resolve(data);
+        helper.onerror = () => reject(new Error("its Worker didn't start, or failed"));
+        helper.postMessage(work);
+      });
+    } finally {
+      helper.terminate();
+    }
+    usePreopened(opened);
+    console.info(`weave: ${opened.length} of ${work.bodies.length} sealed events were opened ahead of time, in a Worker of their own (${Math.round(performance.now() - began)} ms)`);
+  } catch (error) {
+    usePreopened();
+    console.warn(`weave: events weren't opened ahead of time (${(error as Error).message}): the node opens them itself`);
+  }
+}
 
 /** A node that's open does what the daemon has it do on a computer. */
 async function ready(opened: WeaveNode): Promise<void> {
@@ -180,7 +214,22 @@ const lifecycle: Record<string, (...args: never[]) => unknown> = {
   },
 
   async unlock(given: GivenWay) {
-    await ready(measured('the account opens', () => account.unlockAccount(HOME, wayIn(given))));
+    account.unlockHome(HOME, wayIn(given));
+    await openedAhead();
+    let opened: WeaveNode;
+    try {
+      opened = measured('the account opens', () => {
+        const node = account.openUnlocked(HOME);
+        // Now, while what was opened ahead is at hand: an account without key events decodes only when first asked.
+        node.decodeNow();
+        return node;
+      });
+    } finally {
+      // What was opened ahead is for this opening only: let go of it, and say how much of it the node took.
+      const taken = usePreopened();
+      if (taken) console.info(`weave: the node took ${taken} openings from what was opened ahead of time`);
+    }
+    await ready(opened);
   },
 
   /** This browser has nothing: bring the account here from the storage node. */

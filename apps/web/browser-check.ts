@@ -512,6 +512,8 @@ try {
   await unlocked();
   passed('and the first takes it back');
 
+  // What the node says is kept from here on (diagnose.ts): the next unlocking says who opened the sealed events.
+  await run(`localStorage.setItem('weave.diagnose', '1')`);
   server.kill();
   await until('the server to go', () => fetch(`${ORIGIN}/health`).then(() => false, () => true));
   await open(ORIGIN);
@@ -521,6 +523,16 @@ try {
   const offline = await texts();
   if (!offline.includes('from Chrome')) throw new Error(`read ${JSON.stringify(offline)} offline`);
   passed('and it opens and reads', offline.length);
+  // The sealed events were opened by a Worker of their own, ended after (preopen.ts), and the node took them from it.
+  const said = await until('the node to say how it opened', async () => {
+    const lines = (await run<string>(`localStorage.getItem('weave.diagnose.log') ?? ''`)).split('\n');
+    const ahead = lines.find((line) => /sealed events were opened ahead of time/.test(line));
+    const taken = lines.find((line) => /the node took \d+ openings/.test(line));
+    const failed = lines.find((line) => /weren't opened ahead of time|no Worker for opening/.test(line));
+    if (failed) throw new Error(failed);
+    return ahead && taken ? `${/\d+ of \d+/.exec(ahead)?.[0]}, taken ${/took (\d+)/.exec(taken)?.[1]}` : undefined;
+  });
+  passed('its sealed events were opened ahead of time, in a Worker that is ended after', said);
 
   server = startServer();
   await until('the server to come back', async () => (await fetch(`${ORIGIN}/sw.js`)).ok, 60_000);

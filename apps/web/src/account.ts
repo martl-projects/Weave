@@ -139,6 +139,15 @@ export async function recoverAccount(dir: string, words: string, link: { url: st
 
 /** Open this browser's account. A way in that isn't one of this account's says so, and nothing has changed. */
 export function unlockAccount(dir: string, way: WayIn): WeaveNode {
+  unlockHome(dir, way);
+  return openUnlocked(dir);
+}
+
+/**
+ * The first half of unlockAccount: the home's key, from a way in. After it the home's files can be read (the keys of
+ * its spaces, for opening its events ahead of time: worker.ts), and openUnlocked opens the node.
+ */
+export function unlockHome(dir: string, way: WayIn): void {
   const entries = readLock(dir);
   const entry = entries.find((e) => e.id === way.id);
   if (!entry) throw new Error("that isn't a way into this account");
@@ -149,8 +158,10 @@ export function unlockAccount(dir: string, way: WayIn): WeaveNode {
     throw new Error("that doesn't open this account");
   }
   useHomeKey(resolveHome(dir), homeKey);
-  return WeaveNode.open(dir);
 }
+
+/** The second half: the node of a home whose key is at hand. It keeps what it reads of its log from the first reading on (this Worker is the store's one writer). */
+export const openUnlocked = (dir: string): WeaveNode => WeaveNode.open(dir, { keepEvents: true });
 
 /** A browser with nothing: what the storage node keeps for this way in, or nothing if it keeps none. */
 export async function findBox(url: string, opening: Opening): Promise<string | undefined> {

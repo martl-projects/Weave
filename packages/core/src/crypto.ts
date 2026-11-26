@@ -4,6 +4,7 @@ import { ed25519, x25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { b64u, canonicalJson, utf8, type Json } from './bytes.ts';
 import { publicKeyFromDid, type Did } from './keys.ts';
+import type { Preopened } from './preopen.ts';
 
 export { randomBytes };
 
@@ -37,8 +38,45 @@ export function seal(key: Uint8Array, value: Json, context: string): Sealed {
   return { nonce: b64u.encode(nonce), ct: b64u.encode(ct) };
 }
 
+/**
+ * Bodies opened ahead of time (preopen.ts), by their ciphertext: `open` gives what is here for the same body, key and
+ * context, and decrypts as ever for anything else. Undefined (as a rule): everything is decrypted here.
+ */
+let preopened: Map<string, { nonce: string; key: Uint8Array; context: string; plain: string }> | undefined;
+/** How often `open` took what was opened ahead of time, since usePreopened. */
+let preopenedTaken = 0;
+
+/** Use these from now on, in place of decrypting the same bodies again; nothing: stop, and let go of them. Says how many were taken since the last call. */
+export function usePreopened(items?: Preopened[]): number {
+  const taken = preopenedTaken;
+  preopenedTaken = 0;
+  if (!items) {
+    preopened = undefined;
+    return taken;
+  }
+  const keys = new Map<string, Uint8Array>();
+  preopened = new Map();
+  for (const item of items) {
+    let key = keys.get(item.key);
+    if (!key) keys.set(item.key, (key = b64u.decode(item.key)));
+    preopened.set(item.ct, { nonce: item.nonce, key, context: item.context, plain: item.plain });
+  }
+  return taken;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+
 /** Decrypt what `seal` produced; throws if the key or context is wrong or the data was altered. */
 export function open(key: Uint8Array, sealed: Sealed, context: string): Json {
+  const ahead = preopened?.get(sealed.ct);
+  if (ahead && ahead.nonce === sealed.nonce && ahead.context === context && sameBytes(ahead.key, key)) {
+    preopenedTaken++;
+    return JSON.parse(ahead.plain) as Json;
+  }
   const plain = xchacha20poly1305(key, b64u.decode(sealed.nonce), utf8(context)).decrypt(b64u.decode(sealed.ct));
   return JSON.parse(new TextDecoder().decode(plain)) as Json;
 }

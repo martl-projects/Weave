@@ -128,6 +128,7 @@ export { startDaemon, type Daemon } from './daemon.ts';
 export { FileStore } from './filestore.ts';
 export { closeOpenStores, openStore, readJsonlLogs, SqliteStore } from './sqlitestore.ts';
 export { loadSpaces, saveSpace, type StoredSpace } from './spacestore.ts';
+export { preopenKeys } from './preopen.ts';
 export { resolveHome, type Home } from './home.ts';
 export { WeaveNode, type Bundle, type BrowserHandover, type RecoveredKeys } from './node.ts';
 export { BROWSER_PREFIX, browserLinkUrl, LINK_MS, linkToken, openLink, sealLink } from './browserlink.ts';

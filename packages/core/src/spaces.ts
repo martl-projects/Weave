@@ -298,6 +298,8 @@ export function directSpace(me: { author: Did; keys: KeyPair | KeyPair[] }, peer
 export const currentEpoch = (space: SpaceKeys): number => Math.max(...Object.keys(space.keys).map(Number));
 
 const context = (space: Pick<SpaceKeys, 'kind' | 'id'>, epoch: number) => `weave/${space.kind}/v1:${space.id}:${epoch}`;
+/** What a space's events of one epoch are sealed with, beside the key: for opening them ahead of time (preopen.ts). */
+export const sealContext = context;
 
 /**
  * Event fields for an encrypted event in a space, sealed with the current epoch

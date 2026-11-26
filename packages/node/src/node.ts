@@ -957,11 +957,19 @@ export class WeaveNode implements Backend {
     return this.#kernel._decodedIds(...args);
   }
 
+  /**
+   * Decode everything this node holds now, if it isn't decoded: it is done when first needed otherwise. For a caller
+   * that has the sealed events' plain texts at hand only for a while (opened ahead of time: core's preopen.ts).
+   */
+  decodeNow(): void {
+    this.#kernel.decodeAll();
+  }
+
 
   /** How long each part of opening took (ms), for open() to say when it was long. */
   #opening: Array<[string, number]> = [];
 
-  private constructor(home: Home, identity: SigningIdentity) {
+  private constructor(home: Home, identity: SigningIdentity, options: { keepEvents?: boolean } = {}) {
     this.home = home;
     this.#identity = identity;
     let last = performance.now();
@@ -978,6 +986,9 @@ export class WeaveNode implements Backend {
     const store = this.#openStore(home);
     mark('the store');
     this.replica = new Replica(store);
+    // Where reading the log is dear and this node is its store's one writer (a browser): what is read is kept from the
+    // first reading on. Opening reads the whole log several times over, and each reading leaves it all behind again.
+    if (options.keepEvents) this.replica.keepEvents();
     // A release channel a guest only reads: nothing of theirs goes in it, whatever asks (channels.ts).
     this.replica.writeGuard = (fields) => {
       const id = fields.scope ? parseScope(fields.scope)?.id : undefined;
@@ -1036,14 +1047,18 @@ export class WeaveNode implements Backend {
     });
   }
 
-  /** Open a home. `migrate: false` leaves a home from before v0.4 as it is, for looking at it (and comparing). */
-  static open(dir?: string, options: { migrate?: boolean } = {}): WeaveNode {
+  /**
+   * Open a home. `migrate: false` leaves a home from before v0.4 as it is, for looking at it (and comparing).
+   * `keepEvents`: keep what is read of the log from the start (Replica.keepEvents): only where nothing else writes to
+   * this home's store.
+   */
+  static open(dir?: string, options: { migrate?: boolean; keepEvents?: boolean } = {}): WeaveNode {
     const home = resolveHome(dir);
     const identity = loadIdentity(home);
     if (!identity) throw new Error(`no identity in ${home.dir} — run "weave init" first`);
     // Where opening spends its time, said when it was long (a browser's node opens with its person waiting).
     const began = performance.now();
-    const node = new WeaveNode(home, identity);
+    const node = new WeaveNode(home, identity, { keepEvents: options.keepEvents });
     const made = performance.now();
     let migrated = made;
     if (options.migrate !== false) {
