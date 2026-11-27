@@ -26,6 +26,8 @@
     "bare-crypto": "^1.16.1",
     "bare-encoding": "^1.0.3",
     "bare-events": "^2.9.2",
+    "bare-fetch": "^3.5.0",
+    "bare-form-data": "^1.2.2",
     "bare-fs": "^4.8.4",
     "bare-os": "^3.9.4",
     "bare-path": "^3.1.3",

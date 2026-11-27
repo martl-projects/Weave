@@ -1,6 +1,7 @@
 // First: what the node takes for granted of its surroundings (process, Buffer, crypto).
 import './host/globals.ts';
 import tcp from 'bare-tcp';
+import { useScreen } from './host/runtime.ts';
 import { Own } from './own.ts';
 import type { Pipe } from './phone.ts';
 
@@ -20,6 +21,9 @@ const send = (message: unknown) => ipc.write(`${JSON.stringify(message)}\n`);
 const report = (error: unknown) => send({ fatal: error instanceof Error ? (error.stack ?? error.message) : String(error) });
 Bare.on('uncaughtException', report);
 Bare.on('unhandledRejection', report);
+
+// The node's WebAssembly components run on the screen: its line is this one.
+useScreen(send);
 
 const own = new Own({
   send,
@@ -47,7 +51,7 @@ ipc.on('data', (chunk) => {
     if (!line.trim()) continue;
     try {
       const message = JSON.parse(line) as { op?: string };
-      if (message.op === 'call') void last.then(() => own.handle(message));
+      if (message.op === 'call' || message.op === 'service') void last.then(() => own.handle(message));
       else last = last.then(() => own.handle(message));
     } catch {
       send({ fatal: 'a message the worker could not read' });

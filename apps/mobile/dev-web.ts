@@ -20,7 +20,7 @@ const { values } = parseArgs({ options: { data: { type: 'string', default: '.dev
 const data = resolve(process.env.INIT_CWD ?? process.cwd(), values.data!);
 const port = Number(values.port);
 const STATIC = join(import.meta.dirname, 'dist', 'web');
-const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm' };
 
 // The worker, connected back to us over local TCP (see worklet/test.ts).
 const bare = (createRequire(import.meta.url)('bare-runtime') as () => string)();

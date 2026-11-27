@@ -1,14 +1,20 @@
 // The phone app's screens over a node of the phone's own, in a real Chrome: node apps/mobile/screen-check.ts
 //
 // What the worker's test can't reach: the desktop's screens over the bridge, from no account to a group with a message
-// in it. It builds the screens and the worker (build.ts --web --own), runs dev-web.ts --own on a throwaway home with a
-// DHT nobody answers at (so the node stays off the public one), and Chrome headless at a phone's size on a throwaway
-// profile. CHROME says which browser, if it isn't where Chrome usually is. `--shot file.png` keeps a picture of the end.
+// in it, and a widget another person sends, whose component runs on the screen. It builds the screens and the worker
+// (build.ts --web --own), runs dev-web.ts --own on a throwaway home, and Chrome headless at a phone's size on a
+// throwaway profile. The other person is a computer's node in this process; both are on a DHT of this check's own, so
+// neither touches the public one. CHROME says which browser, if it isn't where Chrome usually is. `--shot file.png`
+// keeps a picture of the end.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import createTestnet from 'hyperdht/testnet.js';
+import { closeOpenStores, loadConfig, resolveHome, saveConfig, WeaveNode } from '@weave/node';
+import { buildComponent } from '../../packages/node/test/helpers/components.ts';
+import { folderWith, releaseFolder } from '../../packages/node/test/helpers/release.ts';
 
 const PORT = 8796;
 const DEBUG = 9336;
@@ -37,7 +43,16 @@ if (!chrome) throw new Error('no Chrome here: say where with CHROME');
 execFileSync(process.execPath, ['build.ts', '--web', '--own'], { cwd: here, stdio: 'ignore' });
 const data = mkdtempSync(join(tmpdir(), 'weave-phone-own-'));
 const profile = mkdtempSync(join(tmpdir(), 'weave-phone-chrome-'));
-const server = spawn(process.execPath, [join(here, 'dev-web.ts'), '--own', '--data', data, '--port', String(PORT), '--bootstrap', '127.0.0.1:9'], { stdio: process.env.SERVER_LOG ? 'inherit' : 'ignore' });
+// Lena, on a computer: a group to join, and later a widget sent into it.
+const testnet = await createTestnet(3);
+const lenaDir = mkdtempSync(join(tmpdir(), 'weave-phone-lena-'));
+const lena = WeaveNode.init('Lena', lenaDir);
+lena.config = { ...loadConfig(resolveHome(lenaDir)), bootstrap: testnet.bootstrap };
+saveConfig(resolveHome(lenaDir), lena.config);
+await lena.createGroup('Climb');
+await lena.say({ space: 'Climb', text: 'the rope is in the van' });
+await lena.goOnline();
+const server = spawn(process.execPath, [join(here, 'dev-web.ts'), '--own', '--data', data, '--port', String(PORT), '--bootstrap', `${testnet.bootstrap[0].host}:${testnet.bootstrap[0].port}`], { stdio: process.env.SERVER_LOG ? 'inherit' : 'ignore' });
 const browser = spawn(chrome, ['--headless=new', `--remote-debugging-port=${DEBUG}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--window-size=390,844', 'about:blank'], { stdio: 'ignore' });
 
 let failed: unknown;
@@ -127,6 +142,36 @@ try {
   if (wrong.length) throw new Error(`the page said: ${wrong.join(' | ')}`);
   passed('the screens show its places', shown.split('\n').filter(Boolean).slice(0, 4));
 
+  // Lena's group, over the DHT: what she said arrives, and what the phone says reaches her.
+  const call = <T>(method: string, ...args: unknown[]) => run<{ result?: T; error?: string }>(`window.weave.call(${[method, ...args].map((a) => JSON.stringify(a)).join(', ')})`);
+  const joined = await call('joinSpace', await lena.invite('Climb'));
+  if (joined.error) throw new Error(`joining Climb: ${joined.error}`);
+  await until("Lena's message", async () => ((await call<Array<{ text: string }>>('messages', 'Climb')).result ?? []).some((m) => m.text === 'the rope is in the van'), 60_000);
+  await call('say', { space: 'Climb', text: 'from the phone' });
+  await until('Lena reading the phone', async () => (await lena.messages('Climb')).some((m) => m.text === 'from the phone'), 60_000);
+  passed("it joins another person's group over the DHT, reads and is read");
+
+  // A widget Lena sends into Climb, released in a project of hers: the phone's node fetches and checks it, and nothing
+  // of it runs before it is approved. Then its component runs on the screen, in a Worker of its own, which transpiles
+  // it from its bytes; it folds, and a vote from the phone reaches Lena.
+  const component = readFileSync(await buildComponent(join(here, '..', '..', 'packages', 'node', 'test', 'helpers', 'wasm-widget-tally.js'), 'board'));
+  await lena.createProject({ name: 'Games' });
+  const manifest = { app: 'tally', name: 'Tally', widget: { component: 'tally.wasm', site: 'site', writes: ['tally.vote'], size: { height: 160 } } };
+  const site = '<!doctype html><meta charset="utf-8"><main id="tally">…</main><script src="app.js"></script>';
+  const script = "addEventListener('message', (e) => { if (e.data && e.data.weave === 'view') document.getElementById('tally').textContent = (e.data.state.votes || []).map((v) => v.by + ': ' + v.choice).join(', ') || 'no votes'; });";
+  await releaseFolder(lena, { project: 'Games', tag: '1.0', folder: folderWith({ 'weave.app.json': JSON.stringify(manifest), 'tally.wasm': component, 'site/index.html': site, 'site/app.js': script }) });
+  const widget = await lena.sendWidget({ space: 'Climb', project: 'Games', title: 'Lunch?' });
+  type WidgetView = { approved: boolean; state?: { votes?: Array<{ choice: string }> }; problem?: string };
+  const unapproved = await until('the widget', async () => (await call<WidgetView>('widgetView', { message: widget.id })).result, 60_000);
+  if (unapproved.approved || unapproved.state !== undefined) throw new Error(`the widget ran before it was approved: ${JSON.stringify(unapproved)}`);
+  const approved = await call<WidgetView>('approveWidget', { message: widget.id });
+  if (approved.error || approved.result?.problem || !approved.result?.state) throw new Error(`the widget didn't run: ${approved.error ?? approved.result?.problem ?? 'no state'}; the page said: ${wrong.join(' | ') || 'nothing'}; lines: ${(await run<string[]>('window.__lines.slice(-12)')).join('\n')}`);
+  passed('a widget runs once approved: its component on the screen, in a Worker of its own', approved.result.state);
+  const voted = await call('widgetAction', { message: widget.id, action: 'vote', input: { choice: 'phone' } });
+  if (voted.error) throw new Error(`the widget's action failed: ${voted.error}`);
+  await until("Lena's node folding the vote", async () => JSON.stringify((await lena.widgetView({ message: widget.id })).state ?? null).includes('"phone"'), 60_000);
+  passed('and a vote from the phone reaches the other person');
+
   if (shot) {
     const picture = (await send('Page.captureScreenshot', { format: 'png' })) as { data: string };
     writeFileSync(shot, Buffer.from(picture.data, 'base64'));
@@ -138,11 +183,16 @@ try {
 } finally {
   browser.kill();
   server.kill();
+  await lena.close().catch(() => {});
+  closeOpenStores();
+  await testnet.destroy();
   await sleep(500);
-  for (const dir of [data, profile]) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const dir of [data, profile, lenaDir]) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 if (failed) {
   console.error(failed);
   process.exit(1);
 }
 console.log('\nthe phone\'s own node carries the screens');
+// The other person's node and its DHT may hold the process a while longer: nothing here is left to wait for.
+process.exit(0);

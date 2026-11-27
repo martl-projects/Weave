@@ -46,10 +46,43 @@ void Worker.addListener('message', ({ message }) => {
     for (const listener of listeners) listener(m.event as FeedItem);
   } else if (typeof m.fatal === 'string') {
     console.error('Weave worker:', m.fatal);
+  } else if (m.service) {
+    startService(m.service as StartService);
+  } else if (m.serviceCall) {
+    const { key, ...call } = m.serviceCall as { key: string; id: number; fn: string; args: unknown[] };
+    services.get(key)?.port.postMessage(call);
+  } else if (typeof m.serviceStop === 'string') {
+    services.get(m.serviceStop)?.worker.terminate();
+    services.delete(m.serviceStop);
   }
 });
 
 const post = (message: unknown) => Worker.post({ message: JSON.stringify(message) });
+
+/*
+ * WebAssembly components of a node of the phone's own (a board's lens, a chat's widget) run here, each in a Worker of
+ * its own: the screen runs WebAssembly wherever the app is, which the worker's engine may not (worklet/host/runtime.ts).
+ * The Worker is Weave Web's (service.js): it transpiles the component from its bytes and gives it no network and no
+ * host calls. What it says goes back to the node over the worker's line.
+ */
+type StartService = { key: string; component: string; net: string[] };
+const services = new Map<string, { worker: globalThis.Worker; port: MessagePort }>();
+
+function startService({ key, component, net }: StartService): void {
+  services.get(key)?.worker.terminate();
+  const said = (data: Record<string, unknown>) => void post({ op: 'service', key, ...data }).catch(() => {});
+  try {
+    const worker = new globalThis.Worker('service.js', { type: 'module' });
+    const { port1: port, port2: theirs } = new MessageChannel();
+    port.onmessage = ({ data }: MessageEvent<Record<string, unknown>>) => said(data);
+    worker.onerror = (event) => said({ type: 'failed', error: event.message || "its Worker didn't start" });
+    services.set(key, { worker, port });
+    const bytes = Uint8Array.from(atob(component), (c) => c.charCodeAt(0));
+    worker.postMessage({ component: bytes, net, port: theirs }, [theirs]);
+  } catch (error) {
+    said({ type: 'failed', error: String((error as Error)?.message ?? error) });
+  }
+}
 const ask = <T>(op: string, fields: Record<string, unknown> = {}) =>
   new Promise<T>((resolve, reject) => {
     const id = next++;

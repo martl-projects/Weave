@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { errorToWire } from '@weave/core';
 import { keepReconciling, loadConfig, PHONE_METHODS, resolveHome, saveConfig, WeaveNode } from '@weave/node';
 import { webMethods } from '../../web/src/methods.ts';
+import { serviceSaid } from './host/runtime.ts';
 import { serveLensRequest, type LensFile } from './lens-http.ts';
 import type { Listener, Pipe } from './phone.ts';
 
@@ -17,8 +18,10 @@ import type { Listener, Pipe } from './phone.ts';
  *                    {id, op: 'call', method, args}       → the node's answer
  *                    {id, op: 'lensBase', release}        → where a board's client service's view is served here
  *                    {op: 'wake'}                         the app is in front again
+ *                    {op: 'service', key, …}              what a component running on the screen said
  *   worker → screen  {id, result} | {id, error, name?, values?}
  *                    {event}                              the node's live events
+ *                    {service} | {serviceCall} | {serviceStop}   a WebAssembly component to run there (host/runtime.ts)
  *
  * The native side sends {op: 'start', dir} first: where the home is (`bootstrap` with it: a test network's DHT).
  * What a screen may call is what a page may in Weave Web (methods.ts).
@@ -122,6 +125,10 @@ export class Own {
         this.#lenses ??= this.#deps.listen(0, (local) => serveLensRequest(local, this.#open, (r, path) => this.#file(r, path)));
         this.#lenses.catch(() => (this.#lenses = undefined));
         return `http://127.0.0.1:${(await this.#lenses).port}/lens/${release}/`;
+      }
+      case 'service': {
+        serviceSaid(message);
+        return;
       }
       case 'wake': {
         void this.#node?.goOnline().catch(() => {});

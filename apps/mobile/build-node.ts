@@ -20,8 +20,11 @@ const BARE: Record<string, string> = { fs: 'bare-fs', path: 'bare-path', os: 'ba
 const HOST: Record<string, string> = { crypto: web('crypto.ts'), url: web('url.ts'), zlib: web('zlib.ts'), module: join(here, 'worklet', 'host', 'module.ts') };
 /** What the node builds as it loads, before anything is called. */
 const AT_LOAD: Record<string, string> = { 'net.BlockList': 'class { addSubnet() {} addAddress() {} check() { return false; } }' };
-/** The node's own files that a phone has another of, for now Weave Web's: no lock between processes, no programs. */
-const SWAPPED: Record<string, string> = { './lock.ts': web('lock.ts'), './runtime.ts': web('runtime.ts') };
+/**
+ * The node's own files that a phone has another of: no lock between processes (Weave Web's), and a runtime that runs
+ * no programs and has WebAssembly components run on the app's screen (worklet/host/runtime.ts).
+ */
+const SWAPPED: Record<string, string> = { './lock.ts': web('lock.ts'), './runtime.ts': join(here, 'worklet', 'host', 'runtime.ts') };
 
 const bareHost: Plugin = {
   name: 'weave-bare-host',

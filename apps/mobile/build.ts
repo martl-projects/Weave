@@ -69,6 +69,16 @@ await Promise.all([
 ]);
 copyFileSync('../desktop/src/renderer/index.html', 'dist/web/index.html');
 
+if (own) {
+  // The node's WebAssembly components run on the screen (worklet/host/runtime.ts), each in Weave Web's Worker for them,
+  // which transpiles a component from its bytes: jco's bindgen, with its core modules next to it.
+  const webSrc = join('..', 'web', 'src');
+  await build({ entryPoints: { service: join(webSrc, 'service.ts') }, outdir: 'dist/web', bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, logLevel: 'warning' });
+  await build({ entryPoints: { 'lens-transpile': join(webSrc, 'transpile.ts') }, outdir: 'dist/web', bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, logLevel: 'warning', external: ['node:*'] });
+  const bindgen = join(dirname(require.resolve('@bytecodealliance/jco-transpile')), '..', 'vendor');
+  for (const core of ['js-component-bindgen-component.core.wasm', 'js-component-bindgen-component.core2.wasm']) copyFileSync(join(bindgen, core), join('dist/web', core));
+}
+
 if (web) {
   if (own) await buildOwnWorker({ test: true });
   else await worker('worklet/test.ts', 'dist/worklet/test.cjs');
