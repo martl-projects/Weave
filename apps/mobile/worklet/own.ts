@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { errorToWire } from '@weave/core';
 import { keepReconciling, loadConfig, PHONE_METHODS, resolveHome, saveConfig, WeaveNode } from '@weave/node';
 import { webMethods } from '../../web/src/methods.ts';
-import { serviceSaid } from './host/runtime.ts';
+import { serviceSaid, useShipped } from './host/runtime.ts';
 import { serveLensRequest, type LensFile } from './lens-http.ts';
 import type { Listener, Pipe } from './phone.ts';
 
@@ -27,6 +27,24 @@ import type { Listener, Pipe } from './phone.ts';
  * What a screen may call is what a page may in Weave Web (methods.ts).
  */
 
+/** Weave's own services that are in the app, as build.ts listed them (shipped-web.json). */
+declare const WEAVE_PHONE_SHIPPED: string;
+
+/**
+ * Where the node finds what Weave ships: the list, and for each service a small file that stands in for its component,
+ * which is in the app's screen (the node checks a shipped component's digest by reading its file, as in Weave Web).
+ */
+function shippedIn(dir: string): string | undefined {
+  const services = JSON.parse(WEAVE_PHONE_SHIPPED) as Record<string, { component: string }>;
+  if (!Object.keys(services).length) return undefined;
+  const folder = join(dir, 'shipped');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'shipped.json'), WEAVE_PHONE_SHIPPED);
+  for (const [name, { component }] of Object.entries(services)) writeFileSync(join(folder, component), `web:${name}`);
+  useShipped(Object.keys(services));
+  return folder;
+}
+
 export interface OwnDeps {
   send(message: unknown): void;
   /** Listen on 127.0.0.1, on this port if it's free (else any). */
@@ -37,6 +55,7 @@ export class Own {
   #deps: OwnDeps;
   #dir?: string;
   #bootstrap?: Array<{ host: string; port: number }>;
+  #shipped?: string;
   #node?: WeaveNode;
   #stopReconciling?: () => void;
   #watching?: AbortController;
@@ -72,6 +91,7 @@ export class Own {
   /** The home's node is this worker's from now on: its events go to the screen, its duties are kept, and it looks for peers. */
   #adopt(node: WeaveNode): void {
     this.#node = node;
+    if (this.#shipped) node.wasmSetup.shippedDir = this.#shipped;
     if (this.#bootstrap?.length) {
       node.config = { ...loadConfig(resolveHome(this.#dir!)), bootstrap: this.#bootstrap };
       saveConfig(resolveHome(this.#dir!), node.config);
@@ -88,6 +108,7 @@ export class Own {
       this.#dir = join(String(message.dir), 'home');
       this.#bootstrap = message.bootstrap as Array<{ host: string; port: number }> | undefined;
       mkdirSync(this.#dir, { recursive: true });
+      this.#shipped = shippedIn(String(message.dir));
       if (existsSync(resolveHome(this.#dir).identity)) this.#adopt(WeaveNode.open(this.#dir, { keepEvents: true }));
       return;
     }
@@ -107,7 +128,12 @@ export class Own {
       case 'restore': {
         if (this.#node) throw new Error('this phone has an account already');
         const bootstrap = this.#bootstrap;
-        this.#adopt(await WeaveNode.restore(String(message.words ?? ''), dir, { online: true, beforeOnline: (node) => void (bootstrap?.length && (node.config = { ...node.config, bootstrap })) }));
+        const shipped = this.#shipped;
+        const beforeOnline = (node: WeaveNode) => {
+          if (shipped) node.wasmSetup.shippedDir = shipped;
+          if (bootstrap?.length) node.config = { ...node.config, bootstrap };
+        };
+        this.#adopt(await WeaveNode.restore(String(message.words ?? ''), dir, { online: true, beforeOnline }));
         return;
       }
       case 'call': {

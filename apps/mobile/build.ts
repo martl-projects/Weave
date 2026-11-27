@@ -44,8 +44,16 @@ if (test) {
 // The screens are the desktop's, so the phone shows Weave's version (the repository's), not this package's.
 const version = (JSON.parse(readFileSync('../../package.json', 'utf8')) as { version: string }).version;
 mkdirSync('dist/web', { recursive: true });
+// Weave's own services a screen can run, transpiled into the app as Weave Web has them (its build.ts): the worker's
+// node is told which (shipped-web.json, built into it). They come from packages/shipped/dist, built before this.
+let shipped = '{}';
+if (own) {
+  const { buildServices } = (await import('../web/build.ts')) as { buildServices(dist: string): Promise<string[]> };
+  console.log('services in the app:', (await buildServices('dist/web')).join(', ') || 'none (packages/shipped is not built)');
+  shipped = readFileSync('dist/web/shipped-web.json', 'utf8');
+}
 await Promise.all([
-  own ? buildOwnWorker() : worker('worklet/main.ts', 'dist/worklet/main.cjs'),
+  own ? buildOwnWorker({ shipped }) : worker('worklet/main.ts', 'dist/worklet/main.cjs'),
   build({
     entryPoints: ['src/main.ts'],
     outfile: 'dist/web/app.js',
@@ -80,7 +88,7 @@ if (own) {
 }
 
 if (web) {
-  if (own) await buildOwnWorker({ test: true });
+  if (own) await buildOwnWorker({ test: true, shipped });
   else await worker('worklet/test.ts', 'dist/worklet/test.cjs');
   console.log('phone screens and test worker built');
   process.exit(0);

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { Runtime as OnAComputer } from '../../../../packages/node/src/runtime.ts';
 
 export * from '../../../../packages/node/src/runtime.ts';
@@ -19,6 +20,10 @@ export * from '../../../../packages/node/src/runtime.ts';
  *                    {op: 'service', key, type: 'done', id, value | error}
  *
  * What goes to a component and comes back is text (JSON, or null), as on a computer.
+ *
+ * Weave's own services (Unread, Spotlight, the GitHub verifier) are in the app, transpiled when it was built, as in
+ * Weave Web (build.ts): for one of those the screen gets where it is (`base`) in place of bytes. The rest of what
+ * Weave ships, and a project's service that calls its host, runs on no phone.
  */
 
 /** How long one call may take, starting the component included. */
@@ -31,11 +36,23 @@ export function useScreen(send: (message: unknown) => void): void {
   toScreen = send;
 }
 
-/** A component's file is its entry: its bytes are read when it starts. */
+/** Weave's own services that are in the app, by name. */
+let inTheApp = new Set<string>();
+export const useShipped = (names: string[]): void => void (inTheApp = new Set(names));
+
+const SHIPPED = 'shipped:';
+
+/** One of Weave's own services that is in the app is ready already; no other full service runs on a phone. */
 export async function prepareWasm(component: string): Promise<string> {
+  const name = basename(component).replace(/\.wasm$/, '');
+  if (!inTheApp.has(name)) throw new Error(`${name} doesn't run on a phone`);
+  return `${SHIPPED}${name}`;
+}
+
+/** A release's pure component (a lens's, a widget's): its file is its entry, its bytes are read when it starts. */
+export async function preparePureWasm(component: string): Promise<string> {
   return component;
 }
-export const preparePureWasm = prepareWasm;
 
 interface Running {
   ready: Promise<void>;
@@ -86,7 +103,8 @@ export class Runtime extends OnAComputer {
     ready.catch(() => {});
     running.set(key, { ready, started, failed, next: 1, waiting: new Map() });
     if (!toScreen) return failed(new Error('no screen to run it on'));
-    toScreen({ service: { key, component: Buffer.from(readFileSync(run.entry) as Uint8Array).toString('base64'), net: run.net ?? [] } });
+    if (run.entry.startsWith(SHIPPED)) toScreen({ service: { key, base: `services/${run.entry.slice(SHIPPED.length)}`, net: run.net ?? [] } });
+    else toScreen({ service: { key, component: Buffer.from(readFileSync(run.entry) as Uint8Array).toString('base64'), net: [] } });
   }
 
   override callWasm(key: string, fn: string, args: unknown[]): Promise<unknown> {

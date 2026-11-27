@@ -50,7 +50,7 @@ const bareHost: Plugin = {
 };
 
 /** Pack worklet/<entry>.ts, the node with it, into dist/worklet/<entry>.cjs. */
-async function pack(entry: string): Promise<string> {
+async function pack(entry: string, shipped = '{}'): Promise<string> {
   const out = join(here, 'dist', 'worklet', `${entry}.cjs`);
   await build({
     entryPoints: [join(here, 'worklet', `${entry}.ts`)],
@@ -63,7 +63,8 @@ async function pack(entry: string): Promise<string> {
     conditions: ['import', 'default'],
     logLevel: 'warning',
     // The node asks where its own files are (its console, a worker's script): nowhere on a phone, they are in the bundle.
-    define: { 'import.meta.url': '"file:///weave/node.js"', 'import.meta.dirname': '"/weave"', 'import.meta.filename': '"/weave/node.js"' },
+    // WEAVE_PHONE_SHIPPED: the list of Weave's own services the app's screen can run (build.ts), as its JSON.
+    define: { 'import.meta.url': '"file:///weave/node.js"', 'import.meta.dirname': '"/weave"', 'import.meta.filename': '"/weave/node.js"', WEAVE_PHONE_SHIPPED: JSON.stringify(shipped) },
     plugins: [bareHost],
     // The network is the computer's own (@weave/net): Hyperswarm and its DHT run on Bare as they are, with their addons.
     external: ['bare-*', 'hyperdht', 'hyperswarm', 'sodium-native', 'sodium-universal', 'udx-native'],
@@ -79,6 +80,6 @@ export const buildNodeProof = (): Promise<string> => pack('node-proof');
  * The phone app's worker with a node of its own (worklet/own.ts): for bare-kit inside the app, or (`test`) for plain
  * Bare on this computer, with local TCP in place of bare-kit's IPC (tests, the browser preview).
  */
-export const buildOwnWorker = (options: { test?: boolean } = {}): Promise<string> => pack(options.test ? 'own-test' : 'own-main');
+export const buildOwnWorker = (options: { test?: boolean; shipped?: string } = {}): Promise<string> => pack(options.test ? 'own-test' : 'own-main', options.shipped);
 
 if (process.argv[1] === import.meta.filename) console.log('packed', await buildNodeProof(), await buildOwnWorker({ test: true }));

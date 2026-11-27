@@ -63,12 +63,13 @@ const post = (message: unknown) => Worker.post({ message: JSON.stringify(message
  * WebAssembly components of a node of the phone's own (a board's lens, a chat's widget) run here, each in a Worker of
  * its own: the screen runs WebAssembly wherever the app is, which the worker's engine may not (worklet/host/runtime.ts).
  * The Worker is Weave Web's (service.js): it transpiles the component from its bytes and gives it no network and no
- * host calls. What it says goes back to the node over the worker's line.
+ * host calls. One of Weave's own services is in the app already transpiled (build.ts): it comes as where it is.
+ * What it says goes back to the node over the worker's line.
  */
-type StartService = { key: string; component: string; net: string[] };
+type StartService = { key: string; component?: string; base?: string; net: string[] };
 const services = new Map<string, { worker: globalThis.Worker; port: MessagePort }>();
 
-function startService({ key, component, net }: StartService): void {
+function startService({ key, component, base, net }: StartService): void {
   services.get(key)?.worker.terminate();
   const said = (data: Record<string, unknown>) => void post({ op: 'service', key, ...data }).catch(() => {});
   try {
@@ -77,8 +78,8 @@ function startService({ key, component, net }: StartService): void {
     port.onmessage = ({ data }: MessageEvent<Record<string, unknown>>) => said(data);
     worker.onerror = (event) => said({ type: 'failed', error: event.message || "its Worker didn't start" });
     services.set(key, { worker, port });
-    const bytes = Uint8Array.from(atob(component), (c) => c.charCodeAt(0));
-    worker.postMessage({ component: bytes, net, port: theirs }, [theirs]);
+    if (component === undefined) worker.postMessage({ base: new URL(base!, document.baseURI).href, net, port: theirs }, [theirs]);
+    else worker.postMessage({ component: Uint8Array.from(atob(component), (c) => c.charCodeAt(0)), net, port: theirs }, [theirs]);
   } catch (error) {
     said({ type: 'failed', error: String((error as Error)?.message ?? error) });
   }

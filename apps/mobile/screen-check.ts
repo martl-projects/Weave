@@ -8,7 +8,7 @@
 // keeps a picture of the end.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import createTestnet from 'hyperdht/testnet.js';
@@ -89,7 +89,7 @@ try {
   await send('Runtime.enable');
   await send('Page.enable');
   // The lines between the screen and its worker, kept in the page for a step that fails.
-  await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lines = []; const F = window.fetch; window.fetch = (u, o) => { if (String(u) === '/worker') window.__lines.push('> ' + String(o && o.body).slice(0, 140)); return F(u, o); }; const E = window.EventSource; window.EventSource = class extends E { constructor(u) { super(u); this.addEventListener('message', (m) => window.__lines.push('< ' + String(m.data).slice(0, 140))); this.addEventListener('open', () => window.__lines.push('open')); } };` });
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__lines = []; const F = window.fetch; window.fetch = (u, o) => { if (String(u) === '/worker') window.__lines.push('> ' + String(o && o.body).slice(0, 300)); return F(u, o); }; const E = window.EventSource; window.EventSource = class extends E { constructor(u) { super(u); this.addEventListener('message', (m) => window.__lines.push('< ' + String(m.data).slice(0, 300))); this.addEventListener('open', () => window.__lines.push('open')); } };` });
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await send('Page.navigate', { url: ORIGIN });
   await until('the bridge', () => run<boolean>('typeof window.weave === "object" && typeof window.weave.state === "function"'));
@@ -171,6 +171,55 @@ try {
   if (voted.error) throw new Error(`the widget's action failed: ${voted.error}`);
   await until("Lena's node folding the vote", async () => JSON.stringify((await lena.widgetView({ message: widget.id })).state ?? null).includes('"phone"'), 60_000);
   passed('and a vote from the phone reaches the other person');
+
+  // A board of Lena's project shown through a lens (the Kanban starter, released in another project of hers, which the
+  // phone isn't in): the pin carries its files, the phone's node checks them, and its component folds the board on the
+  // screen. A card added on the phone is a post Lena reads; the lens's view is served by the phone, sandboxed.
+  const starter = join(here, '..', '..', 'packages', 'sdk', 'starters', 'js-board');
+  const kanban = mkdtempSync(join(tmpdir(), 'weave-phone-kanban-'));
+  cpSync(join(starter, 'weave.app.json'), join(kanban, 'weave.app.json'));
+  cpSync(await buildComponent(join(starter, 'src', 'board.js'), 'board'), join(kanban, 'board.wasm'));
+  cpSync(join(starter, 'site'), join(kanban, 'site'), { recursive: true });
+  await lena.createProject({ name: 'Tools' });
+  await lena.createProject({ name: 'Trip' });
+  await lena.setBoard({ project: 'Trip', name: 'tasks', title: 'Tasks' });
+  await releaseFolder(lena, { project: 'Tools', tag: '1.0', folder: kanban });
+  await lena.setBoardLens({ space: 'Trip', board: 'tasks', from: { project: 'Tools' }, mode: 'require' });
+  const inTrip = await call('joinSpace', await lena.invite('Trip'));
+  if (inTrip.error) throw new Error(`joining Trip: ${inTrip.error}`);
+  type Board = { state?: { columns: Array<{ name: string; cards: Array<{ title: string }> }> }; lens?: { release: string; site?: boolean; problem?: string } };
+  const board = await until('the board through its lens', async () => {
+    const seen = await call<Board>('boardView', { space: 'Trip', board: 'tasks' });
+    return seen.result?.state ? seen.result : undefined;
+  }, 90_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; the board said: ${JSON.stringify(await call('boardView', { space: 'Trip', board: 'tasks' })).slice(0, 600)}; the page said: ${wrong.join(' | ') || 'nothing'}`);
+  });
+  if (board.lens?.problem) throw new Error(`the lens: ${board.lens.problem}`);
+  passed('a board shows through its lens, folded on the screen', board.state!.columns.map((c) => c.name));
+  const added = await call<{ view: Board }>('boardAction', { space: 'Trip', board: 'tasks', action: 'add', input: { title: 'Book the hut' } });
+  if (added.error || added.result?.view.state?.columns[0].cards[0]?.title !== 'Book the hut') throw new Error(`adding a card: ${added.error ?? JSON.stringify(added.result).slice(0, 300)}`);
+  await until('Lena reading the card', async () => (await lena.posts({ space: 'Trip', board: 'tasks' })).some((p) => p.title === 'Book the hut'), 60_000);
+  passed('a card added on the phone is a post the other person reads');
+  const base = await run<string>(`Promise.resolve(window.weave.lensBase(${JSON.stringify(board.lens!.release)}))`);
+  const page = await fetch(base);
+  const policy = page.headers.get('content-security-policy') ?? '';
+  if (page.status !== 200 || !/^sandbox allow-scripts;.*connect-src 'none'/.test(policy) || !(await page.text()).includes('<main id="columns">')) throw new Error(`the lens's view at ${base}: ${page.status}, ${policy}`);
+  if ((await fetch(`${base}app.js`)).status !== 200 || (await fetch(`${base}..%2Fboard.wasm`)).status !== 404) throw new Error("the lens's view serves the wrong files");
+  passed("the lens's view is served on the phone, sandboxed, and nothing but its files", base.replace(/\/lens\/.*$/, '/lens/…'));
+
+  // Weave's own services, which are in the app: the node finds them, and they run on the screen as the others do.
+  // Unread counts what waits in a place: a message of Lena's to the phone's person, not opened yet.
+  const mine = (await call<Array<{ name: string }>>('hintServices')).result?.map((s) => s.name) ?? [];
+  if (!mine.includes('Unread') || !mine.includes('Spotlight')) throw new Error(`the node's own services: ${JSON.stringify(mine)}`);
+  const climb = (await call<Array<{ id: string; name: string }>>('spaces')).result!.find((s) => s.name === 'Climb')!;
+  await lena.say({ space: 'Climb', text: '@Phone who brings the chalk?' });
+  const counted = await until('Unread counting it', async () => {
+    const answers = (await call<Array<{ hints: unknown[] }>>('hints', { slot: 'place', subjects: [{ space: climb.id }] })).result ?? [];
+    return answers[0]?.hints.length ? answers[0].hints : undefined;
+  }, 60_000).catch(async (error: Error) => {
+    throw new Error(`${error.message}; hints said: ${JSON.stringify(await call('hints', { slot: 'place', subjects: [{ space: climb.id }] })).slice(0, 500)}; the page said: ${wrong.join(' | ') || 'nothing'}; lines: ${(await run<string[]>('[...new Set(window.__lines.filter((l) => l.includes("hints:")))].slice(-14)')).join('\n')}`);
+  });
+  passed("Weave's own services are in the app: Unread counts what waits in a place", counted);
 
   if (shot) {
     const picture = (await send('Page.captureScreenshot', { format: 'png' })) as { data: string };
