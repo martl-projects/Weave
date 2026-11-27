@@ -106,7 +106,7 @@ export class SqlStore implements LogStore {
       inSpace: this.db.prepare('SELECT id, json FROM events2 WHERE space = ? AND time >= ? AND time < ? ORDER BY time'),
       body: this.db.prepare('SELECT json FROM bodies WHERE hash = ?'),
       hasBody: this.db.prepare('SELECT 1 AS held FROM bodies WHERE hash = ?'),
-      putBody: this.db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?1)'),
+      putBody: this.db.prepare('INSERT OR IGNORE INTO bodies (hash, json) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM forgotten WHERE hash = ?)'),
       drop: this.db.prepare('DELETE FROM bodies WHERE hash = ?'),
       forget: this.db.prepare('INSERT OR IGNORE INTO forgotten (hash, time) VALUES (?, ?)'),
       forgotten: this.db.prepare('SELECT 1 AS yes FROM forgotten WHERE hash = ?'),
@@ -234,7 +234,8 @@ export class SqlStore implements LogStore {
   }
 
   putBody(hash: string, body: Json): void {
-    this.#v2.putBody.run(hash, JSON.stringify(body));
+    // The hash twice, by place: numbered parameters (?1) are named ones to bare-sqlite, a phone's SQLite.
+    this.#v2.putBody.run(hash, JSON.stringify(body), hash);
   }
 
   releaseBody(hash: string): void {

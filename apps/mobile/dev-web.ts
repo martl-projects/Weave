@@ -4,6 +4,9 @@
 // with a computer's node like a phone (paste the code). Binds to 127.0.0.1.
 //
 //   npm run web -w @weave/mobile -- --data .dev/phone --port 8780
+//
+// With --own the worker holds a node of its own (worklet/own.ts; build with `node build.ts --web --own` first):
+// nothing to pair, the screens start with a new account.
 
 import { spawn } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, chmodSync } from 'node:fs';
@@ -13,7 +16,7 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-const { values } = parseArgs({ options: { data: { type: 'string', default: '.dev/phone' }, port: { type: 'string', default: '8780' } } });
+const { values } = parseArgs({ options: { data: { type: 'string', default: '.dev/phone' }, port: { type: 'string', default: '8780' }, own: { type: 'boolean', default: false }, bootstrap: { type: 'string' } } });
 const data = resolve(process.env.INIT_CWD ?? process.cwd(), values.data!);
 const port = Number(values.port);
 const STATIC = join(import.meta.dirname, 'dist', 'web');
@@ -25,12 +28,14 @@ const bare = (createRequire(import.meta.url)('bare-runtime') as () => string)();
 if (process.platform !== 'win32') chmodSync(bare, 0o755);
 const listener = createServer();
 await new Promise<void>((done) => listener.listen(0, '127.0.0.1', done));
-const child = spawn(bare, [join(import.meta.dirname, 'dist/worklet/test.cjs'), String((listener.address() as AddressInfo).port)], { stdio: ['ignore', 'inherit', 'inherit'] });
+const child = spawn(bare, [join(import.meta.dirname, values.own ? 'dist/worklet/own-test.cjs' : 'dist/worklet/test.cjs'), String((listener.address() as AddressInfo).port)], { stdio: ['ignore', 'inherit', 'inherit'] });
 const worker = await new Promise<Socket>((done) => listener.once('connection', done));
 listener.close();
 process.on('exit', () => child.kill());
 mkdirSync(data, { recursive: true });
-worker.write(`${JSON.stringify({ op: 'start', dir: data })}\n`);
+// --bootstrap host:port: the DHT of a test network for a node of its own (one nobody answers at keeps it off the public one).
+const [host, at] = (values.bootstrap ?? '').split(':');
+worker.write(`${JSON.stringify({ op: 'start', dir: data, ...(host ? { bootstrap: [{ host, port: Number(at) }] } : {}) })}\n`);
 
 const screens = new Set<ServerResponse>();
 let buffer = '';

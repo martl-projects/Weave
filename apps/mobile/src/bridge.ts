@@ -2,8 +2,9 @@ import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } from '@capacitor/barcode-scanner';
 import { Device } from '@capacitor/device';
-import { errorFromWire, type ErrorAnswer } from '@weave/core';
+import { errorFromWire, errorToWire, type ErrorAnswer } from '@weave/core';
 import type { FeedItem } from '@weave/node/client';
+import type { Bridge } from '../../desktop/src/renderer/bridge.ts';
 
 /*
  * The phone app's bridge (window.weave), in place of Electron's preload: the
@@ -11,7 +12,14 @@ import type { FeedItem } from '@weave/node/client';
  * worker (worklet/phone.ts), which holds the connection to your computer.
  * The native WeaveWorker plugin starts the worker and carries the lines
  * between it and this WebView.
+ *
+ * Built with a node of its own (build.ts --own), the worker is the phone's
+ * own node (worklet/own.ts): no computer, no pairing, and the screens start
+ * as on a computer, with a new account or the words of one.
  */
+
+/** Whether the worker holds a node of its own (build.ts). */
+declare const WEAVE_OWN_NODE: boolean;
 
 interface WorkerPlugin {
   post(options: { message: string }): Promise<void>;
@@ -56,6 +64,20 @@ void Browser.addListener('browserFinished', () => void Worker.hold({ on: false }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) post({ op: 'wake' }).catch(() => {});
 });
+
+/** With a node of its own: the account is the phone's, made here or brought with its words. */
+const own: Pick<Bridge, 'state' | 'init' | 'restore' | 'call'> = {
+  async state() {
+    const s = await ask<{ hasIdentity: boolean; name?: string; connected: boolean }>('state');
+    // No account yet: the screens ask for one, which needs no connection to anything.
+    return { home: s.name ?? '', hasIdentity: s.hasIdentity, connected: s.connected || !s.hasIdentity };
+  },
+  init: (name) => ask<string>('init', { name }),
+  restore: (words) => ask<void>('restore', { words }),
+  // Without `phone` the screens take this bridge for a computer's, whose calls answer {result} or {error, name?, values?}
+  // instead of throwing (the desktop's renderer/bridge.ts): answered that way here.
+  call: (method, ...args) => ask('call', { method, args }).then((result) => ({ result }), (error: unknown) => errorToWire(error)),
+};
 
 window.weave = {
   async state() {
@@ -107,3 +129,9 @@ window.weave = {
     },
   },
 };
+
+// A phone with its own node pairs with nothing: without `phone` the screens are a computer's.
+if (WEAVE_OWN_NODE) {
+  Object.assign(window.weave, own);
+  delete window.weave.phone;
+}

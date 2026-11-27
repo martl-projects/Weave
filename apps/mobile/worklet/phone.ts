@@ -1,5 +1,6 @@
 import { errorToWire } from '@weave/core';
-import { connectTo, decodePhoneLink, lensCsp, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+import { connectTo, decodePhoneLink, openTunnel, pairWith, type Dialer, type FeedItem, type PairedNode, type RemoteSession, type RpcMethod } from '@weave/node/phone';
+import { serveLensRequest, type LensFile } from './lens-http.ts';
 
 /*
  * The phone app's worker: it keeps the phone's key pair and the computer it
@@ -200,41 +201,7 @@ export class Phone {
    * node, sandboxed (lensCsp: its hosts only if its member allowed them), and the connection closed.
    */
   #lensRequest(local: Pipe): void {
-    this.#open.add(local);
-    let head = '';
-    let answered = false;
-    const answer = (status: string, type: string, body: Buffer, net?: string[]) => {
-      answered = true;
-      const lines = [`HTTP/1.1 ${status}`, `content-type: ${type}`, `content-length: ${body.length}`, `content-security-policy: ${lensCsp(net)}`, 'x-content-type-options: nosniff', 'cache-control: no-cache', 'connection: close'];
-      local.end(Buffer.concat([Buffer.from(`${lines.join('\r\n')}\r\n\r\n`), body]));
-    };
-    const end = () => {
-      this.#open.delete(local);
-      local.destroy();
-    };
-    local.on('error', end);
-    local.on('close', end);
-    local.on('data', (chunk: Buffer) => {
-      if (answered) return;
-      head += chunk.toString('latin1');
-      if (head.length > 8192) return answer('431 Request Header Fields Too Large', 'text/plain', Buffer.alloc(0));
-      if (!head.includes('\r\n\r\n')) return;
-      answered = true;
-      const at = /^GET \/lens\/([A-Za-z0-9_-]{1,100})\/([^ ?#]*)\S* HTTP\/1\.[01]\r\n/.exec(head);
-      let path: string | undefined;
-      try {
-        path = at ? decodeURIComponent(at[2]) : undefined;
-      } catch {
-        path = undefined;
-      }
-      if (!at || path === undefined) return answer('404 Not Found', 'text/plain', Buffer.from('Not here'));
-      this.#connect()
-        .then((session) => session.call('lensFile', { release: at[1], path }) as Promise<{ type: string; data: string; net?: string[] }>)
-        .then(
-          (file) => answer('200 OK', file.type, Buffer.from(file.data, 'base64'), file.net),
-          (error: Error) => answer('404 Not Found', 'text/plain; charset=utf-8', Buffer.from(error.message)),
-        );
-    });
+    serveLensRequest(local, this.#open, (release, path) => this.#connect().then((session) => session.call('lensFile', { release, path }) as Promise<LensFile>));
   }
 
   /** One connection of the phone's browser, through to the room's app on the computer. */
